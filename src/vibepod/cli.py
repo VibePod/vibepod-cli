@@ -52,6 +52,18 @@ def alias_auggie() -> None:
     run.run(agent="auggie")
 
 
+@app.command("p", hidden=True)
+def alias_copilot() -> None:
+    """Alias for `vp run copilot`."""
+    run.run(agent="copilot")
+
+
+@app.command("x", hidden=True)
+def alias_codex() -> None:
+    """Alias for `vp run codex`."""
+    run.run(agent="codex")
+
+
 @app.command("ui", hidden=True)
 def alias_ui() -> None:
     """Alias for `vp logs ui`."""

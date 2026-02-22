@@ -67,6 +67,24 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config"},
     ),
+    "copilot": AgentSpec(
+        "copilot",
+        "github",
+        DEFAULT_IMAGES["copilot"],
+        "copilot",
+        ["copilot"],
+        "/config",
+        {"HOME": "/config"},
+    ),
+    "codex": AgentSpec(
+        "codex",
+        "openai",
+        DEFAULT_IMAGES["codex"],
+        "codex",
+        ["codex"],
+        "/config",
+        {"HOME": "/config"},
+    ),
 }
 
 

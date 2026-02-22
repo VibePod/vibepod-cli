@@ -50,6 +50,8 @@ def _default_config() -> dict[str, Any]:
                 "volumes": [],
             },
             "auggie": {"enabled": True, "image": DEFAULT_IMAGES["auggie"], "env": {}, "volumes": []},
+            "copilot": {"enabled": True, "image": DEFAULT_IMAGES["copilot"], "env": {}, "volumes": []},
+            "codex": {"enabled": True, "image": DEFAULT_IMAGES["codex"], "env": {}, "volumes": []},
         },
         "logging": {
             "enabled": True,

@@ -18,7 +18,7 @@ LOGS_DB_FILE = CONFIG_DIR / "logs.db"
 DOCKER_NETWORK = "vibepod-network"
 CONTAINER_LABEL_MANAGED = "vibepod.managed"
 
-SUPPORTED_AGENTS = ("claude", "gemini", "opencode", "devstral", "auggie")
+SUPPORTED_AGENTS = ("claude", "gemini", "opencode", "devstral", "auggie", "copilot", "codex")
 
 DEFAULT_IMAGES: dict[str, str] = {
     "claude": os.environ.get(
@@ -36,6 +36,13 @@ DEFAULT_IMAGES: dict[str, str] = {
     "auggie": os.environ.get(
         "VP_IMAGE_AUGGIE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/auggie-cli:latest"
     ),
+    "copilot": os.environ.get(
+        "VP_IMAGE_COPILOT",
+        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/copilot-cli:latest",
+    ),
+    "codex": os.environ.get(
+        "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/codex-cli:latest"
+    ),
     "datasette": os.environ.get(
         "VP_DATASETTE_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/opencode-datasette:latest"
     ),
@@ -47,6 +54,8 @@ DEFAULT_ALIASES: dict[str, str] = {
     "o": "run opencode",
     "d": "run devstral",
     "a": "run auggie",
+    "p": "run copilot",
+    "x": "run codex",
     "ui": "logs ui",
 }
 
