@@ -195,19 +195,26 @@ class DockerManager:
             str(ca_dir): {"bind": "/data/mitmproxy", "mode": "rw"},
         }
 
-        return self.client.containers.run(
-            image=image,
-            name="vibepod-proxy",
-            detach=True,
-            labels={"vibepod.managed": "true", "vibepod.role": "proxy"},
-            environment={
+        run_kwargs: dict[str, Any] = {
+            "image": image,
+            "name": "vibepod-proxy",
+            "detach": True,
+            "labels": {"vibepod.managed": "true", "vibepod.role": "proxy"},
+            "environment": {
                 "PROXY_DB_PATH": "/data/proxy.db",
                 "PROXY_CONF_DIR": "/data/mitmproxy",
             },
-            volumes=volumes,
-            ports={"8080/tcp": port},
-            network=network,
-        )
+            "volumes": volumes,
+            "ports": {"8080/tcp": port},
+            "network": network,
+        }
+
+        getuid = getattr(os, "getuid", None)
+        getgid = getattr(os, "getgid", None)
+        if callable(getuid) and callable(getgid):
+            run_kwargs["user"] = f"{getuid()}:{getgid()}"
+
+        return self.client.containers.run(**run_kwargs)
 
     def attach_interactive(self, container: Any, logger: Any = None) -> None:
         """Attach local stdin/stdout to a running container TTY."""

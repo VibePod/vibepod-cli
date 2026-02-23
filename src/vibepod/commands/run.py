@@ -52,25 +52,29 @@ def _update_container_mapping(
     container_id: str,
     container_name: str,
     agent: str,
-) -> None:
+) -> bool:
     """Merge a new IP→container entry into containers.json atomically."""
     mapping: dict[str, dict[str, str]] = {}
-    if mapping_path.exists():
-        try:
-            mapping = json.loads(mapping_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
+    try:
+        if mapping_path.exists():
+            try:
+                mapping = json.loads(mapping_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
 
-    mapping[ip] = {
-        "container_id": container_id,
-        "container_name": container_name,
-        "agent": agent,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
+        mapping[ip] = {
+            "container_id": container_id,
+            "container_name": container_name,
+            "agent": agent,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
 
-    tmp_path = mapping_path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(mapping, indent=2))
-    os.replace(tmp_path, mapping_path)
+        tmp_path = mapping_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(mapping, indent=2))
+        os.replace(tmp_path, mapping_path)
+    except OSError:
+        return False
+    return True
 
 
 def run(
@@ -200,9 +204,14 @@ def run(
         container_ip = _get_container_ip(container, network_name)
         if container_ip:
             mapping_path = proxy_db_path.parent / "containers.json"
-            _update_container_mapping(
+            mapping_updated = _update_container_mapping(
                 mapping_path, container_ip, container.id, container.name, selected_agent
             )
+            if not mapping_updated:
+                warning(
+                    f"Could not write proxy container mapping at {mapping_path}. "
+                    "Fix proxy directory permissions to restore container attribution."
+                )
 
     if detach:
         success(f"Started {container.name}")
