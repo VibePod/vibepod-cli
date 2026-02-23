@@ -8,7 +8,7 @@ from pathlib import Path
 from platformdirs import user_config_dir
 
 APP_NAME = "vibepod"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 CONFIG_DIR = Path(user_config_dir(APP_NAME))
 GLOBAL_CONFIG_FILE = CONFIG_DIR / "config.yaml"
@@ -44,7 +44,10 @@ DEFAULT_IMAGES: dict[str, str] = {
         "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/codex-cli:latest"
     ),
     "datasette": os.environ.get(
-        "VP_DATASETTE_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/opencode-datasette:latest"
+        "VP_DATASETTE_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/datasette:latest"
+    ),
+    "proxy": os.environ.get(
+        "VP_PROXY_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/proxy:latest"
     ),
 }
 
@@ -56,7 +59,7 @@ DEFAULT_ALIASES: dict[str, str] = {
     "a": "run auggie",
     "p": "run copilot",
     "x": "run codex",
-    "ui": "logs ui",
+    "ui": "logs start",
 }
 
 EXIT_SUCCESS = 0
