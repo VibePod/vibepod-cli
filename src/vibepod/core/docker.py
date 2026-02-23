@@ -149,7 +149,7 @@ class DockerManager:
             ports={"8001/tcp": port},
         )
 
-    def attach_interactive(self, container: Any) -> None:
+    def attach_interactive(self, container: Any, logger: Any = None) -> None:
         """Attach local stdin/stdout to a running container TTY."""
         def resize_tty() -> None:
             size = shutil.get_terminal_size(fallback=(120, 40))
@@ -209,6 +209,8 @@ class DockerManager:
                     user_data = os.read(stdin_fd, 1024)
                     if not user_data:
                         continue
+                    if logger is not None:
+                        logger.log_input(user_data)
                     sock.sendall(user_data)
         finally:
             try:

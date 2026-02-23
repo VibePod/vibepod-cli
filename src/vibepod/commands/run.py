@@ -18,6 +18,7 @@ from vibepod.core.agents import (
 )
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
 
 
@@ -109,10 +110,31 @@ def run(
         success(f"Started {container.name}")
         return
 
+    log_cfg = config.get("logging", {})
+    log_enabled = bool(log_cfg.get("enabled", True))
+    log_db_path = Path(str(log_cfg.get("db_path", "~/.config/vibepod/logs.db"))).expanduser().resolve()
+
+    logger = SessionLogger(log_db_path, enabled=log_enabled)
+    logger.open_session(
+        agent=selected_agent,
+        image=image,
+        workspace=str(workspace_path),
+        container_id=container.id,
+        container_name=container.name,
+        vibepod_version=__version__,
+    )
+
+    exit_reason = "normal"
     warning("Attached to container. Use Ctrl+C to stop.")
     try:
-        manager.attach_interactive(container)
+        manager.attach_interactive(container, logger=logger)
     except KeyboardInterrupt:
+        exit_reason = "keyboard_interrupt"
         info("Stopping container...")
         container.stop(timeout=10)
         success("Stopped")
+    except Exception:
+        exit_reason = "error"
+        raise
+    finally:
+        logger.close_session(exit_reason)
