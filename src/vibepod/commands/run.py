@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
@@ -32,6 +35,42 @@ def _parse_env_pairs(values: list[str]) -> dict[str, str]:
             raise typer.BadParameter("Environment variable key cannot be empty")
         parsed[key] = value
     return parsed
+
+
+def _get_container_ip(container: object, network: str) -> str | None:
+    """Extract the container's IP address on the given Docker network."""
+    try:
+        networks = container.attrs["NetworkSettings"]["Networks"]  # type: ignore[index]
+        return networks[network]["IPAddress"] or None  # type: ignore[index]
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
+def _update_container_mapping(
+    mapping_path: Path,
+    ip: str,
+    container_id: str,
+    container_name: str,
+    agent: str,
+) -> None:
+    """Merge a new IP→container entry into containers.json atomically."""
+    mapping: dict[str, dict[str, str]] = {}
+    if mapping_path.exists():
+        try:
+            mapping = json.loads(mapping_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    mapping[ip] = {
+        "container_id": container_id,
+        "container_name": container_name,
+        "agent": agent,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    tmp_path = mapping_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(mapping, indent=2))
+    os.replace(tmp_path, mapping_path)
 
 
 def run(
@@ -77,12 +116,61 @@ def run(
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
 
+    network_name = str(config.get("network", "vibepod-network"))
+    manager.ensure_network(network_name)
+
     if pull or bool(config.get("auto_pull", False)):
         info(f"Pulling image: {image}")
         manager.pull_image(image)
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)
+
+    proxy_cfg = config.get("proxy", {})
+    proxy_enabled = bool(proxy_cfg.get("enabled", True))
+    proxy_ca_dir_value = str(proxy_cfg.get("ca_dir", "")).strip()
+    proxy_ca_path_value = str(proxy_cfg.get("ca_path", "")).strip()
+    proxy_ca_dir = Path(proxy_ca_dir_value).expanduser().resolve() if proxy_ca_dir_value else None
+    proxy_ca_path = Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
+    proxy_port = int(proxy_cfg.get("port", 8080))
+    proxy_db_path: Path | None = None
+
+    extra_volumes: dict[str, dict[str, str]] = {}
+    if proxy_enabled:
+        proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
+        proxy_db_path = Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db"))).expanduser().resolve()
+
+        manager.ensure_proxy(
+            image=proxy_image,
+            db_path=proxy_db_path,
+            ca_dir=proxy_ca_dir or proxy_db_path.parent / "mitmproxy",
+            port=proxy_port,
+            network=network_name,
+        )
+
+        if proxy_ca_path:
+            ca_ready = False
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                if proxy_ca_path.exists():
+                    ca_ready = True
+                    break
+                time.sleep(0.25)
+            if not ca_ready:
+                warning(f"Proxy CA not found yet at {proxy_ca_path}")
+
+        proxy_url = f"http://vibepod-proxy:{proxy_port}"
+        merged_env.setdefault("HTTP_PROXY", proxy_url)
+        merged_env.setdefault("HTTPS_PROXY", proxy_url)
+        merged_env.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
+        _ca = "/etc/vibepod-proxy-ca/mitmproxy-ca-cert.pem"
+        merged_env.setdefault("NODE_EXTRA_CA_CERTS", _ca)
+        merged_env.setdefault("REQUESTS_CA_BUNDLE", _ca)
+        merged_env.setdefault("SSL_CERT_FILE", _ca)
+        merged_env.setdefault("CURL_CA_BUNDLE", _ca)
+
+        if proxy_ca_dir:
+            extra_volumes[str(proxy_ca_dir)] = {"bind": "/etc/vibepod-proxy-ca", "mode": "ro"}
 
     info(f"Starting {selected_agent} with image {image}")
     container = manager.run_agent(
@@ -96,6 +184,8 @@ def run(
         auto_remove=bool(config.get("auto_remove", True)),
         name=name,
         version=__version__,
+        network=network_name,
+        extra_volumes=extra_volumes,
     )
 
     container.reload()
@@ -105,6 +195,14 @@ def run(
         if recent.strip():
             print(recent)
         raise typer.Exit(1)
+
+    if proxy_db_path is not None:
+        container_ip = _get_container_ip(container, network_name)
+        if container_ip:
+            mapping_path = proxy_db_path.parent / "containers.json"
+            _update_container_mapping(
+                mapping_path, container_ip, container.id, container.name, selected_agent
+            )
 
     if detach:
         success(f"Started {container.name}")

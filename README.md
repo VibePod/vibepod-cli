@@ -9,7 +9,7 @@ This repository contains an initial v1 implementation with:
 - `vp run <agent>`
 - `vp stop <agent|--all>`
 - `vp list`
-- `vp logs ui`
+- `vp logs start|stop|status`
 - `vp config show`
 - `vp config path`
 - `vp version`
@@ -28,6 +28,8 @@ Current defaults are aligned to existing container repos:
 - `auggie` -> `nezhar/auggie-cli:latest` ([repo](https://github.com/nezhar/auggie-container))
 - `copilot` -> `nezhar/copilot-cli:latest` ([repo](https://github.com/nezhar/copilot-container))
 - `codex` -> `nezhar/codex-cli:latest` ([repo](https://github.com/nezhar/codex-container))
+- `datasette` -> `vibepod/datasette:latest`
+- `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
 You can override any single image directly:
 
@@ -39,5 +41,5 @@ VP_IMAGE_DEVSTRAL=nezhar/devstral-cli:latest vp run devstral
 VP_IMAGE_AUGGIE=nezhar/auggie-cli:latest vp run auggie
 VP_IMAGE_COPILOT=nezhar/copilot-cli:latest vp run copilot
 VP_IMAGE_CODEX=nezhar/codex-cli:latest vp run codex
-VP_DATASETTE_IMAGE=nezhar/opencode-datasette:latest vp logs ui
+VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 ```

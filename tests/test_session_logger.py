@@ -24,7 +24,7 @@ class TestSessionLogger:
             workspace="/workspace",
             container_id="abc123",
             container_name="vibepod-claude-test",
-            vibepod_version="0.1.0",
+            vibepod_version="0.2.0",
         )
         return sid  # type: ignore[return-value]
 
@@ -290,7 +290,7 @@ class TestSessionLogger:
             workspace="/ws",
             container_id="c1",
             container_name="cn",
-            vibepod_version="0.1.0",
+            vibepod_version="0.2.0",
         )
         assert result is None
         logger.log_input(b"data\r")
@@ -336,7 +336,7 @@ class TestSessionLogger:
             workspace="/ws",
             container_id="c1",
             container_name="cn",
-            vibepod_version="0.1.0",
+            vibepod_version="0.2.0",
         )
         logger.close_session()
         assert db.exists()

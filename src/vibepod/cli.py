@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from vibepod.commands import config, list_cmd, logs, run, stop, update
+from vibepod.commands import config, list_cmd, logs, proxy, run, stop, update
 
 app = typer.Typer(
     name="vp",
@@ -20,6 +20,7 @@ app.command(name="version")(update.version)
 
 app.add_typer(logs.app, name="logs")
 app.add_typer(config.app, name="config")
+app.add_typer(proxy.app, name="proxy")
 
 
 @app.command("c", hidden=True)
@@ -66,8 +67,8 @@ def alias_codex() -> None:
 
 @app.command("ui", hidden=True)
 def alias_ui() -> None:
-    """Alias for `vp logs ui`."""
-    logs.logs_ui()
+    """Alias for `vp logs start`."""
+    logs.logs_start()
 
 
 def main() -> None:

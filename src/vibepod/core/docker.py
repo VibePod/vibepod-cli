@@ -17,11 +17,12 @@ from vibepod.constants import CONTAINER_LABEL_MANAGED
 
 try:
     import docker
-    from docker.errors import APIError, DockerException
+    from docker.errors import APIError, DockerException, NotFound
 except Exception:  # pragma: no cover - handled at runtime
     docker = None  # type: ignore[assignment]
     APIError = Exception  # type: ignore[misc,assignment]
     DockerException = Exception  # type: ignore[misc,assignment]
+    NotFound = Exception  # type: ignore[misc,assignment]
 
 
 class DockerClientError(RuntimeError):
@@ -46,6 +47,12 @@ class DockerManager:
         except APIError as exc:
             raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
 
+    def ensure_network(self, name: str) -> None:
+        try:
+            self.client.networks.get(name)
+        except NotFound:
+            self.client.networks.create(name, labels={CONTAINER_LABEL_MANAGED: "true"})
+
     def run_agent(
         self,
         *,
@@ -59,6 +66,8 @@ class DockerManager:
         auto_remove: bool,
         name: str | None,
         version: str,
+        network: str | None = None,
+        extra_volumes: dict[str, dict[str, str]] | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -71,10 +80,12 @@ class DockerManager:
 
         environment = {**env}
 
-        volumes = {
+        volumes: dict[str, dict[str, str]] = {
             str(workspace): {"bind": "/workspace", "mode": "rw"},
             str(config_dir): {"bind": config_mount_path, "mode": "rw"},
         }
+        if extra_volumes:
+            volumes.update(extra_volumes)
 
         try:
             return self.client.containers.run(
@@ -89,6 +100,7 @@ class DockerManager:
                 environment=environment,
                 volumes=volumes,
                 working_dir="/workspace",
+                network=network,
             )
         except APIError as exc:
             raise DockerClientError(f"Failed to start container: {exc}") from exc
@@ -119,34 +131,82 @@ class DockerManager:
         )
         return containers[0] if containers else None
 
-    def ensure_datasette(self, image: str, db_path: Path, port: int) -> Any:
+    def ensure_datasette(self, image: str, logs_db_path: Path, proxy_db_path: Path, port: int) -> Any:
         existing = self.find_datasette()
         if existing:
-            if existing.status != "running":
-                existing.start()
-            return existing
+            existing.reload()
+            env_list = existing.attrs.get("Config", {}).get("Env", []) or []
+            has_proxy_env = any(env.startswith("PROXY_DB_PATH=") for env in env_list)
+            if existing.status == "running" and has_proxy_env:
+                return existing
+            existing.remove(force=True)
 
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        db_path.touch(exist_ok=True)
+        logs_db_path.parent.mkdir(parents=True, exist_ok=True)
+        if not logs_db_path.exists():
+            logs_db_path.touch()
+
+        logs_parent = Path(os.path.abspath(str(logs_db_path.parent)))
+        proxy_parent = Path(os.path.abspath(str(proxy_db_path.parent)))
+
+        if logs_parent == proxy_parent:
+            volumes = {str(logs_parent): {"bind": "/mount/data", "mode": "rw"}}
+            logs_db_container_path = f"/mount/data/{logs_db_path.name}"
+            proxy_db_container_path = f"/mount/data/{proxy_db_path.name}"
+        else:
+            volumes = {
+                str(logs_parent): {"bind": "/mount/logs", "mode": "rw"},
+                str(proxy_parent): {"bind": "/mount/proxy", "mode": "rw"},
+            }
+            logs_db_container_path = f"/mount/logs/{logs_db_path.name}"
+            proxy_db_container_path = f"/mount/proxy/{proxy_db_path.name}"
 
         return self.client.containers.run(
             image=image,
             name="vibepod-datasette",
-            command=[
-                "datasette",
-                "/data/logs.db",
-                "--host",
-                "0.0.0.0",
-                "--port",
-                "8001",
-                "--setting",
-                "sql_time_limit_ms",
-                "10000",
-            ],
             detach=True,
             labels={"vibepod.managed": "true", "vibepod.role": "datasette"},
-            volumes={str(db_path.parent): {"bind": "/data", "mode": "rw"}},
+            environment={
+                "LOGS_DB_PATH": logs_db_container_path,
+                "PROXY_DB_PATH": proxy_db_container_path,
+                "DATASETTE_PORT": "8001",
+            },
+            volumes=volumes,
             ports={"8001/tcp": port},
+        )
+
+    def find_proxy(self) -> Any | None:
+        containers = self.client.containers.list(
+            all=True, filters={"label": ["vibepod.managed=true", "vibepod.role=proxy"]}
+        )
+        return containers[0] if containers else None
+
+    def ensure_proxy(self, image: str, db_path: Path, ca_dir: Path, port: int, network: str) -> Any:
+        existing = self.find_proxy()
+        if existing:
+            if existing.status == "running":
+                return existing
+            existing.remove(force=True)
+
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        ca_dir.mkdir(parents=True, exist_ok=True)
+
+        volumes = {
+            str(db_path.parent): {"bind": "/data", "mode": "rw"},
+            str(ca_dir): {"bind": "/data/mitmproxy", "mode": "rw"},
+        }
+
+        return self.client.containers.run(
+            image=image,
+            name="vibepod-proxy",
+            detach=True,
+            labels={"vibepod.managed": "true", "vibepod.role": "proxy"},
+            environment={
+                "PROXY_DB_PATH": "/data/proxy.db",
+                "PROXY_CONF_DIR": "/data/mitmproxy",
+            },
+            volumes=volumes,
+            ports={"8080/tcp": port},
+            network=network,
         )
 
     def attach_interactive(self, container: Any, logger: Any = None) -> None:
