@@ -16,9 +16,11 @@ class AgentSpec:
     provider: str
     image: str
     config_subdir: str
-    command: list[str]
+    command: list[str] | None
     config_mount_path: str
     extra_env: dict[str, str]
+    platform: str | None = None
+    run_as_host_user: bool = False
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -54,9 +56,11 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "mistral",
         DEFAULT_IMAGES["devstral"],
         "devstral",
-        ["devstral"],
+        None,
         "/config",
-        {"HOME": "/config"},
+        {"HOME": "/config", "WORKSPACE_PATH": "/workspace"},
+        platform="linux/amd64",
+        run_as_host_user=True,
     ),
     "auggie": AgentSpec(
         "auggie",
