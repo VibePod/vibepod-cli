@@ -77,6 +77,24 @@ def _update_container_mapping(
     return True
 
 
+def _agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, str]]:
+    """Return agent-specific bind mounts as (host_path, container_path, mode)."""
+    if agent == "auggie":
+        host = str(config_dir / ".augment")
+        return [
+            (host, "/root/.augment", "rw"),
+            (host, "/home/node/.augment", "rw"),
+        ]
+    if agent == "copilot":
+        host = str(config_dir / ".copilot")
+        return [
+            (host, "/root/.copilot", "rw"),
+            (host, "/home/node/.copilot", "rw"),
+            (host, "/home/coder/.copilot", "rw"),
+        ]
+    return []
+
+
 def run(
     agent: Annotated[str | None, typer.Argument(help="Agent to run")] = None,
     workspace: Annotated[Path, typer.Option("-w", "--workspace", help="Workspace directory")] = Path(
@@ -139,7 +157,10 @@ def run(
     proxy_port = int(proxy_cfg.get("port", 8080))
     proxy_db_path: Path | None = None
 
-    extra_volumes: dict[str, dict[str, str]] = {}
+    extra_volumes = _agent_extra_volumes(selected_agent, config_dir)
+    for host_path, _, _ in extra_volumes:
+        Path(host_path).mkdir(parents=True, exist_ok=True)
+
     if proxy_enabled:
         proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
         proxy_db_path = Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db"))).expanduser().resolve()
@@ -174,7 +195,7 @@ def run(
         merged_env.setdefault("CURL_CA_BUNDLE", _ca)
 
         if proxy_ca_dir:
-            extra_volumes[str(proxy_ca_dir)] = {"bind": "/etc/vibepod-proxy-ca", "mode": "ro"}
+            extra_volumes.append((str(proxy_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
 
     info(f"Starting {selected_agent} with image {image}")
     container = manager.run_agent(

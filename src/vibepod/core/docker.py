@@ -67,7 +67,7 @@ class DockerManager:
         name: str | None,
         version: str,
         network: str | None = None,
-        extra_volumes: dict[str, dict[str, str]] | None = None,
+        extra_volumes: list[tuple[str, str, str]] | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -80,12 +80,12 @@ class DockerManager:
 
         environment = {**env}
 
-        volumes: dict[str, dict[str, str]] = {
-            str(workspace): {"bind": "/workspace", "mode": "rw"},
-            str(config_dir): {"bind": config_mount_path, "mode": "rw"},
-        }
+        volumes: list[str] = [
+            f"{workspace}:/workspace:rw",
+            f"{config_dir}:{config_mount_path}:rw",
+        ]
         if extra_volumes:
-            volumes.update(extra_volumes)
+            volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
 
         try:
             return self.client.containers.run(
