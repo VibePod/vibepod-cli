@@ -68,6 +68,8 @@ class DockerManager:
         version: str,
         network: str | None = None,
         extra_volumes: list[tuple[str, str, str]] | None = None,
+        platform: str | None = None,
+        user: str | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -88,20 +90,26 @@ class DockerManager:
             volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
 
         try:
-            return self.client.containers.run(
-                image=image,
-                name=container_name,
-                command=command,
-                detach=True,
-                tty=True,
-                stdin_open=True,
-                auto_remove=auto_remove,
-                labels=labels,
-                environment=environment,
-                volumes=volumes,
-                working_dir="/workspace",
-                network=network,
-            )
+            run_kwargs: dict[str, Any] = {
+                "image": image,
+                "name": container_name,
+                "command": command,
+                "detach": True,
+                "tty": True,
+                "stdin_open": True,
+                "auto_remove": auto_remove,
+                "labels": labels,
+                "environment": environment,
+                "volumes": volumes,
+                "working_dir": "/workspace",
+                "network": network,
+            }
+            if platform:
+                run_kwargs["platform"] = platform
+            if user:
+                run_kwargs["user"] = user
+
+            return self.client.containers.run(**run_kwargs)
         except APIError as exc:
             raise DockerClientError(f"Failed to start container: {exc}") from exc
 

@@ -81,3 +81,46 @@ def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
     assert f"{config_dir}:/config:rw" in volumes
     assert f"{augment_dir}:/root/.augment:rw" in volumes
     assert f"{augment_dir}:/home/node/.augment:rw" in volumes
+
+
+def test_run_agent_forwards_platform_and_user(tmp_path: Path) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "agent"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "devstral"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    manager.run_agent(
+        agent="devstral",
+        image="nezhar/devstral-cli:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/config",
+        env={},
+        command=None,
+        auto_remove=True,
+        name=None,
+        version="0.2.1",
+        network="vibepod-network",
+        platform="linux/amd64",
+        user="1000:1000",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert run_kwargs["platform"] == "linux/amd64"
+    assert run_kwargs["user"] == "1000:1000"

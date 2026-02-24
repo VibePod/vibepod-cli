@@ -95,6 +95,15 @@ def _agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, s
     return []
 
 
+def _host_user() -> str | None:
+    """Return current user id in uid:gid format when available."""
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if not callable(getuid) or not callable(getgid):
+        return None
+    return f"{getuid()}:{getgid()}"
+
+
 def run(
     agent: Annotated[str | None, typer.Argument(help="Agent to run")] = None,
     workspace: Annotated[Path, typer.Option("-w", "--workspace", help="Workspace directory")] = Path(
@@ -198,6 +207,7 @@ def run(
             extra_volumes.append((str(proxy_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
 
     info(f"Starting {selected_agent} with image {image}")
+    container_user = _host_user() if spec.run_as_host_user else None
     container = manager.run_agent(
         agent=selected_agent,
         image=image,
@@ -211,6 +221,8 @@ def run(
         version=__version__,
         network=network_name,
         extra_volumes=extra_volumes,
+        platform=spec.platform,
+        user=container_user,
     )
 
     container.reload()
