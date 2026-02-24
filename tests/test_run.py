@@ -23,6 +23,17 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
     assert run_cmd._agent_extra_volumes("claude", config_dir) == []
 
 
+def test_agent_extra_volumes_for_copilot(tmp_path: Path) -> None:
+    config_dir = tmp_path / "agents" / "copilot"
+    config_host = config_dir / ".copilot"
+
+    assert run_cmd._agent_extra_volumes("copilot", config_dir) == [
+        (str(config_host), "/root/.copilot", "rw"),
+        (str(config_host), "/home/node/.copilot", "rw"),
+        (str(config_host), "/home/coder/.copilot", "rw"),
+    ]
+
+
 def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
     class _FakeContainers:
         def __init__(self) -> None:

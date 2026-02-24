@@ -85,6 +85,13 @@ def _agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, s
             (host, "/root/.augment", "rw"),
             (host, "/home/node/.augment", "rw"),
         ]
+    if agent == "copilot":
+        host = str(config_dir / ".copilot")
+        return [
+            (host, "/root/.copilot", "rw"),
+            (host, "/home/node/.copilot", "rw"),
+            (host, "/home/coder/.copilot", "rw"),
+        ]
     return []
 
 
@@ -140,8 +147,6 @@ def run(
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)
-    if selected_agent == "auggie":
-        (config_dir / ".augment").mkdir(parents=True, exist_ok=True)
 
     proxy_cfg = config.get("proxy", {})
     proxy_enabled = bool(proxy_cfg.get("enabled", True))
@@ -153,6 +158,9 @@ def run(
     proxy_db_path: Path | None = None
 
     extra_volumes = _agent_extra_volumes(selected_agent, config_dir)
+    for host_path, _, _ in extra_volumes:
+        Path(host_path).mkdir(parents=True, exist_ok=True)
+
     if proxy_enabled:
         proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
         proxy_db_path = Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db"))).expanduser().resolve()
