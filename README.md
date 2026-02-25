@@ -2,6 +2,14 @@
 
 VibePod is a unified CLI (`vp`) for running AI coding agents in Docker containers.
 
+## Installation
+
+VibePod is available on [PyPI](https://pypi.org/project/vibepod/):
+
+```bash
+pip install vibepod
+```
+
 ## Current Status
 
 This repository contains an initial v1 implementation with:
