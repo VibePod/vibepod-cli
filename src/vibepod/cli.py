@@ -65,6 +65,48 @@ def alias_codex() -> None:
     run.run(agent="codex")
 
 
+@app.command("claude", hidden=True)
+def alias_claude_full() -> None:
+    """Alias for `vp run claude`."""
+    run.run(agent="claude")
+
+
+@app.command("gemini", hidden=True)
+def alias_gemini_full() -> None:
+    """Alias for `vp run gemini`."""
+    run.run(agent="gemini")
+
+
+@app.command("opencode", hidden=True)
+def alias_opencode_full() -> None:
+    """Alias for `vp run opencode`."""
+    run.run(agent="opencode")
+
+
+@app.command("devstral", hidden=True)
+def alias_devstral_full() -> None:
+    """Alias for `vp run devstral`."""
+    run.run(agent="devstral")
+
+
+@app.command("auggie", hidden=True)
+def alias_auggie_full() -> None:
+    """Alias for `vp run auggie`."""
+    run.run(agent="auggie")
+
+
+@app.command("copilot", hidden=True)
+def alias_copilot_full() -> None:
+    """Alias for `vp run copilot`."""
+    run.run(agent="copilot")
+
+
+@app.command("codex", hidden=True)
+def alias_codex_full() -> None:
+    """Alias for `vp run codex`."""
+    run.run(agent="codex")
+
+
 @app.command("ui", hidden=True)
 def alias_ui() -> None:
     """Alias for `vp logs start`."""
