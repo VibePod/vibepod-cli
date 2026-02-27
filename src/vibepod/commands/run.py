@@ -156,6 +156,7 @@ def run(
         typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
     ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
+    network: Annotated[str | None, typer.Option("--network", help="Additional Docker network to connect the container to")] = None,
 ) -> None:
     """Start an agent container."""
     config = get_config()
@@ -189,7 +190,7 @@ def run(
 
     network_name = str(config.get("network", "vibepod-network"))
     manager.ensure_network(network_name)
-    extra_network = _maybe_select_network(workspace_path, manager, network_name)
+    extra_network = network or _maybe_select_network(workspace_path, manager, network_name)
 
     if pull or bool(config.get("auto_pull", False)):
         info(f"Pulling image: {image}")
