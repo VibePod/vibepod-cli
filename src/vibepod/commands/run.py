@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
@@ -104,6 +106,44 @@ def _host_user() -> str | None:
     return f"{getuid()}:{getgid()}"
 
 
+def _compose_file_present(workspace: Path) -> bool:
+    return (workspace / "docker-compose.yml").exists() or (workspace / "compose.yml").exists()
+
+
+def _maybe_select_network(
+    workspace: Path,
+    manager: DockerManager,
+    primary_network: str,
+) -> str | None:
+    if not _compose_file_present(workspace):
+        return None
+    if not sys.stdin.isatty():
+        warning("Compose file detected but stdin is not interactive; skipping network prompt.")
+        return None
+
+    networks = manager.networks_with_running_containers()
+    excluded = {primary_network, "bridge", "host", "none"}
+    candidates = [name for name in networks if name not in excluded]
+    if not candidates:
+        return None
+
+    if not Confirm.ask(
+        "Compose file detected. Connect this container to a network with running containers?",
+        default=False,
+    ):
+        return None
+
+    info("Available networks:")
+    choices: dict[str, str] = {}
+    for idx, name in enumerate(candidates, start=1):
+        key = str(idx)
+        choices[key] = name
+        info(f"{key}. {name}")
+
+    selected = Prompt.ask("Select a network", choices=list(choices.keys()), default="1")
+    return choices[selected]
+
+
 def run(
     agent: Annotated[str | None, typer.Argument(help="Agent to run")] = None,
     workspace: Annotated[Path, typer.Option("-w", "--workspace", help="Workspace directory")] = Path(
@@ -116,6 +156,7 @@ def run(
         typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
     ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
+    network: Annotated[str | None, typer.Option("--network", help="Additional Docker network to connect the container to")] = None,
 ) -> None:
     """Start an agent container."""
     config = get_config()
@@ -149,6 +190,7 @@ def run(
 
     network_name = str(config.get("network", "vibepod-network"))
     manager.ensure_network(network_name)
+    extra_network = network or _maybe_select_network(workspace_path, manager, network_name)
 
     if pull or bool(config.get("auto_pull", False)):
         info(f"Pulling image: {image}")
@@ -232,6 +274,13 @@ def run(
         if recent.strip():
             print(recent)
         raise typer.Exit(1)
+
+    if extra_network and extra_network != network_name:
+        try:
+            manager.connect_network(container, extra_network)
+            info(f"Connected to additional network: {extra_network}")
+        except DockerClientError as exc:
+            warning(str(exc))
 
     if proxy_db_path is not None:
         container_ip = _get_container_ip(container, network_name)
