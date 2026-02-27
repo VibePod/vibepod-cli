@@ -53,6 +53,23 @@ class DockerManager:
         except NotFound:
             self.client.networks.create(name, labels={CONTAINER_LABEL_MANAGED: "true"})
 
+    def networks_with_running_containers(self) -> list[str]:
+        networks: set[str] = set()
+        for container in self.client.containers.list():
+            try:
+                attached = container.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
+            except AttributeError:
+                continue
+            networks.update(attached.keys())
+        return sorted(networks)
+
+    def connect_network(self, container: Any, network_name: str) -> None:
+        try:
+            network = self.client.networks.get(network_name)
+            network.connect(container)
+        except APIError as exc:
+            raise DockerClientError(f"Failed to connect to network {network_name}: {exc}") from exc
+
     def run_agent(
         self,
         *,
