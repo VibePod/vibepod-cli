@@ -77,12 +77,12 @@ def test_ensure_proxy_runs_container_as_current_user(tmp_path: Path, monkeypatch
         image="vibepod/proxy:latest",
         db_path=db_path,
         ca_dir=ca_dir,
-        port=8080,
         network="vibepod-network",
     )
 
     run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
     assert run_kwargs is not None
     assert run_kwargs["user"] == "1234:2345"
+    assert "ports" not in run_kwargs
     assert db_path.parent.exists()
     assert ca_dir.exists()

@@ -85,7 +85,6 @@ logging:
 proxy:
   enabled: true
   image: vibepod/proxy:latest
-  port: 8080
   db_path: ~/.config/vibepod/proxy/proxy.db
   ca_dir: ~/.config/vibepod/proxy/mitmproxy
   ca_path: ~/.config/vibepod/proxy/mitmproxy/mitmproxy-ca-cert.pem
@@ -102,7 +101,6 @@ These variables override the corresponding config keys without editing any file:
 | `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
 | `VP_NO_COLOR` | `no_color` | `VP_NO_COLOR=true` |
 | `VP_DATASETTE_PORT` | `logging.ui_port` | `VP_DATASETTE_PORT=9001` |
-| `VP_PROXY_PORT` | `proxy.port` | `VP_PROXY_PORT=9090` |
 | `VP_PROXY_ENABLED` | `proxy.enabled` | `VP_PROXY_ENABLED=false` |
 | `VP_CONFIG_DIR` | *(config root)* | `VP_CONFIG_DIR=/custom/path` |
 
@@ -147,6 +145,8 @@ Commit this file to share project defaults with your team.
 ## The built-in proxy
 
 VibePod starts a `vibepod-proxy` container alongside every agent. It acts as an HTTP(S) MITM proxy and logs all outbound requests to a SQLite database viewable in the Datasette UI (`vp logs start`).
+
+The proxy is reachable inside the Docker network as `http://vibepod-proxy:8080`. It is not published on a host port.
 
 To disable the proxy globally:
 

@@ -16,15 +16,12 @@ app = typer.Typer(help="Manage the HTTP(S) proxy")
 
 
 @app.command("start")
-def proxy_start(
-    port: Annotated[int | None, typer.Option("--port", help="Proxy host port")] = None,
-) -> None:
+def proxy_start() -> None:
     """Start the proxy container."""
     config = get_config()
     proxy_cfg = config.get("proxy", {})
 
     proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
-    proxy_port = port if port is not None else int(proxy_cfg.get("port", 8080))
     db_path = (
         Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db")))
         .expanduser()
@@ -45,12 +42,11 @@ def proxy_start(
 
     manager.ensure_network(network_name)
 
-    info(f"Starting proxy on port {proxy_port}")
+    info("Starting proxy")
     manager.ensure_proxy(
         image=proxy_image,
         db_path=db_path,
         ca_dir=ca_dir,
-        port=proxy_port,
         network=network_name,
     )
     success("Proxy is running")

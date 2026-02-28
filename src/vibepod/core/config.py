@@ -82,7 +82,6 @@ def _default_config() -> dict[str, Any]:
         "proxy": {
             "enabled": True,
             "image": DEFAULT_IMAGES["proxy"],
-            "port": 8080,
             "db_path": str(config_root / "proxy" / "proxy.db"),
             "ca_dir": str(config_root / "proxy" / "mitmproxy"),
             "ca_path": str(config_root / "proxy" / "mitmproxy" / "mitmproxy-ca-cert.pem"),
@@ -127,7 +126,6 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
         "VP_LOG_LEVEL": ("log_level", str),
         "VP_NO_COLOR": ("no_color", lambda x: x.lower() == "true"),
         "VP_DATASETTE_PORT": ("logging.ui_port", int),
-        "VP_PROXY_PORT": ("proxy.port", int),
         "VP_PROXY_ENABLED": ("proxy.enabled", lambda x: x.lower() == "true"),
     }
 

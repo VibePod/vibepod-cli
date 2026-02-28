@@ -219,7 +219,7 @@ class DockerManager:
         )
         return containers[0] if containers else None
 
-    def ensure_proxy(self, image: str, db_path: Path, ca_dir: Path, port: int, network: str) -> Any:
+    def ensure_proxy(self, image: str, db_path: Path, ca_dir: Path, network: str) -> Any:
         existing = self.find_proxy()
         if existing:
             if existing.status == "running":
@@ -244,7 +244,6 @@ class DockerManager:
                 "PROXY_CONF_DIR": "/data/mitmproxy",
             },
             "volumes": volumes,
-            "ports": {"8080/tcp": port},
             "network": network,
         }
 
