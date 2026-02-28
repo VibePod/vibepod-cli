@@ -29,7 +29,9 @@ def logs_start(
     datasette_image = str(log_cfg.get("image", "vibepod/datasette:latest"))
     datasette_port = port if port is not None else int(log_cfg.get("ui_port", 8001))
     logs_db_path = Path(str(log_cfg.get("db_path", "~/.config/vibepod/logs.db"))).expanduser()
-    proxy_db_path = Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db"))).expanduser()
+    proxy_db_path = Path(
+        str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db"))
+    ).expanduser()
 
     try:
         manager = DockerManager()

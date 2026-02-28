@@ -30,7 +30,9 @@ def show(
 
 @app.command("path")
 def path(
-    global_only: Annotated[bool, typer.Option("--global", help="Show global config path only")] = False,
+    global_only: Annotated[
+        bool, typer.Option("--global", help="Show global config path only")
+    ] = False,
     project_only: Annotated[
         bool, typer.Option("--project", help="Show project config path only")
     ] = False,
@@ -50,7 +52,9 @@ def path(
         print(project_path)
         return
 
-    logs_path = Path(str(get_config().get("logging", {}).get("db_path", "~/.config/vibepod/logs.db")))
+    logs_path = Path(
+        str(get_config().get("logging", {}).get("db_path", "~/.config/vibepod/logs.db"))
+    )
     logs_path = logs_path.expanduser().resolve()
 
     print(f"Global:  {global_path}")

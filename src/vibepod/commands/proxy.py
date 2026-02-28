@@ -25,8 +25,16 @@ def proxy_start(
 
     proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
     proxy_port = port if port is not None else int(proxy_cfg.get("port", 8080))
-    db_path = Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db"))).expanduser().resolve()
-    ca_dir = Path(str(proxy_cfg.get("ca_dir", "~/.config/vibepod/proxy/mitmproxy"))).expanduser().resolve()
+    db_path = (
+        Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db")))
+        .expanduser()
+        .resolve()
+    )
+    ca_dir = (
+        Path(str(proxy_cfg.get("ca_dir", "~/.config/vibepod/proxy/mitmproxy")))
+        .expanduser()
+        .resolve()
+    )
     network_name = str(config.get("network", "vibepod-network"))
 
     try:

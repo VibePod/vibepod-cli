@@ -22,7 +22,9 @@ def _running_map(containers: list[Any]) -> dict[str, Any]:
 
 
 def list_agents(
-    running: Annotated[bool, typer.Option("-r", "--running", help="Show only running agents")] = False,
+    running: Annotated[
+        bool, typer.Option("-r", "--running", help="Show only running agents")
+    ] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
     """List available agents and running containers."""

@@ -19,6 +19,13 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
+    "types-docker",
+    "types-PyYAML",
+]
+docs = [
+    "mkdocs>=1.6.0,<2.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocs-typer>=0.0.3",
 ]
 
 [project.scripts]

@@ -8,7 +8,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.prompt import Confirm, Prompt
@@ -39,12 +39,21 @@ def _parse_env_pairs(values: list[str]) -> dict[str, str]:
     return parsed
 
 
-def _get_container_ip(container: object, network: str) -> str | None:
+def _get_container_ip(container: Any, network: str) -> str | None:
     """Extract the container's IP address on the given Docker network."""
     try:
-        networks = container.attrs["NetworkSettings"]["Networks"]  # type: ignore[index]
-        return networks[network]["IPAddress"] or None  # type: ignore[index]
-    except (KeyError, TypeError, AttributeError):
+        network_settings = container.attrs.get("NetworkSettings")
+        if not isinstance(network_settings, dict):
+            return None
+        networks = network_settings.get("Networks")
+        if not isinstance(networks, dict):
+            return None
+        network_data = networks.get(network)
+        if not isinstance(network_data, dict):
+            return None
+        ip = network_data.get("IPAddress")
+        return ip if isinstance(ip, str) and ip else None
+    except AttributeError:
         return None
 
 
@@ -146,17 +155,22 @@ def _maybe_select_network(
 
 def run(
     agent: Annotated[str | None, typer.Argument(help="Agent to run")] = None,
-    workspace: Annotated[Path, typer.Option("-w", "--workspace", help="Workspace directory")] = Path(
-        "."
-    ),
+    workspace: Annotated[
+        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+    ] = Path("."),
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
-    detach: Annotated[bool, typer.Option("-d", "--detach", help="Run container in background")] = False,
+    detach: Annotated[
+        bool, typer.Option("-d", "--detach", help="Run container in background")
+    ] = False,
     env: Annotated[
         list[str] | None,
         typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
     ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
-    network: Annotated[str | None, typer.Option("--network", help="Additional Docker network to connect the container to")] = None,
+    network: Annotated[
+        str | None,
+        typer.Option("--network", help="Additional Docker network to connect the container to"),
+    ] = None,
 ) -> None:
     """Start an agent container."""
     config = get_config()
@@ -204,7 +218,9 @@ def run(
     proxy_ca_dir_value = str(proxy_cfg.get("ca_dir", "")).strip()
     proxy_ca_path_value = str(proxy_cfg.get("ca_path", "")).strip()
     proxy_ca_dir = Path(proxy_ca_dir_value).expanduser().resolve() if proxy_ca_dir_value else None
-    proxy_ca_path = Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
+    proxy_ca_path = (
+        Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
+    )
     proxy_port = int(proxy_cfg.get("port", 8080))
     proxy_db_path: Path | None = None
 
@@ -214,7 +230,11 @@ def run(
 
     if proxy_enabled:
         proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
-        proxy_db_path = Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db"))).expanduser().resolve()
+        proxy_db_path = (
+            Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db")))
+            .expanduser()
+            .resolve()
+        )
 
         manager.ensure_proxy(
             image=proxy_image,
@@ -301,7 +321,9 @@ def run(
 
     log_cfg = config.get("logging", {})
     log_enabled = bool(log_cfg.get("enabled", True))
-    log_db_path = Path(str(log_cfg.get("db_path", "~/.config/vibepod/logs.db"))).expanduser().resolve()
+    log_db_path = (
+        Path(str(log_cfg.get("db_path", "~/.config/vibepod/logs.db"))).expanduser().resolve()
+    )
 
     logger = SessionLogger(log_db_path, enabled=log_enabled)
     logger.open_session(

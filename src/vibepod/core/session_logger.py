@@ -43,9 +43,9 @@ class SessionLogger:
 
     # Escape-sequence parser states
     _ST_NORMAL = 0  # not inside any escape sequence
-    _ST_ESC = 1     # saw ESC (0x1B), waiting for discriminator byte
-    _ST_CSI = 2     # inside CSI sequence (ESC [), waiting for final byte
-    _ST_SS3 = 3     # inside SS3 sequence (ESC O), skip one more byte
+    _ST_ESC = 1  # saw ESC (0x1B), waiting for discriminator byte
+    _ST_CSI = 2  # inside CSI sequence (ESC [), waiting for final byte
+    _ST_SS3 = 3  # inside SS3 sequence (ESC O), skip one more byte
 
     def __init__(self, db_path: str | Path, *, enabled: bool = True) -> None:
         self._enabled = enabled
@@ -85,7 +85,8 @@ class SessionLogger:
 
         self._conn.execute(
             "INSERT INTO sessions "
-            "(id, agent, image, workspace, container_id, container_name, started_at, vibepod_version) "
+            "(id, agent, image, workspace, container_id, container_name, "
+            "started_at, vibepod_version) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 self._session_id,
