@@ -1,6 +1,6 @@
 # Configuration
 
-VibePod merges configuration from three sources in order, with each layer overriding the previous:
+VibePod merges configuration from four sources in order, with each layer overriding the previous:
 
 1. **Built-in defaults**
 2. **Global config** — `~/.config/vibepod/config.yaml`

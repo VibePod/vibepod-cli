@@ -25,7 +25,7 @@ try:
     from docker.errors import APIError as _APIError
     from docker.errors import DockerException as _DockerException
     from docker.errors import NotFound as _NotFound
-except Exception:  # pragma: no cover - handled at runtime
+except ImportError:  # pragma: no cover - handled at runtime
     docker = None
     APIError = Exception
     DockerException = Exception

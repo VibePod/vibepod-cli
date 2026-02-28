@@ -1,8 +1,8 @@
 site_name: VibePod
 site_description: One CLI for containerized AI coding agents
 site_url: https://vibepod.dev/docs/
-repo_url: https://github.com/VibePod/vibepod
-repo_name: VibePod/vibepod
+repo_url: https://github.com/VibePod/vibepod-cli
+repo_name: VibePod/vibepod-cli
 edit_uri: edit/main/docs/
 
 theme:
