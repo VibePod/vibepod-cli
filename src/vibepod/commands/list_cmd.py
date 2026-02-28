@@ -7,7 +7,12 @@ from typing import Annotated, Any
 import typer
 from rich.table import Table
 
-from vibepod.constants import DEFAULT_IMAGES, EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.constants import (
+    AGENT_SHORT_NAMES,
+    DEFAULT_IMAGES,
+    EXIT_DOCKER_NOT_RUNNING,
+    SUPPORTED_AGENTS,
+)
 from vibepod.core.docker import DockerClientError, DockerManager
 from vibepod.utils.console import console, error
 
@@ -42,6 +47,7 @@ def list_agents(
         rows.append(
             {
                 "agent": agent,
+                "short": AGENT_SHORT_NAMES.get(agent, ""),
                 "image": DEFAULT_IMAGES[agent],
                 "status": container.status if container else "stopped",
                 "workspace": container.labels.get("vibepod.workspace", "-") if container else "-",
@@ -59,9 +65,10 @@ def list_agents(
 
     table = Table(title="VibePod Agents")
     table.add_column("AGENT", style="cyan")
+    table.add_column("SHORT", style="green")
     table.add_column("IMAGE", style="magenta")
     table.add_column("STATUS")
     table.add_column("WORKSPACE")
     for row in rows:
-        table.add_row(row["agent"], row["image"], row["status"], row["workspace"])
+        table.add_row(row["agent"], row["short"], row["image"], row["status"], row["workspace"])
     console.print(table)

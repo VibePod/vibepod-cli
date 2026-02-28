@@ -62,6 +62,16 @@ DEFAULT_ALIASES: dict[str, str] = {
     "ui": "logs start",
 }
 
+AGENT_SHORT_NAMES: dict[str, str] = {
+    "claude": "c",
+    "gemini": "g",
+    "opencode": "o",
+    "devstral": "d",
+    "auggie": "a",
+    "copilot": "p",
+    "codex": "x",
+}
+
 EXIT_SUCCESS = 0
 EXIT_ERROR = 1
 EXIT_INVALID_ARGS = 2
