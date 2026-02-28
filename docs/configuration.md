@@ -129,7 +129,21 @@ VP_IMAGE_NAMESPACE=myorg vp run claude
 
 ## Project-level config
 
-Create `.vibepod/config.yaml` in your repository to apply settings that only take effect inside that project. Only the keys you specify are merged — everything else falls through to the global config and defaults.
+Use `vp config init` in your repository to create `.vibepod/config.yaml` automatically when it does not already exist:
+
+```bash
+vp config init
+```
+
+If `.vibepod/config.yaml` already exists, this command exits without modifying it; run `vp config init --force` to replace the file.
+
+This writes a minimal starter file:
+
+```yaml
+version: 1
+```
+
+Then add only the keys you want to override. Project config is merged on top of global config and defaults.
 
 ```yaml
 # .vibepod/config.yaml
