@@ -10,9 +10,29 @@ import typer
 import yaml
 
 from vibepod.core.config import get_config, get_global_config_path, get_project_config_path
-from vibepod.utils.console import console
+from vibepod.utils.console import console, error, success
 
 app = typer.Typer(help="Manage configuration")
+
+PROJECT_CONFIG_MINIMAL = "version: 1\n"
+
+
+@app.command("init")
+def init(
+    force: Annotated[
+        bool, typer.Option("--force", help="Overwrite existing project config if present")
+    ] = False,
+) -> None:
+    """Create a minimal project config in the current directory."""
+    project_path = get_project_config_path()
+    if project_path.exists() and not force:
+        error(f"Project config already exists: {project_path}")
+        error("Use --force to overwrite.")
+        raise typer.Exit(1)
+
+    project_path.parent.mkdir(parents=True, exist_ok=True)
+    project_path.write_text(PROJECT_CONFIG_MINIMAL, encoding="utf-8")
+    success(f"Created project config: {project_path}")
 
 
 @app.command("show")

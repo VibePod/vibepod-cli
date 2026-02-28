@@ -23,6 +23,7 @@ This repository contains an initial v1 implementation with:
 - `vp stop <agent|--all>`
 - `vp list`
 - `vp logs start|stop|status`
+- `vp config init`
 - `vp config show`
 - `vp config path`
 - `vp version`
