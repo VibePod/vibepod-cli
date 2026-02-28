@@ -221,7 +221,6 @@ def run(
     proxy_ca_path = (
         Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
     )
-    proxy_port = int(proxy_cfg.get("port", 8080))
     proxy_db_path: Path | None = None
 
     extra_volumes = _agent_extra_volumes(selected_agent, config_dir)
@@ -240,7 +239,6 @@ def run(
             image=proxy_image,
             db_path=proxy_db_path,
             ca_dir=proxy_ca_dir or proxy_db_path.parent / "mitmproxy",
-            port=proxy_port,
             network=network_name,
         )
 
@@ -255,7 +253,7 @@ def run(
             if not ca_ready:
                 warning(f"Proxy CA not found yet at {proxy_ca_path}")
 
-        proxy_url = f"http://vibepod-proxy:{proxy_port}"
+        proxy_url = "http://vibepod-proxy:8080"
         merged_env.setdefault("HTTP_PROXY", proxy_url)
         merged_env.setdefault("HTTPS_PROXY", proxy_url)
         merged_env.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
