@@ -1,5 +1,10 @@
 # VibePod
 
+[![Docs](https://img.shields.io/badge/docs-vibepod.dev-blue)](https://vibepod.dev/docs/)
+[![PyPI](https://img.shields.io/pypi/v/vibepod)](https://pypi.org/project/vibepod/)
+[![CI](https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml)
+[![Docs Build](https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml/badge.svg)](https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml)
+
 VibePod is a unified CLI (`vp`) for running AI coding agents in Docker containers.
 
 ## Installation
