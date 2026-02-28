@@ -15,14 +15,26 @@ from uuid import uuid4
 
 from vibepod.constants import CONTAINER_LABEL_MANAGED
 
+docker: Any | None
+APIError: type[Exception]
+DockerException: type[Exception]
+NotFound: type[Exception]
+
 try:
-    import docker
-    from docker.errors import APIError, DockerException, NotFound
-except Exception:  # pragma: no cover - handled at runtime
-    docker = None  # type: ignore[assignment]
-    APIError = Exception  # type: ignore[misc,assignment]
-    DockerException = Exception  # type: ignore[misc,assignment]
-    NotFound = Exception  # type: ignore[misc,assignment]
+    import docker as _docker
+    from docker.errors import APIError as _APIError
+    from docker.errors import DockerException as _DockerException
+    from docker.errors import NotFound as _NotFound
+except ImportError:  # pragma: no cover - handled at runtime
+    docker = None
+    APIError = Exception
+    DockerException = Exception
+    NotFound = Exception
+else:
+    docker = _docker
+    APIError = _APIError
+    DockerException = _DockerException
+    NotFound = _NotFound
 
 
 class DockerClientError(RuntimeError):
@@ -156,7 +168,9 @@ class DockerManager:
         )
         return containers[0] if containers else None
 
-    def ensure_datasette(self, image: str, logs_db_path: Path, proxy_db_path: Path, port: int) -> Any:
+    def ensure_datasette(
+        self, image: str, logs_db_path: Path, proxy_db_path: Path, port: int
+    ) -> Any:
         existing = self.find_datasette()
         if existing:
             existing.reload()
@@ -243,6 +257,7 @@ class DockerManager:
 
     def attach_interactive(self, container: Any, logger: Any = None) -> None:
         """Attach local stdin/stdout to a running container TTY."""
+
         def resize_tty() -> None:
             size = shutil.get_terminal_size(fallback=(120, 40))
             try:

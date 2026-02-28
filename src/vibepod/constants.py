@@ -22,10 +22,12 @@ SUPPORTED_AGENTS = ("claude", "gemini", "opencode", "devstral", "auggie", "copil
 
 DEFAULT_IMAGES: dict[str, str] = {
     "claude": os.environ.get(
-        "VP_IMAGE_CLAUDE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/claude-container:latest"
+        "VP_IMAGE_CLAUDE",
+        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/claude-container:latest",
     ),
     "gemini": os.environ.get(
-        "VP_IMAGE_GEMINI", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/gemini-container:latest"
+        "VP_IMAGE_GEMINI",
+        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/gemini-container:latest",
     ),
     "opencode": os.environ.get(
         "VP_IMAGE_OPENCODE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/opencode-cli:latest"

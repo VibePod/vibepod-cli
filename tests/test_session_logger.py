@@ -5,8 +5,6 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from vibepod.core.session_logger import SessionLogger
 
 
@@ -36,7 +34,10 @@ class TestSessionLogger:
         logger.close_session()
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
-        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        tables = {
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
         assert "sessions" in tables
         assert "messages" in tables
         conn.close()
@@ -49,7 +50,9 @@ class TestSessionLogger:
         assert sid is not None and len(sid) == 32
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
-        row = conn.execute("SELECT agent, container_name FROM sessions WHERE id = ?", (sid,)).fetchone()
+        row = conn.execute(
+            "SELECT agent, container_name FROM sessions WHERE id = ?", (sid,)
+        ).fetchone()
         assert row == ("claude", "vibepod-claude-test")
         conn.close()
         logger.close_session()
@@ -60,7 +63,9 @@ class TestSessionLogger:
         logger.close_session("keyboard_interrupt")
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
-        row = conn.execute("SELECT ended_at, exit_reason FROM sessions WHERE id = ?", (sid,)).fetchone()
+        row = conn.execute(
+            "SELECT ended_at, exit_reason FROM sessions WHERE id = ?", (sid,)
+        ).fetchone()
         assert row[0] is not None
         assert row[1] == "keyboard_interrupt"
         conn.close()
@@ -76,9 +81,7 @@ class TestSessionLogger:
         logger.close_session()
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
-        rows = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
-        ).fetchall()
+        rows = conn.execute("SELECT content FROM messages WHERE session_id = ?", (sid,)).fetchall()
         assert len(rows) == 1
         assert rows[0][0] == "ls"
         conn.close()

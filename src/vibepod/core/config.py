@@ -35,8 +35,18 @@ def _default_config() -> dict[str, Any]:
         "log_level": "info",
         "no_color": False,
         "agents": {
-            "claude": {"enabled": True, "image": DEFAULT_IMAGES["claude"], "env": {}, "volumes": []},
-            "gemini": {"enabled": True, "image": DEFAULT_IMAGES["gemini"], "env": {}, "volumes": []},
+            "claude": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["claude"],
+                "env": {},
+                "volumes": [],
+            },
+            "gemini": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["gemini"],
+                "env": {},
+                "volumes": [],
+            },
             "opencode": {
                 "enabled": True,
                 "image": DEFAULT_IMAGES["opencode"],
@@ -49,8 +59,18 @@ def _default_config() -> dict[str, Any]:
                 "env": {},
                 "volumes": [],
             },
-            "auggie": {"enabled": True, "image": DEFAULT_IMAGES["auggie"], "env": {}, "volumes": []},
-            "copilot": {"enabled": True, "image": DEFAULT_IMAGES["copilot"], "env": {}, "volumes": []},
+            "auggie": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["auggie"],
+                "env": {},
+                "volumes": [],
+            },
+            "copilot": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["copilot"],
+                "env": {},
+                "volumes": [],
+            },
             "codex": {"enabled": True, "image": DEFAULT_IMAGES["codex"], "env": {}, "volumes": []},
         },
         "logging": {
