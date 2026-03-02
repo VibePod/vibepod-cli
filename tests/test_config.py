@@ -7,7 +7,8 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from vibepod.cli import app
-from vibepod.core.config import deep_merge
+from vibepod.constants import SUPPORTED_AGENTS
+from vibepod.core.config import deep_merge, get_config
 
 runner = CliRunner()
 
@@ -49,3 +50,13 @@ def test_config_init_force_overwrites_existing_config() -> None:
         result = runner.invoke(app, ["config", "init", "--force"])
         assert result.exit_code == 0
         assert project_config.read_text(encoding="utf-8") == "version: 1\n"
+
+
+def test_default_config_exposes_agent_init(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+    agents = config.get("agents", {})
+    assert isinstance(agents, dict)
+
+    for agent in SUPPORTED_AGENTS:
+        assert agents[agent]["init"] == []

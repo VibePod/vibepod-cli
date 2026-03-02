@@ -41,6 +41,17 @@ class DockerClientError(RuntimeError):
     """Raised for Docker availability or lifecycle errors."""
 
 
+def _normalize_command(value: Any) -> list[str]:
+    """Normalize Docker command/entrypoint values to a list of strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(part) for part in value]
+    return [str(value)]
+
+
 class DockerManager:
     """Manager for all Docker operations."""
 
@@ -82,6 +93,35 @@ class DockerManager:
         except APIError as exc:
             raise DockerClientError(f"Failed to connect to network {network_name}: {exc}") from exc
 
+    def resolve_launch_command(self, image: str, command: list[str] | None) -> list[str]:
+        """Resolve the full executable argv for a container start."""
+        try:
+            image_obj = self.client.images.get(image)
+        except NotFound as exc:
+            raise DockerClientError(
+                f"Image {image} not found locally. Pull the image first (for example with --pull)."
+            ) from exc
+        except APIError as exc:
+            raise DockerClientError(f"Failed to inspect image {image}: {exc}") from exc
+        except DockerException as exc:
+            raise DockerClientError(f"Failed to inspect image {image}: {exc}") from exc
+
+        image_config = image_obj.attrs.get("Config", {}) if hasattr(image_obj, "attrs") else {}
+        if not isinstance(image_config, dict):
+            image_config = {}
+
+        image_entrypoint = _normalize_command(image_config.get("Entrypoint"))
+        image_cmd = _normalize_command(image_config.get("Cmd"))
+        effective_cmd = command if command is not None else image_cmd
+        launch = [*image_entrypoint, *effective_cmd]
+
+        if not launch:
+            raise DockerClientError(
+                f"Could not resolve a startup command for image {image}. "
+                "Specify a command in the image or in agent settings."
+            )
+        return launch
+
     def run_agent(
         self,
         *,
@@ -99,6 +139,7 @@ class DockerManager:
         extra_volumes: list[tuple[str, str, str]] | None = None,
         platform: str | None = None,
         user: str | None = None,
+        entrypoint: list[str] | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -137,6 +178,8 @@ class DockerManager:
                 run_kwargs["platform"] = platform
             if user:
                 run_kwargs["user"] = user
+            if entrypoint:
+                run_kwargs["entrypoint"] = entrypoint
 
             return self.client.containers.run(**run_kwargs)
         except APIError as exc:

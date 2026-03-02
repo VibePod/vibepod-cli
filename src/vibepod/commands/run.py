@@ -39,6 +39,48 @@ def _parse_env_pairs(values: list[str]) -> dict[str, str]:
     return parsed
 
 
+def _agent_init_commands(agent: str, agent_cfg: dict[str, Any]) -> list[str]:
+    """Read and validate per-agent init commands from config."""
+    raw_init = agent_cfg.get("init", [])
+    if raw_init is None:
+        return []
+
+    if isinstance(raw_init, str):
+        items = [raw_init]
+    elif isinstance(raw_init, list):
+        items = raw_init
+    else:
+        raise typer.BadParameter(
+            f"Invalid agents.{agent}.init value, expected a string or list of strings."
+        )
+
+    commands: list[str] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, str):
+            raise typer.BadParameter(
+                f"Invalid agents.{agent}.init[{index}] value, expected a string."
+            )
+        command = item.strip()
+        if not command:
+            raise typer.BadParameter(
+                f"Invalid agents.{agent}.init[{index}] value, cannot be empty."
+            )
+        commands.append(command)
+    return commands
+
+
+def _init_entrypoint(init_commands: list[str]) -> list[str]:
+    """Build a shell entrypoint that runs init commands before the agent command."""
+    script = "\n".join(
+        [
+            "set -e",
+            *init_commands,
+            'exec "$@"',
+        ]
+    )
+    return ["/bin/sh", "-lc", script, "--"]
+
+
 def _get_container_ip(container: Any, network: str) -> str | None:
     """Extract the container's IP address on the given Docker network."""
     try:
@@ -186,6 +228,7 @@ def run(
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
+    init_commands = _agent_init_commands(selected_agent, agent_cfg)
     merged_env = {
         "USER_UID": str(os.getuid()),
         "USER_GID": str(os.getgid()),
@@ -209,6 +252,17 @@ def run(
     if pull or bool(config.get("auto_pull", False)):
         info(f"Pulling image: {image}")
         manager.pull_image(image)
+
+    command = spec.command
+    entrypoint: list[str] | None = None
+    if init_commands:
+        info(f"Applying {len(init_commands)} init command(s) before startup")
+        try:
+            command = manager.resolve_launch_command(image=image, command=spec.command)
+        except DockerClientError as exc:
+            error(str(exc))
+            raise typer.Exit(1) from exc
+        entrypoint = _init_entrypoint(init_commands)
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -275,7 +329,7 @@ def run(
         config_dir=config_dir,
         config_mount_path=spec.config_mount_path,
         env=merged_env,
-        command=spec.command,
+        command=command,
         auto_remove=bool(config.get("auto_remove", True)),
         name=name,
         version=__version__,
@@ -283,6 +337,7 @@ def run(
         extra_volumes=extra_volumes,
         platform=spec.platform,
         user=container_user,
+        entrypoint=entrypoint,
     )
 
     container.reload()
