@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 import yaml
 
+from vibepod.constants import SUPPORTED_AGENTS
 from vibepod.core.config import get_config, get_global_config_path, get_project_config_path
 from vibepod.utils.console import console, error, success
 
@@ -19,12 +21,68 @@ PROJECT_CONFIG_MINIMAL = "version: 1\n"
 
 @app.command("init")
 def init(
+    agent: Annotated[
+        str | None, typer.Argument(help="Optional agent config to copy into project")
+    ] = None,
     force: Annotated[
         bool, typer.Option("--force", help="Overwrite existing project config if present")
     ] = False,
 ) -> None:
-    """Create a minimal project config in the current directory."""
+    """Create a minimal project config or add a specific agent config."""
     project_path = get_project_config_path()
+    if agent is not None:
+        if agent not in SUPPORTED_AGENTS:
+            error(f"Unknown agent '{agent}'. Supported: {', '.join(SUPPORTED_AGENTS)}")
+            raise typer.Exit(1)
+
+        try:
+            project_path.parent.mkdir(parents=True, exist_ok=True)
+
+            project_config: dict[str, Any] = {}
+            if project_path.exists():
+                loaded = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+                if loaded is None:
+                    loaded = {}
+                if not isinstance(loaded, dict):
+                    error(f"Project config must contain a YAML mapping: {project_path}")
+                    raise typer.Exit(1)
+                project_config = loaded
+
+            project_config.setdefault("version", 1)
+            agents_config = project_config.setdefault("agents", {})
+            if not isinstance(agents_config, dict):
+                error(f"Project config key 'agents' must be a YAML mapping: {project_path}")
+                raise typer.Exit(1)
+
+            if agent in agents_config:
+                error(f"Project config already contains agent '{agent}': {project_path}")
+                raise typer.Exit(1)
+
+            effective_agents = get_config().get("agents", {})
+            if not isinstance(effective_agents, dict):
+                error(f"Could not resolve config for agent '{agent}'.")
+                raise typer.Exit(1)
+
+            effective_agent = effective_agents.get(agent)
+            if not isinstance(effective_agent, dict):
+                error(f"Could not resolve config for agent '{agent}'.")
+                raise typer.Exit(1)
+
+            agents_config[agent] = copy.deepcopy(effective_agent)
+            project_path.write_text(
+                yaml.safe_dump(project_config, sort_keys=False),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            error(f"Failed to update project config at {project_path}: {exc}")
+            raise typer.Exit(1) from exc
+        except yaml.YAMLError as exc:
+            error(f"Failed to parse project config at {project_path}: {exc}")
+            raise typer.Exit(1) from exc
+
+        success(f"Added agent config '{agent}' to project config: {project_path}")
+        return
+
     if project_path.exists() and not force:
         error(f"Project config already exists: {project_path}")
         error("Use --force to overwrite.")

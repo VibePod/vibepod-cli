@@ -150,6 +150,14 @@ This writes a minimal starter file:
 version: 1
 ```
 
+To copy a full agent block into the project config, pass the agent name:
+
+```bash
+vp config init claude
+```
+
+This adds `agents.claude` to `.vibepod/config.yaml` (creating the file if needed). If `agents.claude` is already present, the command exits without modifying the file.
+
 Then add only the keys you want to override. Project config is merged on top of global config and defaults.
 
 ```yaml
