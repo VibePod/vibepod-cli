@@ -39,42 +39,49 @@ agents:
     image: nezhar/claude-container:latest
     env: {}       # Extra environment variables passed to the container
     volumes: []   # Reserved for future use
+    init: []      # Optional shell commands run before agent startup
 
   gemini:
     enabled: true
     image: nezhar/gemini-container:latest
     env: {}
     volumes: []
+    init: []
 
   opencode:
     enabled: true
     image: nezhar/opencode-cli:latest
     env: {}
     volumes: []
+    init: []
 
   devstral:
     enabled: true
     image: nezhar/devstral-cli:latest
     env: {}
     volumes: []
+    init: []
 
   auggie:
     enabled: true
     image: nezhar/auggie-cli:latest
     env: {}
     volumes: []
+    init: []
 
   copilot:
     enabled: true
     image: nezhar/copilot-cli:latest
     env: {}
     volumes: []
+    init: []
 
   codex:
     enabled: true
     image: nezhar/codex-cli:latest
     env: {}
     volumes: []
+    init: []
 
 logging:
   enabled: true
@@ -152,7 +159,12 @@ agents:
   opencode:
     env:
       OPENAI_BASE_URL: https://my-internal-proxy/v1
+    init:
+      - apt-get update
+      - apt-get install -y ripgrep
 ```
+
+`agents.<agent>.init` runs inside the container before the agent process starts. Commands run with `/bin/sh -lc` and `set -e` (startup stops on the first failed command).
 
 Commit this file to share project defaults with your team.
 

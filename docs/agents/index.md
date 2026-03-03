@@ -51,6 +51,20 @@ agents:
       MY_VAR: value
 ```
 
+## Init scripts before startup
+
+Use `agents.<agent>.init` to run shell commands in the container before the agent launches. This is useful for installing extra tools in a custom image workflow.
+
+```yaml
+agents:
+  codex:
+    init:
+      - apt-get update
+      - apt-get install -y ripgrep jq
+```
+
+The `init` commands run on every `vp run` for that agent and must be idempotent.
+
 ## Connecting to a Docker Compose network
 
 When your workspace contains a `docker-compose.yml` or `compose.yml`, VibePod detects it and offers to connect the agent container to an existing network so it can reach your running services.
