@@ -71,6 +71,14 @@ This creates `.vibepod/config.yaml` in your current directory with a minimal sta
 version: 1
 ```
 
+Add a specific agent block into the project config with:
+
+```bash
+vp config init claude
+```
+
+If that agent is already configured under `agents`, the command exits without changing the file.
+
 ## Run in the background
 
 Use `-d` / `--detach` to start the container without attaching your terminal:

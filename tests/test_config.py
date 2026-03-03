@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
 from vibepod.cli import app
@@ -50,6 +51,59 @@ def test_config_init_force_overwrites_existing_config() -> None:
         result = runner.invoke(app, ["config", "init", "--force"])
         assert result.exit_code == 0
         assert project_config.read_text(encoding="utf-8") == "version: 1\n"
+
+
+def test_config_init_with_agent_creates_project_config_with_agent_block() -> None:
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["config", "init", "claude"])
+        assert result.exit_code == 0
+
+        project_config = Path(".vibepod/config.yaml")
+        loaded = yaml.safe_load(project_config.read_text(encoding="utf-8"))
+        assert isinstance(loaded, dict)
+        assert loaded["version"] == 1
+        assert isinstance(loaded.get("agents"), dict)
+        assert isinstance(loaded["agents"].get("claude"), dict)
+        assert loaded["agents"]["claude"]["enabled"] is True
+        assert loaded["agents"]["claude"]["env"] == {}
+        assert loaded["agents"]["claude"]["volumes"] == []
+        assert loaded["agents"]["claude"]["init"] == []
+        assert isinstance(loaded["agents"]["claude"]["image"], str)
+
+
+def test_config_init_with_agent_appends_to_existing_project_config() -> None:
+    with runner.isolated_filesystem():
+        project_config = Path(".vibepod/config.yaml")
+        project_config.parent.mkdir(parents=True, exist_ok=True)
+        project_config.write_text("version: 1\ndefault_agent: codex\n", encoding="utf-8")
+
+        result = runner.invoke(app, ["config", "init", "gemini"])
+        assert result.exit_code == 0
+
+        loaded = yaml.safe_load(project_config.read_text(encoding="utf-8"))
+        assert isinstance(loaded, dict)
+        assert loaded["default_agent"] == "codex"
+        assert isinstance(loaded.get("agents"), dict)
+        assert isinstance(loaded["agents"].get("gemini"), dict)
+
+
+def test_config_init_with_agent_fails_when_agent_already_configured() -> None:
+    with runner.isolated_filesystem():
+        project_config = Path(".vibepod/config.yaml")
+        project_config.parent.mkdir(parents=True, exist_ok=True)
+        project_config.write_text(
+            "version: 1\nagents:\n  claude:\n    enabled: true\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(app, ["config", "init", "claude"])
+        assert result.exit_code == 1
+        assert "already contains agent 'claude'" in result.stdout
+
+        loaded = yaml.safe_load(project_config.read_text(encoding="utf-8"))
+        assert isinstance(loaded, dict)
+        assert isinstance(loaded.get("agents"), dict)
+        assert loaded["agents"]["claude"]["enabled"] is True
 
 
 def test_default_config_exposes_agent_init(monkeypatch, tmp_path: Path) -> None:
