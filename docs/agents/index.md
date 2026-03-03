@@ -34,6 +34,71 @@ agents:
     image: myorg/my-claude:dev
 ```
 
+## Image customization workflows
+
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`). Image customization means changing the image used for one of those IDs.
+
+### 1. Extend an existing image for an agent
+
+Example: add tools to the default Claude image.
+
+1. Create a Dockerfile that extends the current base image.
+
+```dockerfile
+# Dockerfile.claude
+FROM nezhar/claude-container:latest
+
+# Add project-specific utilities.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ripgrep jq \
+  && rm -rf /var/lib/apt/lists/*
+```
+
+2. Build and tag the derived image.
+
+```bash
+docker build -f Dockerfile.claude -t myorg/claude-container:with-tools .
+```
+
+3. Run with the new image (one-off) or set it in config (persistent).
+
+```bash
+# one-off
+VP_IMAGE_CLAUDE=myorg/claude-container:with-tools vp run claude
+```
+
+```yaml
+# ~/.config/vibepod/config.yaml (or .vibepod/config.yaml)
+agents:
+  claude:
+    image: myorg/claude-container:with-tools
+```
+
+### 2. Add a new image for an agent
+
+Example: point `opencode` at a newly published internal image.
+
+1. Build/publish your image to a registry (for example `registry.example.com/team/opencode:2026-03-01`).
+2. Attach that image to the target agent in config.
+
+```yaml
+agents:
+  opencode:
+    image: registry.example.com/team/opencode:2026-03-01
+```
+
+3. Start the agent.
+
+```bash
+vp run opencode
+```
+
+You can also test quickly without editing config:
+
+```bash
+VP_IMAGE_OPENCODE=registry.example.com/team/opencode:2026-03-01 vp run opencode
+```
+
 ## Passing environment variables
 
 Use `-e` / `--env` to inject variables at runtime:
