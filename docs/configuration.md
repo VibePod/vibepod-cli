@@ -134,6 +134,8 @@ VP_IMAGE_NAMESPACE=myorg vp run claude
 # pulls myorg/claude-container:latest
 ```
 
+For end-to-end examples (extending a base image and assigning a brand-new image to an agent), see [Agents > Image customization workflows](agents/index.md#image-customization-workflows).
+
 ## Project-level config
 
 Use `vp config init` in your repository to create `.vibepod/config.yaml` automatically when it does not already exist:
