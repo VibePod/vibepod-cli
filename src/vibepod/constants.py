@@ -18,7 +18,25 @@ LOGS_DB_FILE = CONFIG_DIR / "logs.db"
 DOCKER_NETWORK = "vibepod-network"
 CONTAINER_LABEL_MANAGED = "vibepod.managed"
 
-SUPPORTED_AGENTS = ("claude", "gemini", "opencode", "devstral", "auggie", "copilot", "codex")
+SUPPORTED_AGENTS = (
+    "claude",
+    "gemini",
+    "opencode",
+    "devstral",
+    "auggie",
+    "copilot",
+    "codex",
+)
+
+AGENT_SHORTCUTS: dict[str, str] = {
+    "c": "claude",
+    "g": "gemini",
+    "o": "opencode",
+    "d": "devstral",
+    "a": "auggie",
+    "p": "copilot",
+    "x": "codex",
+}
 
 DEFAULT_IMAGES: dict[str, str] = {
     "claude": os.environ.get(
@@ -54,13 +72,7 @@ DEFAULT_IMAGES: dict[str, str] = {
 }
 
 DEFAULT_ALIASES: dict[str, str] = {
-    "c": "run claude",
-    "g": "run gemini",
-    "o": "run opencode",
-    "d": "run devstral",
-    "a": "run auggie",
-    "p": "run copilot",
-    "x": "run codex",
+    **{shortcut: f"run {agent}" for shortcut, agent in AGENT_SHORTCUTS.items()},
     "ui": "logs start",
 }
 

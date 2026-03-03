@@ -37,16 +37,12 @@ Press **Ctrl+C** to stop the container when you are done.
 
 ## Shortcuts
 
-Every agent has a single-letter shortcut so you don't have to type `run`:
+You can start agents with either the full name or a single-letter shortcut:
 
 ```bash
-vp c   # claude
-vp g   # gemini
-vp o   # opencode
-vp d   # devstral
-vp a   # auggie
-vp p   # copilot
-vp x   # codex
+vp claude   # full name
+vp c        # shortcut
+vp run c    # shortcut with run also works
 ```
 
 ## Point at a different workspace

@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from vibepod.commands import config, list_cmd, logs, proxy, run, stop, update
+from vibepod.constants import AGENT_SHORTCUTS, SUPPORTED_AGENTS
 
 app = typer.Typer(
     name="vp",
@@ -23,52 +24,26 @@ app.add_typer(config.app, name="config")
 app.add_typer(proxy.app, name="proxy")
 
 
-@app.command("c", hidden=True)
-def alias_claude() -> None:
-    """Alias for `vp run claude`."""
-    run.run(agent="claude")
+def _register_run_alias(command_name: str, agent_name: str) -> None:
+    def _alias(bound_agent: str = agent_name) -> None:
+        run.run(agent=bound_agent)
 
-
-@app.command("g", hidden=True)
-def alias_gemini() -> None:
-    """Alias for `vp run gemini`."""
-    run.run(agent="gemini")
-
-
-@app.command("o", hidden=True)
-def alias_opencode() -> None:
-    """Alias for `vp run opencode`."""
-    run.run(agent="opencode")
-
-
-@app.command("d", hidden=True)
-def alias_devstral() -> None:
-    """Alias for `vp run devstral`."""
-    run.run(agent="devstral")
-
-
-@app.command("a", hidden=True)
-def alias_auggie() -> None:
-    """Alias for `vp run auggie`."""
-    run.run(agent="auggie")
-
-
-@app.command("p", hidden=True)
-def alias_copilot() -> None:
-    """Alias for `vp run copilot`."""
-    run.run(agent="copilot")
-
-
-@app.command("x", hidden=True)
-def alias_codex() -> None:
-    """Alias for `vp run codex`."""
-    run.run(agent="codex")
+    _alias.__name__ = f"alias_{command_name}"
+    _alias.__doc__ = f"Alias for `vp run {agent_name}`."
+    app.command(command_name, hidden=True)(_alias)
 
 
 @app.command("ui", hidden=True)
 def alias_ui() -> None:
     """Alias for `vp logs start`."""
     logs.logs_start()
+
+
+for shortcut, agent in AGENT_SHORTCUTS.items():
+    _register_run_alias(shortcut, agent)
+
+for agent in SUPPORTED_AGENTS:
+    _register_run_alias(agent, agent)
 
 
 def main() -> None:

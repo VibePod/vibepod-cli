@@ -18,8 +18,9 @@ from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
 from vibepod.core.agents import (
     agent_config_dir,
     effective_agent_image,
+    get_agent_shortcut,
     get_agent_spec,
-    is_supported_agent,
+    resolve_agent_name,
 )
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager
@@ -216,10 +217,16 @@ def run(
 ) -> None:
     """Start an agent container."""
     config = get_config()
-    selected_agent = agent or str(config.get("default_agent", "claude"))
-
-    if not is_supported_agent(selected_agent):
-        error(f"Unknown agent '{selected_agent}'. Supported: {', '.join(SUPPORTED_AGENTS)}")
+    selected_agent_input = agent or str(config.get("default_agent", "claude"))
+    selected_agent = resolve_agent_name(selected_agent_input)
+    if selected_agent is None:
+        supported_labels: list[str] = []
+        for supported_agent in SUPPORTED_AGENTS:
+            shortcut = get_agent_shortcut(supported_agent)
+            supported_labels.append(
+                f"{supported_agent} ({shortcut})" if shortcut else supported_agent
+            )
+        error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
 
     workspace_path = workspace.expanduser().resolve()
