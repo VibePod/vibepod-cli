@@ -8,6 +8,7 @@ import pytest
 import typer
 
 from vibepod.commands import run as run_cmd
+from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.docker import DockerClientError, DockerManager
 
 
@@ -259,3 +260,21 @@ def test_resolve_launch_command_requires_non_empty_process() -> None:
 
     with pytest.raises(DockerClientError):
         manager.resolve_launch_command("example/image:latest", None)
+
+
+def test_run_accepts_short_agent_name(monkeypatch, tmp_path: Path) -> None:
+    class _UnavailableDockerManager:
+        def __init__(self) -> None:
+            raise DockerClientError("Docker unavailable")
+
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: {"default_agent": "claude", "agents": {"claude": {"env": {}}}},
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", _UnavailableDockerManager)
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent="c", workspace=tmp_path)
+
+    assert exc.value.exit_code == EXIT_DOCKER_NOT_RUNNING

@@ -8,6 +8,7 @@ import typer
 from rich.table import Table
 
 from vibepod.constants import DEFAULT_IMAGES, EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.core.agents import get_agent_shortcut
 from vibepod.core.docker import DockerClientError, DockerManager
 from vibepod.utils.console import console, error
 
@@ -41,8 +42,10 @@ def list_agents(
     rows: list[dict[str, str]] = []
     for agent in SUPPORTED_AGENTS:
         container = mapped.get(agent)
+        shortcut = get_agent_shortcut(agent) or "-"
         rows.append(
             {
+                "short": shortcut,
                 "agent": agent,
                 "image": DEFAULT_IMAGES[agent],
                 "status": container.status if container else "stopped",
@@ -60,10 +63,11 @@ def list_agents(
         return
 
     table = Table(title="VibePod Agents")
+    table.add_column("SHORT", style="green")
     table.add_column("AGENT", style="cyan")
     table.add_column("IMAGE", style="magenta")
     table.add_column("STATUS")
     table.add_column("WORKSPACE")
     for row in rows:
-        table.add_row(row["agent"], row["image"], row["status"], row["workspace"])
+        table.add_row(row["short"], row["agent"], row["image"], row["status"], row["workspace"])
     console.print(table)

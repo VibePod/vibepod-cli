@@ -4,19 +4,30 @@ from __future__ import annotations
 
 import pytest
 
-from vibepod.core.agents import get_agent_spec, is_supported_agent
+from vibepod.constants import AGENT_SHORTCUTS, SUPPORTED_AGENTS
+from vibepod.core.agents import (
+    get_agent_shortcut,
+    get_agent_spec,
+    is_supported_agent,
+    resolve_agent_name,
+)
 
 
 def test_supported_agent() -> None:
-    assert is_supported_agent("claude") is True
-    assert is_supported_agent("copilot") is True
-    assert is_supported_agent("codex") is True
+    for agent in SUPPORTED_AGENTS:
+        assert is_supported_agent(agent) is True
     assert is_supported_agent("unknown") is False
 
 
 def test_get_agent_spec_supported() -> None:
-    assert get_agent_spec("copilot").id == "copilot"
-    assert get_agent_spec("codex").id == "codex"
+    for agent in SUPPORTED_AGENTS:
+        spec = get_agent_spec(agent)
+        assert spec.id == agent
+        assert spec.provider
+        assert spec.image
+        assert spec.config_subdir
+        assert spec.config_mount_path
+        assert isinstance(spec.extra_env, dict)
 
 
 def test_devstral_spec_matches_container_contract() -> None:
@@ -31,3 +42,22 @@ def test_devstral_spec_matches_container_contract() -> None:
 def test_get_agent_spec_unknown() -> None:
     with pytest.raises(ValueError):
         get_agent_spec("unknown")
+
+
+def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
+    for shortcut, agent in AGENT_SHORTCUTS.items():
+        assert resolve_agent_name(shortcut) == agent
+        assert resolve_agent_name(shortcut.upper()) == agent
+    for agent in SUPPORTED_AGENTS:
+        assert resolve_agent_name(agent) == agent
+        assert resolve_agent_name(f" {agent.upper()} ") == agent
+    assert resolve_agent_name("unknown") is None
+
+
+def test_get_agent_shortcut_known_agent() -> None:
+    expected_by_agent = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
+    assert set(expected_by_agent.keys()) == set(SUPPORTED_AGENTS)
+    for agent in SUPPORTED_AGENTS:
+        assert get_agent_shortcut(agent) == expected_by_agent[agent]
+        assert get_agent_shortcut(f" {agent.upper()} ") == expected_by_agent[agent]
+    assert get_agent_shortcut("unknown") is None

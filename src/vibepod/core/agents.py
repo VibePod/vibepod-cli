@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from vibepod.constants import DEFAULT_IMAGES, SUPPORTED_AGENTS
+from vibepod.constants import AGENT_SHORTCUTS, DEFAULT_IMAGES, SUPPORTED_AGENTS
 from vibepod.core.config import get_config_root
 
 
@@ -91,9 +91,23 @@ AGENT_SPECS: dict[str, AgentSpec] = {
     ),
 }
 
+_SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
+
 
 def is_supported_agent(agent: str) -> bool:
     return agent in SUPPORTED_AGENTS
+
+
+def resolve_agent_name(agent: str) -> str | None:
+    normalized = agent.strip().lower()
+    if normalized in SUPPORTED_AGENTS:
+        return normalized
+    return AGENT_SHORTCUTS.get(normalized)
+
+
+def get_agent_shortcut(agent: str) -> str | None:
+    normalized = agent.strip().lower()
+    return _SHORTCUT_BY_AGENT.get(normalized)
 
 
 def get_agent_spec(agent: str) -> AgentSpec:
