@@ -57,6 +57,20 @@ Use `-w` / `--workspace` to target any directory:
 vp run claude -w ~/other-project
 ```
 
+## Bootstrap a project config
+
+Create a project-level config file that you can extend later:
+
+```bash
+vp config init
+```
+
+This creates `.vibepod/config.yaml` in your current directory with a minimal starter:
+
+```yaml
+version: 1
+```
+
 ## Run in the background
 
 Use `-d` / `--detach` to start the container without attaching your terminal:
