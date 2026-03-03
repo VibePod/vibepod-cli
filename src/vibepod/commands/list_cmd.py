@@ -13,13 +13,35 @@ from vibepod.core.docker import DockerClientError, DockerManager
 from vibepod.utils.console import console, error
 
 
-def _running_map(containers: list[Any]) -> dict[str, Any]:
-    by_agent: dict[str, Any] = {}
+def _configured_agent_rows() -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for agent in SUPPORTED_AGENTS:
+        rows.append(
+            {
+                "short": get_agent_shortcut(agent) or "-",
+                "agent": agent,
+                "image": DEFAULT_IMAGES[agent],
+            }
+        )
+    return rows
+
+
+def _running_rows(containers: list[Any]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
     for container in containers:
-        agent = container.labels.get("vibepod.agent")
-        if agent and agent not in by_agent:
-            by_agent[agent] = container
-    return by_agent
+        labels = getattr(container, "labels", {}) or {}
+        agent = labels.get("vibepod.agent")
+        status = getattr(container, "status", "-")
+        if not agent or status != "running":
+            continue
+        rows.append(
+            {
+                "agent": agent,
+                "container": getattr(container, "name", "-"),
+                "context": labels.get("vibepod.workspace", "-"),
+            }
+        )
+    return sorted(rows, key=lambda row: (row["agent"], row["container"]))
 
 
 def list_agents(
@@ -38,36 +60,38 @@ def list_agents(
             raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
         containers = []
 
-    mapped = _running_map(containers)
-    rows: list[dict[str, str]] = []
-    for agent in SUPPORTED_AGENTS:
-        container = mapped.get(agent)
-        shortcut = get_agent_shortcut(agent) or "-"
-        rows.append(
-            {
-                "short": shortcut,
-                "agent": agent,
-                "image": DEFAULT_IMAGES[agent],
-                "status": container.status if container else "stopped",
-                "workspace": container.labels.get("vibepod.workspace", "-") if container else "-",
-            }
-        )
-
-    if running:
-        rows = [r for r in rows if r["status"] == "running"]
+    running_rows = _running_rows(containers)
+    configured_rows = _configured_agent_rows()
 
     if as_json:
         import json
 
-        print(json.dumps(rows, indent=2))
+        payload: dict[str, Any] = {"running": running_rows}
+        if not running:
+            payload["agents"] = configured_rows
+        print(json.dumps(payload, indent=2))
         return
 
-    table = Table(title="VibePod Agents")
-    table.add_column("SHORT", style="green")
-    table.add_column("AGENT", style="cyan")
-    table.add_column("IMAGE", style="magenta")
-    table.add_column("STATUS")
-    table.add_column("WORKSPACE")
-    for row in rows:
-        table.add_row(row["short"], row["agent"], row["image"], row["status"], row["workspace"])
-    console.print(table)
+    running_table = Table(title="Running Agents", title_justify="left")
+    running_table.add_column("AGENT", style="cyan")
+    running_table.add_column("CONTAINER", style="magenta")
+    running_table.add_column("CONTEXT")
+
+    if running_rows:
+        for row in running_rows:
+            running_table.add_row(row["agent"], row["container"], row["context"])
+        console.print(running_table)
+    else:
+        console.print("No running agents.")
+
+    if running:
+        return
+
+    console.print()
+    reference_table = Table(title="Configured Agents", title_justify="left")
+    reference_table.add_column("SHORT", style="green")
+    reference_table.add_column("AGENT", style="cyan")
+    reference_table.add_column("BASE IMAGE", style="magenta")
+    for row in configured_rows:
+        reference_table.add_row(row["short"], row["agent"], row["image"])
+    console.print(reference_table)
