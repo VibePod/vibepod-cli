@@ -13,6 +13,7 @@ from vibepod.constants import (
     DEFAULT_ALIASES,
     DEFAULT_IMAGES,
     PROJECT_CONFIG_FILE,
+    RUNTIME_AUTO,
 )
 
 
@@ -29,6 +30,7 @@ def _default_config() -> dict[str, Any]:
     return {
         "version": 1,
         "default_agent": "claude",
+        "container_runtime": RUNTIME_AUTO,
         "auto_pull": False,
         "auto_remove": True,
         "network": "vibepod-network",
@@ -134,6 +136,7 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
     mappings: dict[str, tuple[str, Any]] = {
         "VP_DEFAULT_AGENT": ("default_agent", str),
+        "VP_CONTAINER_RUNTIME": ("container_runtime", str),
         "VP_AUTO_PULL": ("auto_pull", lambda x: x.lower() == "true"),
         "VP_LOG_LEVEL": ("log_level", str),
         "VP_NO_COLOR": ("no_color", lambda x: x.lower() == "true"),

@@ -10,7 +10,7 @@ import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.docker import DockerClientError, get_manager
 from vibepod.utils.console import error, info, success, warning
 
 app = typer.Typer(help="View logs and traffic UI")
@@ -20,6 +20,10 @@ app = typer.Typer(help="View logs and traffic UI")
 def logs_start(
     port: Annotated[int | None, typer.Option("--port", help="Datasette host port")] = None,
     no_open: Annotated[bool, typer.Option("--no-open", help="Do not open browser")] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
 ) -> None:
     """Start or reuse Datasette for session and proxy logs."""
     config = get_config()
@@ -34,7 +38,7 @@ def logs_start(
     ).expanduser()
 
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=config)
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
@@ -55,10 +59,14 @@ def logs_start(
 @app.command("stop")
 def logs_stop(
     force: Annotated[bool, typer.Option("-f", "--force", help="Force stop")] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
 ) -> None:
     """Stop the Datasette container."""
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=get_config())
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
@@ -73,10 +81,15 @@ def logs_stop(
 
 
 @app.command("status")
-def logs_status() -> None:
+def logs_status(
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
+) -> None:
     """Show Datasette container status."""
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=get_config())
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
@@ -94,6 +107,10 @@ def logs_status() -> None:
 def logs_ui(
     port: Annotated[int | None, typer.Option("--port", help="Datasette host port")] = None,
     no_open: Annotated[bool, typer.Option("--no-open", help="Do not open browser")] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
 ) -> None:
     """Alias for `vp logs start`."""
-    logs_start(port=port, no_open=no_open)
+    logs_start(port=port, no_open=no_open, runtime=runtime)
