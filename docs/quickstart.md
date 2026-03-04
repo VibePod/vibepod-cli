@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Python 3.10+
-- Docker (running)
+- Docker **or** [Podman](podman.md) (running)
 
 ## Install
 
@@ -102,5 +102,6 @@ This starts a Datasette container and opens `http://localhost:8001` in your brow
 ## Next Steps
 
 - [Configure an agent](agents/index.md) — set API keys and per-agent options.
+- [Using Podman](podman.md) — set up Podman as an alternative to Docker.
 - [Configuration reference](configuration.md) — tune defaults, the proxy, and logging.
 - [CLI Reference](cli-reference.md) — every command and flag.

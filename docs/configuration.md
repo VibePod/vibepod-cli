@@ -18,6 +18,10 @@ version: 1
 # Agent to run when no argument is given to `vp run`
 default_agent: claude
 
+# Container runtime: auto | docker | podman (default: auto)
+# See docs/podman.md for setup instructions
+container_runtime: auto
+
 # Pull the latest image before every run (default: false)
 auto_pull: false
 
@@ -103,6 +107,7 @@ These variables override the corresponding config keys without editing any file:
 
 | Variable | Config key | Example |
 |---|---|---|
+| `VP_CONTAINER_RUNTIME` | `container_runtime` | `VP_CONTAINER_RUNTIME=podman` |
 | `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=gemini` |
 | `VP_AUTO_PULL` | `auto_pull` | `VP_AUTO_PULL=true` |
 | `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
