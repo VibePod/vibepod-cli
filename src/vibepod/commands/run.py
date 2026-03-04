@@ -14,7 +14,7 @@ import typer
 from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
-from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, RUNTIME_PODMAN, SUPPORTED_AGENTS
 from vibepod.core.agents import (
     agent_config_dir,
     effective_agent_image,
@@ -23,7 +23,7 @@ from vibepod.core.agents import (
     resolve_agent_name,
 )
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.docker import DockerClientError, DockerManager, get_manager
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
 
@@ -214,6 +214,10 @@ def run(
         str | None,
         typer.Option("--network", help="Additional Docker network to connect the container to"),
     ] = None,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
 ) -> None:
     """Start an agent container."""
     config = get_config()
@@ -247,7 +251,7 @@ def run(
     image = effective_agent_image(selected_agent, config)
 
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=config)
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
@@ -266,14 +270,30 @@ def run(
 
     command = spec.command
     entrypoint: list[str] | None = None
-    if init_commands:
-        info(f"Applying {len(init_commands)} init command(s) before startup")
+
+    # On rootless Podman the container starts as root (mapped from the host
+    # UID) but often switches to a non-root user via su/gosu.  That non-root
+    # user gets a subordinate UID that can't read files owned by root inside
+    # the container.  Injecting a chmod before the real entrypoint ensures the
+    # config mount is accessible after the user switch.
+    podman_fixup: list[str] = []
+    if manager.runtime == RUNTIME_PODMAN:
+        paths_to_fix = [spec.config_mount_path]
+        extra_volumes_pre = _agent_extra_volumes(selected_agent, agent_config_dir(selected_agent))
+        if extra_volumes_pre:
+            paths_to_fix.extend(cp for _, cp, _ in extra_volumes_pre)
+        quoted = " ".join(f"'{p}'" for p in dict.fromkeys(paths_to_fix))
+        podman_fixup = [f"chmod -R a+rwX {quoted} 2>/dev/null || true"]
+
+    if init_commands or podman_fixup:
+        if init_commands:
+            info(f"Applying {len(init_commands)} init command(s) before startup")
         try:
             command = manager.resolve_launch_command(image=image, command=spec.command)
         except DockerClientError as exc:
             error(str(exc))
             raise typer.Exit(1) from exc
-        entrypoint = _init_entrypoint(init_commands)
+        entrypoint = _init_entrypoint(podman_fixup + init_commands)
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)

@@ -18,7 +18,7 @@ def test_list_json_includes_short_and_full_agent_names(monkeypatch) -> None:
         def list_managed(self, all_containers: bool = True):  # noqa: ARG002
             return []
 
-    monkeypatch.setattr(list_cmd, "DockerManager", _FakeDockerManager)
+    monkeypatch.setattr(list_cmd, "get_manager", lambda **kwargs: _FakeDockerManager())
 
     result = runner.invoke(app, ["list", "--json"])
     assert result.exit_code == 0
@@ -61,7 +61,7 @@ def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
                 ),
             ]
 
-    monkeypatch.setattr(list_cmd, "DockerManager", _FakeDockerManager)
+    monkeypatch.setattr(list_cmd, "get_manager", lambda **kwargs: _FakeDockerManager())
 
     result = runner.invoke(app, ["list", "--running", "--json"])
     assert result.exit_code == 0
