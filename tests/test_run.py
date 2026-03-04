@@ -66,6 +66,7 @@ def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
 
     manager = object.__new__(DockerManager)
     manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
 
     workspace = tmp_path / "workspace"
     config_dir = tmp_path / "agents" / "auggie"
@@ -115,6 +116,7 @@ def test_run_agent_forwards_platform_and_user(tmp_path: Path) -> None:
 
     manager = object.__new__(DockerManager)
     manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
 
     workspace = tmp_path / "workspace"
     config_dir = tmp_path / "agents" / "devstral"
@@ -158,6 +160,7 @@ def test_run_agent_forwards_entrypoint(tmp_path: Path) -> None:
 
     manager = object.__new__(DockerManager)
     manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
 
     workspace = tmp_path / "workspace"
     config_dir = tmp_path / "agents" / "claude"
@@ -1244,16 +1247,15 @@ def test_llm_per_agent_env_overrides_llm(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_run_accepts_short_agent_name(monkeypatch, tmp_path: Path) -> None:
-    class _UnavailableDockerManager:
-        def __init__(self) -> None:
-            raise DockerClientError("Docker unavailable")
+    def _unavailable_get_manager(**kwargs):
+        raise DockerClientError("Docker unavailable")
 
     monkeypatch.setattr(
         run_cmd,
         "get_config",
         lambda: {"default_agent": "claude", "agents": {"claude": {"env": {}}}},
     )
-    monkeypatch.setattr(run_cmd, "DockerManager", _UnavailableDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", _unavailable_get_manager)
 
     with pytest.raises(typer.Exit) as exc:
         run_cmd.run(agent="c", workspace=tmp_path)

@@ -66,6 +66,7 @@ def test_ensure_proxy_runs_container_as_current_user(tmp_path: Path, monkeypatch
 
     manager = object.__new__(DockerManager)
     manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
 
     monkeypatch.setattr(DockerManager, "find_proxy", lambda self: None)
     monkeypatch.setattr(docker_mod.os, "getuid", lambda: 1234)
