@@ -19,6 +19,10 @@ version: 1
 # Alias `vibe` resolves to `devstral`.
 default_agent: claude
 
+# Container runtime: auto | docker | podman (default: auto)
+# See docs/podman.md for setup instructions
+container_runtime: auto
+
 # Pull the latest image before every run (default: true)
 # Can be overridden per agent with agents.<agent>.auto_pull
 auto_pull: true
@@ -113,6 +117,7 @@ These variables override the corresponding config keys without editing any file:
 
 | Variable | Config key | Example |
 |---|---|---|
+| `VP_CONTAINER_RUNTIME` | `container_runtime` | `VP_CONTAINER_RUNTIME=podman` |
 | `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=vibe` |
 | `VP_AUTO_PULL` | `auto_pull` | `VP_AUTO_PULL=true` |
 | `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
