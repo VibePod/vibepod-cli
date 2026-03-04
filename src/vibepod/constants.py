@@ -18,6 +18,16 @@ LOGS_DB_FILE = CONFIG_DIR / "logs.db"
 DOCKER_NETWORK = "vibepod-network"
 CONTAINER_LABEL_MANAGED = "vibepod.managed"
 
+# Container runtime constants
+RUNTIME_AUTO = "auto"
+RUNTIME_DOCKER = "docker"
+RUNTIME_PODMAN = "podman"
+SUPPORTED_RUNTIMES = (RUNTIME_DOCKER, RUNTIME_PODMAN)
+
+DOCKER_SOCKET = "unix:///var/run/docker.sock"
+PODMAN_SOCKET_ROOTLESS = "unix:///run/user/{uid}/podman/podman.sock"
+PODMAN_SOCKET_ROOTFUL = "unix:///run/podman/podman.sock"
+
 SUPPORTED_AGENTS = (
     "claude",
     "gemini",
