@@ -83,11 +83,19 @@ Use `-d` / `--detach` to start the container without attaching your terminal:
 vp run claude -d
 ```
 
+Check which agents are running:
+
+```bash
+vp list --running
+```
+
 Stop it later with:
 
 ```bash
 vp stop claude
 ```
+
+For more details on detached mode workflows, see [Agents > Detached mode](agents/index.md#detached-mode).
 
 ## View the session log UI
 
