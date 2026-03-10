@@ -147,7 +147,7 @@ The command prints the container name and returns immediately. You can also find
 vp list --running
 ```
 
-### Customising the container before starting the agent
+### Customizing the container before starting the agent
 
 A common workflow is to start detached, exec into the container to make adjustments, and then start the agent manually:
 
