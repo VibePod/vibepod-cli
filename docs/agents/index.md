@@ -130,6 +130,73 @@ agents:
 
 The `init` commands run on every `vp run` for that agent and must be idempotent.
 
+## Detached mode
+
+Use `-d` / `--detach` to start an agent container in the background without attaching your terminal. This is useful when you want to customise the container environment before launching the agent interactively.
+
+### Basic usage
+
+```bash
+vp run claude -d
+# ✓ Started vibepod-claude-a1b2c3d4
+```
+
+The command prints the container name and returns immediately. You can also find it later with:
+
+```bash
+vp list --running
+```
+
+### Customizing the container before starting the agent
+
+A common workflow is to start detached, exec into the container to make adjustments, and then start the agent manually:
+
+1. **Start the container in detached mode.**
+
+    ```bash
+    vp run claude -d
+    # ✓ Started vibepod-claude-a1b2c3d4
+    ```
+
+2. **Exec into the running container.**
+
+    Use the container name printed above (or grab it from `vp list`):
+
+    ```bash
+    docker exec -it vibepod-claude-a1b2c3d4 bash
+    ```
+
+3. **Apply your customizations** — install packages, edit config files, set environment variables, etc.
+
+4. **Start the agent process** from inside the container when you are ready.
+
+!!! tip
+    If you find yourself running the same setup steps every time, consider using [`agents.<agent>.init`](#init-scripts-before-startup) commands or [extending the base image](#image-customization-workflows) instead.
+
+### Managing detached containers
+
+Check running agents:
+
+```bash
+vp list              # shows running + configured agents
+vp list --running    # shows only running agents
+vp list --json       # machine-readable output
+```
+
+Stop a specific agent or all agents:
+
+```bash
+vp stop claude       # graceful stop (10 s timeout)
+vp stop claude -f    # force stop immediately
+vp stop --all        # stop every VibePod container
+```
+
+### Caveats
+
+- **`auto_remove` (default: `true`)** — By default, containers are automatically removed when they stop. This means you cannot restart a stopped detached container; you need to `vp run` again. Set `auto_remove: false` in your [configuration](../configuration.md) if you want stopped containers to persist.
+- **No built-in re-attach** — VibePod does not currently have a command to re-attach your terminal to a detached container. Use `docker attach <container>` or `docker exec -it <container> bash` directly.
+- **Session logging** — Sessions started with `--detach` are not recorded in the VibePod session log since VibePod does not capture the interactive I/O. If you need session logging, run without `--detach`.
+
 ## Connecting to a Docker Compose network
 
 When your workspace contains a `docker-compose.yml` or `compose.yml`, VibePod detects it and offers to connect the agent container to an existing network so it can reach your running services.
