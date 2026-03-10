@@ -166,7 +166,7 @@ A common workflow is to start detached, exec into the container to make adjustme
     docker exec -it vibepod-claude-a1b2c3d4 bash
     ```
 
-3. **Apply your customisations** — install packages, edit config files, set environment variables, etc.
+3. **Apply your customizations** — install packages, edit config files, set environment variables, etc.
 
 4. **Start the agent process** from inside the container when you are ready.
 
