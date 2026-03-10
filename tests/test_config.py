@@ -114,3 +114,27 @@ def test_default_config_exposes_agent_init(monkeypatch, tmp_path: Path) -> None:
 
     for agent in SUPPORTED_AGENTS:
         assert agents[agent]["init"] == []
+
+
+def test_default_config_exposes_agent_auto_pull(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+    agents = config.get("agents", {})
+    assert isinstance(agents, dict)
+
+    for agent in SUPPORTED_AGENTS:
+        assert agents[agent]["auto_pull"] is None
+
+
+def test_per_agent_auto_pull_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    global_config = tmp_path / "config.yaml"
+    global_config.write_text(
+        "auto_pull: false\nagents:\n  claude:\n    auto_pull: true\n",
+        encoding="utf-8",
+    )
+    config = get_config()
+    assert config["auto_pull"] is False
+    assert config["agents"]["claude"]["auto_pull"] is True
+    # Other agents should still have None (unset)
+    assert config["agents"]["gemini"]["auto_pull"] is None

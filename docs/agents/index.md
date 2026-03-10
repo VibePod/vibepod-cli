@@ -18,6 +18,41 @@ VibePod manages each agent as a Docker container. Credentials and config are per
 
 Start any agent for the first time with `vp run <agent>`. The container will prompt you to authenticate (browser OAuth, API key entry, or device flow depending on the provider). Once authenticated, credentials are written to the persisted config directory and reused on subsequent runs.
 
+## Auto-pulling the latest image
+
+VibePod automatically pulls the latest image for an agent before every run. This ensures you always start with the most up-to-date container without manual intervention.
+
+To disable auto-pull globally:
+
+```yaml
+auto_pull: false
+```
+
+Or for a specific agent only:
+
+```yaml
+agents:
+  devstral:
+    auto_pull: false
+```
+
+Per-agent `auto_pull` takes precedence over the global setting. For example, you can disable it globally but keep it on for a specific agent:
+
+```yaml
+auto_pull: false          # skip pull by default
+agents:
+  claude:
+    auto_pull: true       # except claude — always pull
+```
+
+You can also force a one-off pull via the CLI flag regardless of config:
+
+```bash
+vp run claude --pull
+```
+
+The resolution order is: `--pull` flag > per-agent `auto_pull` > global `auto_pull`.
+
 ## Overriding the image
 
 You can point VibePod at a custom image via an environment variable:
@@ -132,7 +167,7 @@ The `init` commands run on every `vp run` for that agent and must be idempotent.
 
 ## Detached mode
 
-Use `-d` / `--detach` to start an agent container in the background without attaching your terminal. This is useful when you want to customise the container environment before launching the agent interactively.
+Use `-d` / `--detach` to start an agent container in the background without attaching your terminal. The agent process starts immediately inside the container — `-d` only controls whether VibePod attaches your terminal to it.
 
 ### Basic usage
 
@@ -147,31 +182,18 @@ The command prints the container name and returns immediately. You can also find
 vp list --running
 ```
 
-### Customizing the container before starting the agent
+### Interacting with a detached container
 
-A common workflow is to start detached, exec into the container to make adjustments, and then start the agent manually:
+The agent is already running inside the container. You can exec into it to inspect state, install extra tools, or interact with the agent alongside its running process:
 
-1. **Start the container in detached mode.**
+```bash
+docker exec -it vibepod-claude-a1b2c3d4 bash
+```
 
-    ```bash
-    vp run claude -d
-    # ✓ Started vibepod-claude-a1b2c3d4
-    ```
-
-2. **Exec into the running container.**
-
-    Use the container name printed above (or grab it from `vp list`):
-
-    ```bash
-    docker exec -it vibepod-claude-a1b2c3d4 bash
-    ```
-
-3. **Apply your customizations** — install packages, edit config files, set environment variables, etc.
-
-4. **Start the agent process** from inside the container when you are ready.
+Use the container name printed by `vp run -d` or shown in `vp list`.
 
 !!! tip
-    If you find yourself running the same setup steps every time, consider using [`agents.<agent>.init`](#init-scripts-before-startup) commands or [extending the base image](#image-customization-workflows) instead.
+    If you need to run setup commands **before** the agent launches, use [`agents.<agent>.init`](#init-scripts-before-startup) or [extend the base image](#image-customization-workflows) instead — these run inside the container before the agent process starts.
 
 ### Managing detached containers
 

@@ -18,8 +18,9 @@ version: 1
 # Agent to run when no argument is given to `vp run`
 default_agent: claude
 
-# Pull the latest image before every run (default: false)
-auto_pull: false
+# Pull the latest image before every run (default: true)
+# Can be overridden per agent with agents.<agent>.auto_pull
+auto_pull: true
 
 # Remove the container automatically when it stops (default: true)
 auto_remove: true
@@ -37,6 +38,7 @@ agents:
   claude:
     enabled: true
     image: nezhar/claude-container:latest
+    auto_pull: null  # Per-agent override: true/false, or null to use global auto_pull
     env: {}       # Extra environment variables passed to the container
     volumes: []   # Reserved for future use
     init: []      # Optional shell commands run before agent startup
