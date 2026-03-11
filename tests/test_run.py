@@ -262,6 +262,135 @@ def test_resolve_launch_command_requires_non_empty_process() -> None:
         manager.resolve_launch_command("example/image:latest", None)
 
 
+class _StubDockerManager:
+    """Minimal DockerManager stub that records pull_image calls."""
+
+    def __init__(self) -> None:
+        self.pulled: list[str] = []
+        self._container = type(
+            "_Container",
+            (),
+            {
+                "name": "vibepod-claude-test",
+                "id": "abc123",
+                "status": "running",
+                "attrs": {"NetworkSettings": {"Networks": {}}},
+                "reload": lambda self: None,
+                "labels": {},
+                "logs": lambda self, **kw: b"",
+            },
+        )()
+
+    def ensure_network(self, name: str) -> None:
+        pass
+
+    def pull_image(self, image: str) -> None:
+        self.pulled.append(image)
+
+    def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        pass
+
+    def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+        return self._container
+
+    def networks_with_running_containers(self) -> list[str]:
+        return []
+
+
+def _make_config(
+    global_auto_pull: bool = False,
+    agent_auto_pull: bool | None = None,
+) -> dict:
+    agent_cfg: dict = {"env": {}, "init": []}
+    if agent_auto_pull is not None:
+        agent_cfg["auto_pull"] = agent_auto_pull
+    return {
+        "default_agent": "claude",
+        "auto_pull": global_auto_pull,
+        "auto_remove": True,
+        "network": "vibepod-network",
+        "agents": {"claude": agent_cfg},
+        "proxy": {"enabled": False},
+        "logging": {"enabled": False},
+    }
+
+
+def test_auto_pull_global_triggers_pull(monkeypatch, tmp_path: Path) -> None:
+    """Global auto_pull=true causes image pull on run."""
+    stub = _StubDockerManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config(global_auto_pull=True))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+    assert len(stub.pulled) == 1
+
+
+def test_auto_pull_global_false_skips_pull(monkeypatch, tmp_path: Path) -> None:
+    """Global auto_pull=false skips image pull."""
+    stub = _StubDockerManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config(global_auto_pull=False))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+    assert stub.pulled == []
+
+
+def test_auto_pull_per_agent_true_overrides_global_false(monkeypatch, tmp_path: Path) -> None:
+    """Per-agent auto_pull=true overrides global auto_pull=false."""
+    stub = _StubDockerManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _make_config(global_auto_pull=False, agent_auto_pull=True),
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+    assert len(stub.pulled) == 1
+
+
+def test_auto_pull_per_agent_false_overrides_global_true(monkeypatch, tmp_path: Path) -> None:
+    """Per-agent auto_pull=false overrides global auto_pull=true."""
+    stub = _StubDockerManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _make_config(global_auto_pull=True, agent_auto_pull=False),
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+    assert stub.pulled == []
+
+
+def test_auto_pull_cli_flag_overrides_config(monkeypatch, tmp_path: Path) -> None:
+    """--pull flag forces pull even when config disables it."""
+    stub = _StubDockerManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _make_config(global_auto_pull=False, agent_auto_pull=False),
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True, pull=True)
+    assert len(stub.pulled) == 1
+
+
+def test_auto_pull_per_agent_none_falls_back_to_global(monkeypatch, tmp_path: Path) -> None:
+    """Per-agent auto_pull=None (unset) falls back to global setting."""
+    stub = _StubDockerManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _make_config(global_auto_pull=True, agent_auto_pull=None),
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+    assert len(stub.pulled) == 1
+
+
 def test_run_accepts_short_agent_name(monkeypatch, tmp_path: Path) -> None:
     class _UnavailableDockerManager:
         def __init__(self) -> None:

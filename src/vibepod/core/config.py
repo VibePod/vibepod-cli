@@ -29,7 +29,7 @@ def _default_config() -> dict[str, Any]:
     return {
         "version": 1,
         "default_agent": "claude",
-        "auto_pull": False,
+        "auto_pull": True,
         "auto_remove": True,
         "network": "vibepod-network",
         "log_level": "info",
@@ -38,6 +38,7 @@ def _default_config() -> dict[str, Any]:
             "claude": {
                 "enabled": True,
                 "image": DEFAULT_IMAGES["claude"],
+                "auto_pull": None,
                 "env": {},
                 "volumes": [],
                 "init": [],
@@ -45,6 +46,7 @@ def _default_config() -> dict[str, Any]:
             "gemini": {
                 "enabled": True,
                 "image": DEFAULT_IMAGES["gemini"],
+                "auto_pull": None,
                 "env": {},
                 "volumes": [],
                 "init": [],
@@ -52,6 +54,7 @@ def _default_config() -> dict[str, Any]:
             "opencode": {
                 "enabled": True,
                 "image": DEFAULT_IMAGES["opencode"],
+                "auto_pull": None,
                 "env": {},
                 "volumes": [],
                 "init": [],
@@ -59,6 +62,7 @@ def _default_config() -> dict[str, Any]:
             "devstral": {
                 "enabled": True,
                 "image": DEFAULT_IMAGES["devstral"],
+                "auto_pull": None,
                 "env": {},
                 "volumes": [],
                 "init": [],
@@ -66,6 +70,7 @@ def _default_config() -> dict[str, Any]:
             "auggie": {
                 "enabled": True,
                 "image": DEFAULT_IMAGES["auggie"],
+                "auto_pull": None,
                 "env": {},
                 "volumes": [],
                 "init": [],
@@ -73,6 +78,7 @@ def _default_config() -> dict[str, Any]:
             "copilot": {
                 "enabled": True,
                 "image": DEFAULT_IMAGES["copilot"],
+                "auto_pull": None,
                 "env": {},
                 "volumes": [],
                 "init": [],
@@ -80,6 +86,7 @@ def _default_config() -> dict[str, Any]:
             "codex": {
                 "enabled": True,
                 "image": DEFAULT_IMAGES["codex"],
+                "auto_pull": None,
                 "env": {},
                 "volumes": [],
                 "init": [],
