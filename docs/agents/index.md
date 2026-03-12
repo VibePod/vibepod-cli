@@ -6,7 +6,7 @@ VibePod manages each agent as a Docker container. Credentials and config are per
 
 | Agent | Provider | Shortcut | Image |
 |-------|----------|----------|-------|
-| `claude` | Anthropic | `vp c` | `nezhar/claude-container:latest` |
+| `claude` | Anthropic | `vp c` | `vibepod/claude:latest` |
 | `gemini` | Google | `vp g` | `nezhar/gemini-container:latest` |
 | `opencode` | OpenAI | `vp o` | `nezhar/opencode-cli:latest` |
 | `devstral` | Mistral | `vp d` | `nezhar/devstral-cli:latest` |
@@ -81,7 +81,7 @@ Example: add tools to the default Claude image.
 
 ```dockerfile
 # Dockerfile.claude
-FROM nezhar/claude-container:latest
+FROM vibepod/claude:latest
 
 # Add project-specific utilities.
 RUN apt-get update \

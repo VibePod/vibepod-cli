@@ -32,12 +32,12 @@ This repository contains an initial v1 implementation with:
 
 ## Image Namespace
 
-By default, agent images use the `nezhar` namespace (for example `nezhar/claude-container:latest`).
+By default, agent images use the `vibepod` namespace for Claude (for example `vibepod/claude:latest`) and `nezhar` for other agents.
 
 
 Current defaults are aligned to existing container repos:
 
-- `claude` -> `nezhar/claude-container:latest` ([repo](https://github.com/nezhar/claude-container))
+- `claude` -> `vibepod/claude:latest`
 - `gemini` -> `nezhar/gemini-container:latest` ([repo](https://github.com/nezhar/gemini-container))
 - `opencode` -> `nezhar/opencode-cli:latest` ([repo](https://github.com/nezhar/opencode-container))
 - `devstral` -> `nezhar/devstral-cli:latest` ([repo](https://github.com/nezhar/devstral-container))
@@ -50,7 +50,7 @@ Current defaults are aligned to existing container repos:
 You can override any single image directly:
 
 ```bash
-VP_IMAGE_CLAUDE=nezhar/claude-container:latest vp run claude
+VP_IMAGE_CLAUDE=vibepod/claude:latest vp run claude
 VP_IMAGE_GEMINI=nezhar/gemini-container:latest vp run gemini
 VP_IMAGE_OPENCODE=nezhar/opencode-cli:latest vp run opencode
 VP_IMAGE_DEVSTRAL=nezhar/devstral-cli:latest vp run devstral
