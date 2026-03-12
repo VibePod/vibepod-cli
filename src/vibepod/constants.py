@@ -41,7 +41,7 @@ AGENT_SHORTCUTS: dict[str, str] = {
 DEFAULT_IMAGES: dict[str, str] = {
     "claude": os.environ.get(
         "VP_IMAGE_CLAUDE",
-        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/claude-container:latest",
+        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/claude:latest",
     ),
     "gemini": os.environ.get(
         "VP_IMAGE_GEMINI",

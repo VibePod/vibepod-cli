@@ -37,7 +37,7 @@ no_color: false
 agents:
   claude:
     enabled: true
-    image: nezhar/claude-container:latest
+    image: vibepod/claude:latest
     auto_pull: null  # Per-agent override: true/false, or null to use global auto_pull
     env: {}       # Extra environment variables passed to the container
     volumes: []   # Reserved for future use
@@ -133,7 +133,7 @@ Set `VP_IMAGE_NAMESPACE` to change the prefix for all default images at once:
 
 ```bash
 VP_IMAGE_NAMESPACE=myorg vp run claude
-# pulls myorg/claude-container:latest
+# pulls myorg/claude:latest
 ```
 
 For end-to-end examples (extending a base image and assigning a brand-new image to an agent), see [Agents > Image customization workflows](agents/index.md#image-customization-workflows).

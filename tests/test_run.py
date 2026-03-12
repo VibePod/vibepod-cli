@@ -153,7 +153,7 @@ def test_run_agent_forwards_entrypoint(tmp_path: Path) -> None:
 
     manager.run_agent(
         agent="claude",
-        image="nezhar/claude-container:latest",
+        image="vibepod/claude:latest",
         workspace=workspace,
         config_dir=config_dir,
         config_mount_path="/claude",
