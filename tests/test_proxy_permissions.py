@@ -51,7 +51,9 @@ def test_update_container_mapping_permission_error_returns_false(
     assert updated is False
 
 
-def test_ensure_proxy_runs_container_as_current_user(tmp_path: Path, monkeypatch) -> None:
+def test_ensure_proxy_runs_container_as_current_user_and_forwards_userns_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
     class _FakeContainers:
         def __init__(self) -> None:
             self.run_kwargs: dict | None = None
@@ -79,11 +81,80 @@ def test_ensure_proxy_runs_container_as_current_user(tmp_path: Path, monkeypatch
         db_path=db_path,
         ca_dir=ca_dir,
         network="vibepod-network",
+        userns_mode="keep-id",
     )
 
     run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
     assert run_kwargs is not None
     assert run_kwargs["user"] == "1234:2345"
+    assert run_kwargs["userns_mode"] == "keep-id"
     assert "ports" not in run_kwargs
     assert db_path.parent.exists()
     assert ca_dir.exists()
+
+
+def test_ensure_datasette_forwards_userns_mode(tmp_path: Path, monkeypatch) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "datasette"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "podman"
+
+    monkeypatch.setattr(DockerManager, "find_datasette", lambda self: None)
+
+    logs_db_path = tmp_path / "logs" / "logs.db"
+    proxy_db_path = tmp_path / "proxy" / "proxy.db"
+    manager.ensure_datasette(
+        image="vibepod/datasette:latest",
+        logs_db_path=logs_db_path,
+        proxy_db_path=proxy_db_path,
+        port=8001,
+        userns_mode="keep-id",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert run_kwargs["userns_mode"] == "keep-id"
+
+
+def test_ensure_proxy_connects_existing_proxy_to_requested_network(monkeypatch) -> None:
+    connected: list[tuple[object, str]] = []
+
+    class _Proxy:
+        def __init__(self) -> None:
+            self.status = "running"
+            self.attrs = {"NetworkSettings": {"Networks": {"old-network": {}}}}
+
+        def reload(self) -> None:
+            pass
+
+    manager = object.__new__(DockerManager)
+    manager.runtime = "podman"
+    existing = _Proxy()
+
+    monkeypatch.setattr(DockerManager, "find_proxy", lambda self: existing)
+    monkeypatch.setattr(
+        DockerManager,
+        "connect_network",
+        lambda self, container, network_name: connected.append((container, network_name)),
+    )
+
+    returned = manager.ensure_proxy(
+        image="vibepod/proxy:latest",
+        db_path=Path("/tmp/proxy.db"),
+        ca_dir=Path("/tmp/mitmproxy"),
+        network="vibepod-network",
+    )
+
+    assert returned is existing
+    assert connected == [(existing, "vibepod-network")]

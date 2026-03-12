@@ -22,6 +22,10 @@ default_agent: claude
 # See docs/podman.md for setup instructions
 container_runtime: auto
 
+# Container user namespace mode passed to new containers (default: null)
+# For Podman, "keep-id" preserves host UID/GID on compatible images
+container_userns_mode: null
+
 # Pull the latest image before every run (default: true)
 # Can be overridden per agent with agents.<agent>.auto_pull
 auto_pull: true
@@ -117,6 +121,7 @@ These variables override the corresponding config keys without editing any file:
 | Variable | Config key | Example |
 |---|---|---|
 | `VP_CONTAINER_RUNTIME` | `container_runtime` | `VP_CONTAINER_RUNTIME=podman` |
+| `VP_CONTAINER_USERNS_MODE` | `container_userns_mode` | `VP_CONTAINER_USERNS_MODE=keep-id` |
 | `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=gemini` |
 | `VP_AUTO_PULL` | `auto_pull` | `VP_AUTO_PULL=true` |
 | `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
@@ -200,7 +205,7 @@ Commit this file to share project defaults with your team.
 
 VibePod starts a `vibepod-proxy` container alongside every agent. It acts as an HTTP(S) MITM proxy and logs all outbound requests to a SQLite database viewable in the Datasette UI (`vp logs start`).
 
-The proxy is reachable inside the Docker network as `http://vibepod-proxy:8080`. It is not published on a host port.
+VibePod injects the proxy endpoint into agent containers automatically over the internal runtime network. It is not published on a host port.
 
 To disable the proxy globally:
 

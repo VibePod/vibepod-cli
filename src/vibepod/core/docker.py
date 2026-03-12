@@ -103,8 +103,9 @@ class DockerManager:
         a non-root process started via ``su`` / ``gosu`` in the entrypoint
         gets a subordinate UID that cannot read host files with standard
         permissions.  Making VibePod-managed directories world-accessible
-        (``0o777``) avoids "Permission denied" errors without needing
-        ``userns_mode=keep-id`` (which breaks entrypoints that call ``su``).
+        (``0o777``) avoids "Permission denied" errors in the default Podman
+        setup. Users can opt into ``userns_mode=keep-id`` for compatible
+        images, but entrypoints that switch users may still need this fallback.
 
         This is only applied to directories VibePod itself creates — never
         to the user's workspace.
@@ -225,6 +226,7 @@ class DockerManager:
         extra_volumes: list[tuple[str, str, str]] | None = None,
         platform: str | None = None,
         user: str | None = None,
+        userns_mode: str | None = None,
         entrypoint: list[str] | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
@@ -272,6 +274,8 @@ class DockerManager:
                 run_kwargs["entrypoint"] = entrypoint
             if user:
                 run_kwargs["user"] = user
+            if userns_mode:
+                run_kwargs["userns_mode"] = userns_mode
 
             return self._run_container(**run_kwargs)
         except APIError as exc:
@@ -304,7 +308,12 @@ class DockerManager:
         return containers[0] if containers else None
 
     def ensure_datasette(
-        self, image: str, logs_db_path: Path, proxy_db_path: Path, port: int
+        self,
+        image: str,
+        logs_db_path: Path,
+        proxy_db_path: Path,
+        port: int,
+        userns_mode: str | None = None,
     ) -> Any:
         existing = self.find_datasette()
         if existing:
@@ -350,6 +359,8 @@ class DockerManager:
             "volumes": volumes,
             "ports": {"8001/tcp": port},
         }
+        if userns_mode:
+            run_kwargs["userns_mode"] = userns_mode
 
         return self._run_container(**run_kwargs)
 
@@ -359,10 +370,22 @@ class DockerManager:
         )
         return containers[0] if containers else None
 
-    def ensure_proxy(self, image: str, db_path: Path, ca_dir: Path, network: str) -> Any:
+    def ensure_proxy(
+        self,
+        image: str,
+        db_path: Path,
+        ca_dir: Path,
+        network: str,
+        userns_mode: str | None = None,
+    ) -> Any:
         existing = self.find_proxy()
         if existing:
+            existing.reload()
             if existing.status == "running":
+                attached = existing.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
+                if network not in attached:
+                    self.connect_network(existing, network)
+                    existing.reload()
                 return existing
             existing.remove(force=True)
 
@@ -395,8 +418,15 @@ class DockerManager:
             getgid = getattr(os, "getgid", None)
             if callable(getuid) and callable(getgid):
                 run_kwargs["user"] = f"{getuid()}:{getgid()}"
+        if userns_mode:
+            run_kwargs["userns_mode"] = userns_mode
 
-        return self._run_container(**run_kwargs)
+        container = self._run_container(**run_kwargs)
+        try:
+            container.reload()
+        except Exception:
+            pass
+        return container
 
     def attach_interactive(self, container: Any, logger: Any = None) -> None:
         """Attach local stdin/stdout to a running container TTY."""
