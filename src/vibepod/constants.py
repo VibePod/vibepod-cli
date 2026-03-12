@@ -61,7 +61,7 @@ DEFAULT_IMAGES: dict[str, str] = {
         f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/copilot-cli:latest",
     ),
     "codex": os.environ.get(
-        "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/codex-cli:latest"
+        "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/codex:latest"
     ),
     "datasette": os.environ.get(
         "VP_DATASETTE_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/datasette:latest"

@@ -80,7 +80,7 @@ agents:
 
   codex:
     enabled: true
-    image: nezhar/codex-cli:latest
+    image: vibepod/codex:latest
     env: {}
     volumes: []
     init: []
