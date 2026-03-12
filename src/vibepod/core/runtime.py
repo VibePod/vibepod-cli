@@ -19,6 +19,8 @@ from vibepod.constants import (
 )
 from vibepod.core.config import get_config_root
 
+DEFAULT_RUNTIME_PROBE_TIMEOUT = 10.0
+
 
 def _socket_candidates() -> list[tuple[str, str]]:
     """Return (runtime_name, socket_url) pairs to probe.
@@ -49,12 +51,29 @@ def _socket_candidates() -> list[tuple[str, str]]:
     return candidates
 
 
+def _runtime_probe_timeout() -> float:
+    """Return the timeout used for container runtime detection probes."""
+    raw = os.environ.get("VP_RUNTIME_PROBE_TIMEOUT")
+    if raw is None:
+        return DEFAULT_RUNTIME_PROBE_TIMEOUT
+    try:
+        timeout = float(raw)
+    except ValueError:
+        return DEFAULT_RUNTIME_PROBE_TIMEOUT
+    return timeout if timeout > 0 else DEFAULT_RUNTIME_PROBE_TIMEOUT
+
+
 def _probe_socket(base_url: str) -> bool:
     """Return True if a container engine responds on *base_url*."""
     try:
         import docker as _docker
 
-        client = _docker.DockerClient(base_url=base_url, timeout=3)
+        # Podman's Docker-compatible API can take several seconds to answer
+        # even simple probes on some hosts, so use a wider timeout here.
+        client = _docker.DockerClient(
+            base_url=base_url,
+            timeout=_runtime_probe_timeout(),
+        )
         client.ping()
         client.close()
         return True
@@ -151,13 +170,20 @@ def resolve_runtime(
 
     # Both available — prompt if interactive, else default to Docker
     if sys.stdin.isatty():
+        prompt_choices = list(available)
+        default_choice = RUNTIME_DOCKER if RUNTIME_DOCKER in available else prompt_choices[0]
         choice = Prompt.ask(
             "Multiple container runtimes detected. Which one should VibePod use?",
-            choices=list(SUPPORTED_RUNTIMES),
-            default=RUNTIME_DOCKER,
+            choices=prompt_choices,
+            default=default_choice,
         )
+        selected_url = available.get(choice)
+        if selected_url is None:
+            raise RuntimeError(
+                f"Container runtime '{choice}' is not available. "
+                "Is the daemon/service running?"
+            )
         save_runtime_preference(choice)
-        return choice, available[choice]
+        return choice, selected_url
 
     return RUNTIME_DOCKER, available[RUNTIME_DOCKER]
-

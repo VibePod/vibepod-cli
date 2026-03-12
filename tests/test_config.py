@@ -126,6 +126,19 @@ def test_default_config_exposes_agent_auto_pull(monkeypatch, tmp_path: Path) -> 
         assert agents[agent]["auto_pull"] is None
 
 
+def test_default_config_exposes_container_userns_mode(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+    assert config["container_userns_mode"] is None
+
+
+def test_container_userns_mode_env_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VP_CONTAINER_USERNS_MODE", "keep-id")
+    config = get_config()
+    assert config["container_userns_mode"] == "keep-id"
+
+
 def test_per_agent_auto_pull_override(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
     global_config = tmp_path / "config.yaml"

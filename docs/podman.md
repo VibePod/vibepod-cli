@@ -66,6 +66,8 @@ VibePod uses the standard [Docker SDK for Python](https://docker-py.readthedocs.
 
 The rootless Podman socket is discovered via `$XDG_RUNTIME_DIR/podman/podman.sock` (falling back to `/run/user/<uid>/podman/podman.sock`). The rootful socket at `/run/podman/podman.sock` is only used when running as root.
 
+VibePod allows up to 10 seconds for runtime detection probes. If your Podman socket is slower on a particular host, set `VP_RUNTIME_PROBE_TIMEOUT` to a larger value in seconds before running `vp`.
+
 ## Known limitations
 
 ### Interactive attach
@@ -76,6 +78,26 @@ The `attach_socket()` call in Podman's Docker-compat layer has minor gaps under 
 vp run claude -d
 podman attach vibepod-claude-<id>
 ```
+
+### User namespace mapping
+
+If you want Podman to preserve your host UID/GID for compatible containers, set a user namespace mode such as `keep-id`:
+
+```bash
+vp run claude --runtime podman --userns keep-id
+```
+
+You can also set it globally:
+
+```bash
+export VP_CONTAINER_USERNS_MODE=keep-id
+```
+
+```yaml
+container_userns_mode: keep-id
+```
+
+This works best for images that run as your host UID. Images that switch to a different in-container user may still produce remapped ownership on bind mounts.
 
 ### Volume permissions
 

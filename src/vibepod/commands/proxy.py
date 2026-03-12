@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
-from vibepod.core.config import get_config
+from vibepod.core.config import get_config, get_container_userns_mode
 from vibepod.core.docker import DockerClientError, _is_latest_tag, get_manager
 from vibepod.utils.console import error, info, success, warning
 
@@ -21,9 +21,14 @@ def proxy_start(
         str | None,
         typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
     ] = None,
+    userns: Annotated[
+        str | None,
+        typer.Option("--userns", help="Container user namespace mode (for example keep-id)"),
+    ] = None,
 ) -> None:
     """Start the proxy container."""
     config = get_config()
+    container_userns_mode = get_container_userns_mode(config, override=userns)
     proxy_cfg = config.get("proxy", {})
 
     proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
@@ -57,6 +62,7 @@ def proxy_start(
         db_path=db_path,
         ca_dir=ca_dir,
         network=network_name,
+        userns_mode=container_userns_mode,
     )
     success("Proxy is running")
 
