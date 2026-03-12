@@ -32,7 +32,7 @@ This repository contains an initial v1 implementation with:
 
 ## Image Namespace
 
-By default, agent images use the `vibepod` namespace for Claude (for example `vibepod/claude:latest`) and `nezhar` for other agents.
+By default, agent images use the `vibepod` namespace for Claude, Codex, and platform services, and `nezhar` for Gemini/OpenCode/Devstral/Auggie/Copilot.
 
 
 Current defaults are aligned to existing container repos:
@@ -43,7 +43,7 @@ Current defaults are aligned to existing container repos:
 - `devstral` -> `nezhar/devstral-cli:latest` ([repo](https://github.com/nezhar/devstral-container))
 - `auggie` -> `nezhar/auggie-cli:latest` ([repo](https://github.com/nezhar/auggie-container))
 - `copilot` -> `nezhar/copilot-cli:latest` ([repo](https://github.com/nezhar/copilot-container))
-- `codex` -> `nezhar/codex-cli:latest` ([repo](https://github.com/nezhar/codex-container))
+- `codex` -> `vibepod/codex:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
@@ -56,6 +56,6 @@ VP_IMAGE_OPENCODE=nezhar/opencode-cli:latest vp run opencode
 VP_IMAGE_DEVSTRAL=nezhar/devstral-cli:latest vp run devstral
 VP_IMAGE_AUGGIE=nezhar/auggie-cli:latest vp run auggie
 VP_IMAGE_COPILOT=nezhar/copilot-cli:latest vp run copilot
-VP_IMAGE_CODEX=nezhar/codex-cli:latest vp run codex
+VP_IMAGE_CODEX=vibepod/codex:latest vp run codex
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 ```
