@@ -38,38 +38,60 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "x": "codex",
 }
 
-DEFAULT_IMAGES: dict[str, str] = {
-    "claude": os.environ.get(
-        "VP_IMAGE_CLAUDE",
-        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/claude:latest",
-    ),
-    "gemini": os.environ.get(
-        "VP_IMAGE_GEMINI",
-        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/gemini-container:latest",
-    ),
-    "opencode": os.environ.get(
-        "VP_IMAGE_OPENCODE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/opencode-cli:latest"
-    ),
-    "devstral": os.environ.get(
-        "VP_IMAGE_DEVSTRAL", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/devstral-cli:latest"
-    ),
-    "auggie": os.environ.get(
-        "VP_IMAGE_AUGGIE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/auggie-cli:latest"
-    ),
-    "copilot": os.environ.get(
-        "VP_IMAGE_COPILOT",
-        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/copilot-cli:latest",
-    ),
-    "codex": os.environ.get(
-        "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/codex:latest"
-    ),
-    "datasette": os.environ.get(
-        "VP_DATASETTE_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/datasette:latest"
-    ),
-    "proxy": os.environ.get(
-        "VP_PROXY_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/proxy:latest"
-    ),
-}
+IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
+    "VP_IMAGE_NAMESPACE",
+    "VP_IMAGE_CLAUDE",
+    "VP_IMAGE_GEMINI",
+    "VP_IMAGE_OPENCODE",
+    "VP_IMAGE_DEVSTRAL",
+    "VP_IMAGE_AUGGIE",
+    "VP_IMAGE_COPILOT",
+    "VP_IMAGE_CODEX",
+    "VP_DATASETTE_IMAGE",
+    "VP_PROXY_IMAGE",
+)
+
+
+def get_default_images() -> dict[str, str]:
+    return {
+        "claude": os.environ.get(
+            "VP_IMAGE_CLAUDE",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/claude:latest",
+        ),
+        "gemini": os.environ.get(
+            "VP_IMAGE_GEMINI",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/gemini-container:latest",
+        ),
+        "opencode": os.environ.get(
+            "VP_IMAGE_OPENCODE",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/opencode-cli:latest",
+        ),
+        "devstral": os.environ.get(
+            "VP_IMAGE_DEVSTRAL",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/devstral-cli:latest",
+        ),
+        "auggie": os.environ.get(
+            "VP_IMAGE_AUGGIE",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/auggie-cli:latest",
+        ),
+        "copilot": os.environ.get(
+            "VP_IMAGE_COPILOT",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/copilot-cli:latest",
+        ),
+        "codex": os.environ.get(
+            "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/codex:latest"
+        ),
+        "datasette": os.environ.get(
+            "VP_DATASETTE_IMAGE",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/datasette:latest",
+        ),
+        "proxy": os.environ.get(
+            "VP_PROXY_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/proxy:latest"
+        ),
+    }
+
+
+DEFAULT_IMAGES: dict[str, str] = get_default_images()
 
 DEFAULT_ALIASES: dict[str, str] = {
     **{shortcut: f"run {agent}" for shortcut, agent in AGENT_SHORTCUTS.items()},
