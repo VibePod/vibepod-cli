@@ -9,7 +9,7 @@ from typing import Annotated
 import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
-from vibepod.core.config import get_config
+from vibepod.core.config import get_config, get_container_userns_mode
 from vibepod.core.docker import DockerClientError, get_manager
 from vibepod.utils.console import error, info, success, warning
 
@@ -24,9 +24,14 @@ def logs_start(
         str | None,
         typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
     ] = None,
+    userns: Annotated[
+        str | None,
+        typer.Option("--userns", help="Container user namespace mode (for example keep-id)"),
+    ] = None,
 ) -> None:
     """Start or reuse Datasette for session and proxy logs."""
     config = get_config()
+    container_userns_mode = get_container_userns_mode(config, override=userns)
     log_cfg = config.get("logging", {})
     proxy_cfg = config.get("proxy", {})
 
@@ -49,6 +54,7 @@ def logs_start(
         logs_db_path=logs_db_path,
         proxy_db_path=proxy_db_path,
         port=datasette_port,
+        userns_mode=container_userns_mode,
     )
     success("Datasette is ready")
 
@@ -111,6 +117,10 @@ def logs_ui(
         str | None,
         typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
     ] = None,
+    userns: Annotated[
+        str | None,
+        typer.Option("--userns", help="Container user namespace mode (for example keep-id)"),
+    ] = None,
 ) -> None:
     """Alias for `vp logs start`."""
-    logs_start(port=port, no_open=no_open, runtime=runtime)
+    logs_start(port=port, no_open=no_open, runtime=runtime, userns=userns)

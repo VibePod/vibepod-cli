@@ -32,6 +32,7 @@ def _default_config() -> dict[str, Any]:
         "default_agent": "claude",
         "auto_pull": True,
         "container_runtime": RUNTIME_AUTO,
+        "container_userns_mode": None,
         "auto_remove": True,
         "network": "vibepod-network",
         "log_level": "info",
@@ -144,6 +145,7 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
     mappings: dict[str, tuple[str, Any]] = {
         "VP_DEFAULT_AGENT": ("default_agent", str),
         "VP_CONTAINER_RUNTIME": ("container_runtime", str),
+        "VP_CONTAINER_USERNS_MODE": ("container_userns_mode", lambda x: x.strip() or None),
         "VP_AUTO_PULL": ("auto_pull", lambda x: x.lower() == "true"),
         "VP_LOG_LEVEL": ("log_level", str),
         "VP_NO_COLOR": ("no_color", lambda x: x.lower() == "true"),
@@ -187,6 +189,18 @@ def get_config() -> dict[str, Any]:
 
     config = _apply_env(config)
     return config
+
+
+def get_container_userns_mode(
+    config: dict[str, Any],
+    override: str | None = None,
+) -> str | None:
+    """Return the configured container user namespace mode, if any."""
+    raw: Any = override if override is not None else config.get("container_userns_mode")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
 
 
 def get_config_value(key: str, default: Any = None) -> Any:
