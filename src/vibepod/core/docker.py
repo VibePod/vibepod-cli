@@ -70,6 +70,31 @@ class DockerManager:
         except APIError as exc:
             raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
 
+    def pull_if_newer(self, image: str) -> bool:
+        """Pull *image* and return True if the local image was updated.
+
+        Returns False when the image is already up to date, when the pull
+        fails (e.g. no network / private registry), or when the image only
+        exists locally and cannot be found on a registry.
+        """
+        try:
+            old_id: str | None
+            try:
+                old_id = self.client.images.get(image).id
+            except NotFound:
+                old_id = None
+
+            self.client.images.pull(image)
+
+            try:
+                new_id = self.client.images.get(image).id
+            except NotFound:
+                return False
+
+            return bool(old_id != new_id)
+        except APIError:
+            return False
+
     def ensure_network(self, name: str) -> None:
         try:
             self.client.networks.get(name)
