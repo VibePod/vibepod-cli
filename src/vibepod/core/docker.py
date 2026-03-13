@@ -116,6 +116,27 @@ class DockerManager:
         except OSError:
             pass
 
+    def _resolved_userns_mode(self, userns_mode: str | None) -> str | None:
+        """Normalize user namespace modes per runtime.
+
+        Podman supports modes like ``keep-id`` that Docker rejects, so only
+        forward values that make sense for the selected runtime.
+        """
+        if userns_mode is None:
+            return None
+
+        normalized = userns_mode.strip().lower()
+        if not normalized:
+            return None
+
+        if self.runtime == RUNTIME_PODMAN:
+            return normalized if normalized in {"auto", "keep-id", "nomap"} else None
+
+        if normalized in {"auto", "keep-id", "nomap"}:
+            return None
+
+        return normalized
+
     def _run_container(self, **kwargs: Any) -> Any:
         """Create and start a container via the high-level SDK."""
         return self.client.containers.run(**kwargs)
@@ -223,6 +244,7 @@ class DockerManager:
             volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
 
         try:
+            resolved_userns_mode = self._resolved_userns_mode(userns_mode)
             run_kwargs: dict[str, Any] = {
                 "image": image,
                 "name": container_name,
@@ -243,8 +265,8 @@ class DockerManager:
                 run_kwargs["entrypoint"] = entrypoint
             if user:
                 run_kwargs["user"] = user
-            if userns_mode:
-                run_kwargs["userns_mode"] = userns_mode
+            if resolved_userns_mode:
+                run_kwargs["userns_mode"] = resolved_userns_mode
 
             return self._run_container(**run_kwargs)
         except APIError as exc:
@@ -315,6 +337,7 @@ class DockerManager:
             logs_db_container_path = f"/mount/logs/{logs_db_path.name}"
             proxy_db_container_path = f"/mount/proxy/{proxy_db_path.name}"
 
+        resolved_userns_mode = self._resolved_userns_mode(userns_mode)
         run_kwargs: dict[str, Any] = {
             "image": image,
             "name": "vibepod-datasette",
@@ -328,8 +351,8 @@ class DockerManager:
             "volumes": volumes,
             "ports": {"8001/tcp": port},
         }
-        if userns_mode:
-            run_kwargs["userns_mode"] = userns_mode
+        if resolved_userns_mode:
+            run_kwargs["userns_mode"] = resolved_userns_mode
 
         return self._run_container(**run_kwargs)
 
@@ -382,13 +405,14 @@ class DockerManager:
             "network": network,
         }
 
+        resolved_userns_mode = self._resolved_userns_mode(userns_mode)
         if self.runtime != RUNTIME_PODMAN:
             getuid = getattr(os, "getuid", None)
             getgid = getattr(os, "getgid", None)
             if callable(getuid) and callable(getgid):
                 run_kwargs["user"] = f"{getuid()}:{getgid()}"
-        if userns_mode:
-            run_kwargs["userns_mode"] = userns_mode
+        if resolved_userns_mode:
+            run_kwargs["userns_mode"] = resolved_userns_mode
 
         container = self._run_container(**run_kwargs)
         try:
