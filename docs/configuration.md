@@ -7,7 +7,7 @@ VibePod merges configuration from four sources in order, with each layer overrid
 3. **Project config** — `.vibepod/config.yaml` in the current directory
 4. **Environment variables** — override specific keys at runtime
 
-Run `vp config path` to print the exact paths in use, and `vp config show` to print the fully merged result.
+Run `vp config path` to print the exact paths in use, `vp config show` to print the fully merged result, and `vp config runtime` to view or change the saved global container runtime.
 
 ## Full reference
 
@@ -158,6 +158,24 @@ VP_IMAGE_NAMESPACE=myorg vp run claude
 ```
 
 For end-to-end examples (extending a base image and assigning a brand-new image to an agent), see [Agents > Image customization workflows](agents/index.md#image-customization-workflows).
+
+## Runtime preference
+
+Use `vp config runtime` to inspect the saved global runtime preference:
+
+```bash
+vp config runtime
+```
+
+Set it explicitly without editing YAML by hand:
+
+```bash
+vp config runtime podman
+vp config runtime docker
+vp config runtime auto
+```
+
+This updates `container_runtime` in the global config file (`~/.config/vibepod/config.yaml` by default).
 
 ## Project-level config
 
