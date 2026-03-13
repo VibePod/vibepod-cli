@@ -185,7 +185,7 @@ def resolve_runtime(
     available = detect_available_runtimes()
 
     if explicit is not None:
-        explicit = explicit.lower()
+        explicit = explicit.strip().lower()
         if explicit not in SUPPORTED_RUNTIMES:
             raise RuntimeError(
                 f"Unknown container runtime '{explicit}'. "
