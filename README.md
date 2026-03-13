@@ -27,6 +27,7 @@ This repository contains an initial v1 implementation with:
 - `vp logs start|stop|status`
 - `vp config init`
 - `vp config show`
+- `vp config runtime`
 - `vp config path`
 - `vp version`
 

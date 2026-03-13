@@ -53,7 +53,7 @@ def get_manager(
 
     try:
         runtime_name, socket_url = resolve_runtime(override=runtime_override, config=config)
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         raise DockerClientError(str(exc)) from exc
 
     return DockerManager(base_url=socket_url, runtime=runtime_name)

@@ -22,6 +22,10 @@ from vibepod.core.config import get_config_root
 DEFAULT_RUNTIME_PROBE_TIMEOUT = 10.0
 
 
+def _allowed_runtime_preferences() -> tuple[str, ...]:
+    return (RUNTIME_AUTO, *SUPPORTED_RUNTIMES)
+
+
 def _socket_candidates() -> list[tuple[str, str]]:
     """Return (runtime_name, socket_url) pairs to probe.
 
@@ -96,8 +100,41 @@ def detect_available_runtimes() -> dict[str, str]:
     return found
 
 
+def get_saved_runtime_preference() -> str:
+    """Return the saved global ``container_runtime`` preference."""
+    config_path = get_config_root() / "config.yaml"
+    if not config_path.exists():
+        return RUNTIME_AUTO
+
+    content = config_path.read_text(encoding="utf-8")
+    if not content.strip():
+        return RUNTIME_AUTO
+
+    loaded = yaml.safe_load(content)
+    if loaded is None:
+        return RUNTIME_AUTO
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Global config must contain a YAML mapping: {config_path}")
+
+    saved = loaded.get("container_runtime", RUNTIME_AUTO)
+    runtime = str(saved).strip().lower() or RUNTIME_AUTO
+    if runtime not in _allowed_runtime_preferences():
+        raise ValueError(
+            f"Unknown container runtime '{runtime}'. "
+            f"Supported: {', '.join(_allowed_runtime_preferences())}"
+        )
+    return runtime
+
+
 def save_runtime_preference(runtime: str) -> None:
     """Persist *runtime* as ``container_runtime`` in the global config file."""
+    normalized = runtime.strip().lower()
+    if normalized not in _allowed_runtime_preferences():
+        raise ValueError(
+            f"Unknown container runtime '{normalized}'. "
+            f"Supported: {', '.join(_allowed_runtime_preferences())}"
+        )
+
     config_path = get_config_root() / "config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -106,10 +143,13 @@ def save_runtime_preference(runtime: str) -> None:
         content = config_path.read_text(encoding="utf-8")
         if content.strip():
             loaded = yaml.safe_load(content)
-            if isinstance(loaded, dict):
-                existing = loaded
+            if loaded is None:
+                loaded = {}
+            if not isinstance(loaded, dict):
+                raise ValueError(f"Global config must contain a YAML mapping: {config_path}")
+            existing = loaded
 
-    existing["container_runtime"] = runtime
+    existing["container_runtime"] = normalized
     config_path.write_text(yaml.safe_dump(existing, sort_keys=False), encoding="utf-8")
 
 

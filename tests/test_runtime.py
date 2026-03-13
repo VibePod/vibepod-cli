@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 from rich.prompt import Prompt
 
+from vibepod.core import docker as docker_core
 from vibepod.core import runtime
 
 
@@ -104,3 +105,18 @@ def test_resolve_runtime_rejects_unavailable_prompt_choice(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="not available"):
         runtime.resolve_runtime()
+
+
+def test_get_manager_wraps_runtime_preference_errors(monkeypatch) -> None:
+    def _raise_runtime_preference_error(**kwargs) -> tuple[str, str]:
+        del kwargs
+        raise ValueError("Global config must contain a YAML mapping: /tmp/config.yaml")
+
+    monkeypatch.setattr(
+        runtime,
+        "resolve_runtime",
+        _raise_runtime_preference_error,
+    )
+
+    with pytest.raises(docker_core.DockerClientError, match="Global config must contain"):
+        docker_core.get_manager()

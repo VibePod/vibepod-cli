@@ -46,7 +46,13 @@ This is useful in CI or shell profiles where you always want a specific runtime.
 
 ### 3. Global config
 
-Add `container_runtime` to `~/.config/vibepod/config.yaml`:
+Set the saved global runtime with the CLI:
+
+```bash
+vp config runtime podman
+```
+
+This writes `container_runtime` to `~/.config/vibepod/config.yaml`:
 
 ```yaml
 container_runtime: podman
@@ -55,6 +61,10 @@ container_runtime: podman
 When VibePod prompts you to choose a runtime interactively, it saves your answer here automatically so you are not asked again.
 
 Set it back to `auto` to re-enable detection:
+
+```bash
+vp config runtime auto
+```
 
 ```yaml
 container_runtime: auto
