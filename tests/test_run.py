@@ -316,6 +316,8 @@ def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path)
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -347,7 +349,7 @@ def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path)
 
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
 
@@ -361,6 +363,8 @@ def test_paste_images_flag_warns_when_display_not_set(monkeypatch, tmp_path: Pat
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -392,7 +396,7 @@ def test_paste_images_flag_warns_when_display_not_set(monkeypatch, tmp_path: Pat
 
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
 
@@ -405,6 +409,8 @@ def test_paste_images_false_does_not_add_x11(monkeypatch, tmp_path: Path) -> Non
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -436,7 +442,7 @@ def test_paste_images_false_does_not_add_x11(monkeypatch, tmp_path: Path) -> Non
 
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=False)
 
@@ -581,6 +587,9 @@ class _StubDockerManager:
     def pull_image(self, image: str) -> None:
         self.pulled.append(image)
 
+    def pull_if_newer(self, image: str) -> bool:
+        return False
+
     def ensure_proxy(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
         self.ensure_proxy_kwargs = kwargs
         return self._proxy
@@ -694,6 +703,8 @@ def test_ikwid_appends_args_for_claude(monkeypatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -724,7 +735,7 @@ def test_ikwid_appends_args_for_claude(monkeypatch, tmp_path: Path) -> None:
             return container
 
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, ikwid=True)
 
@@ -736,6 +747,8 @@ def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -768,7 +781,7 @@ def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
     cfg = _make_config()
     cfg["agents"]["codex"] = {"env": {}, "init": []}
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="codex", workspace=tmp_path, detach=True, ikwid=True)
 
@@ -780,6 +793,8 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -812,7 +827,7 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
     cfg = _make_config()
     cfg["agents"]["gemini"] = {"env": {}, "init": []}
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="gemini", workspace=tmp_path, detach=True, ikwid=True)
 
@@ -825,6 +840,8 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -855,7 +872,7 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
             return container
 
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, ikwid=False)
 
@@ -867,6 +884,8 @@ def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> Non
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -904,7 +923,7 @@ def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> Non
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
@@ -924,6 +943,8 @@ def test_llm_enabled_injects_openai_env_vars_for_codex(monkeypatch, tmp_path: Pa
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -962,7 +983,7 @@ def test_llm_enabled_injects_openai_env_vars_for_codex(monkeypatch, tmp_path: Pa
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="codex", workspace=tmp_path, detach=True)
 
@@ -977,6 +998,8 @@ def test_llm_disabled_does_not_inject_env_vars(monkeypatch, tmp_path: Path) -> N
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -1014,7 +1037,7 @@ def test_llm_disabled_does_not_inject_env_vars(monkeypatch, tmp_path: Path) -> N
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
@@ -1033,6 +1056,8 @@ def test_llm_skipped_for_agent_without_mapping(monkeypatch, tmp_path: Path) -> N
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -1071,7 +1096,7 @@ def test_llm_skipped_for_agent_without_mapping(monkeypatch, tmp_path: Path) -> N
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="gemini", workspace=tmp_path, detach=True)
 
@@ -1085,6 +1110,8 @@ def test_llm_empty_model_not_injected(monkeypatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -1122,7 +1149,7 @@ def test_llm_empty_model_not_injected(monkeypatch, tmp_path: Path) -> None:
         "model": "",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
@@ -1139,6 +1166,8 @@ def test_llm_per_agent_env_overrides_llm(monkeypatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -1177,7 +1206,7 @@ def test_llm_per_agent_env_overrides_llm(monkeypatch, tmp_path: Path) -> None:
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
