@@ -187,6 +187,90 @@ def test_run_agent_forwards_userns_mode(tmp_path: Path) -> None:
     assert run_kwargs["userns_mode"] == "keep-id"
 
 
+def test_run_agent_omits_podman_userns_mode_for_docker(tmp_path: Path) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "agent"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "claude"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    manager.run_agent(
+        agent="claude",
+        image="vibepod/claude:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/claude",
+        env={},
+        command=["claude"],
+        auto_remove=True,
+        name=None,
+        version="0.2.1",
+        network="vibepod-network",
+        userns_mode="keep-id",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert "userns_mode" not in run_kwargs
+
+
+def test_run_agent_preserves_host_userns_mode_for_docker(tmp_path: Path) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "agent"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "claude"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    manager.run_agent(
+        agent="claude",
+        image="vibepod/claude:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/claude",
+        env={},
+        command=["claude"],
+        auto_remove=True,
+        name=None,
+        version="0.2.1",
+        network="vibepod-network",
+        userns_mode="host",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert run_kwargs["userns_mode"] == "host"
+
+
 def test_run_agent_forwards_entrypoint(tmp_path: Path) -> None:
     class _FakeContainers:
         def __init__(self) -> None:

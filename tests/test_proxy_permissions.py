@@ -51,7 +51,7 @@ def test_update_container_mapping_permission_error_returns_false(
     assert updated is False
 
 
-def test_ensure_proxy_runs_container_as_current_user_and_forwards_userns_mode(
+def test_ensure_proxy_runs_container_as_current_user_and_omits_podman_userns_mode_on_docker(
     tmp_path: Path, monkeypatch
 ) -> None:
     class _FakeContainers:
@@ -87,7 +87,7 @@ def test_ensure_proxy_runs_container_as_current_user_and_forwards_userns_mode(
     run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
     assert run_kwargs is not None
     assert run_kwargs["user"] == "1234:2345"
-    assert run_kwargs["userns_mode"] == "keep-id"
+    assert "userns_mode" not in run_kwargs
     assert "ports" not in run_kwargs
     assert run_kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
     assert db_path.parent.exists()
@@ -120,6 +120,74 @@ def test_ensure_datasette_forwards_userns_mode(tmp_path: Path, monkeypatch) -> N
         logs_db_path=logs_db_path,
         proxy_db_path=proxy_db_path,
         port=8001,
+        userns_mode="keep-id",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert run_kwargs["userns_mode"] == "keep-id"
+
+
+def test_ensure_datasette_omits_podman_userns_mode_on_docker(tmp_path: Path, monkeypatch) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "datasette"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
+
+    monkeypatch.setattr(DockerManager, "find_datasette", lambda self: None)
+
+    logs_db_path = tmp_path / "logs" / "logs.db"
+    proxy_db_path = tmp_path / "proxy" / "proxy.db"
+    manager.ensure_datasette(
+        image="vibepod/datasette:latest",
+        logs_db_path=logs_db_path,
+        proxy_db_path=proxy_db_path,
+        port=8001,
+        userns_mode="keep-id",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert "userns_mode" not in run_kwargs
+
+
+def test_ensure_proxy_forwards_podman_userns_mode(tmp_path: Path, monkeypatch) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "proxy"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "podman"
+
+    monkeypatch.setattr(DockerManager, "find_proxy", lambda self: None)
+
+    db_path = tmp_path / "proxy" / "proxy.db"
+    ca_dir = tmp_path / "proxy" / "mitmproxy"
+    manager.ensure_proxy(
+        image="vibepod/proxy:latest",
+        db_path=db_path,
+        ca_dir=ca_dir,
+        network="vibepod-network",
         userns_mode="keep-id",
     )
 
