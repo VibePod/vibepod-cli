@@ -1,0 +1,51 @@
+name: Runtime Integration
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  version-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - docker-only
+          - podman-only
+          - none
+          - both-auto
+          - both-default-docker
+          - both-default-podman
+          - both-switch
+
+    env:
+      VP_REAL_RUNTIME_SCENARIO: ${{ matrix.scenario }}
+      VP_RUNTIME_PROBE_TIMEOUT: "20"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Prepare runtime scenario and run tests
+        run: |
+          export XDG_RUNTIME_DIR="${RUNNER_TEMP}/xdg-runtime"
+          bash scripts/prepare_runtime_scenario.sh "${VP_REAL_RUNTIME_SCENARIO}"
+          python -m pytest -q tests/test_version_integration.py
+
+      - name: Clean up runtime scenario
+        if: always()
+        run: bash scripts/cleanup_runtime_scenario.sh
