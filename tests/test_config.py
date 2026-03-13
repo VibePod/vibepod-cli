@@ -139,6 +139,15 @@ def test_container_userns_mode_env_override(monkeypatch, tmp_path: Path) -> None
     assert config["container_userns_mode"] == "keep-id"
 
 
+def test_container_runtime_env_override_is_normalized(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VP_CONTAINER_RUNTIME", " PodMan ")
+    config = get_config()
+    assert config["container_runtime"] == "podman"
+
+
 def test_per_agent_auto_pull_override(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
     global_config = tmp_path / "config.yaml"

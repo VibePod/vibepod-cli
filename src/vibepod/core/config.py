@@ -147,10 +147,14 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
+def _parse_container_runtime(value: str) -> str:
+    return value.strip().lower()
+
+
 def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
     mappings: dict[str, tuple[str, Any]] = {
         "VP_DEFAULT_AGENT": ("default_agent", str),
-        "VP_CONTAINER_RUNTIME": ("container_runtime", str),
+        "VP_CONTAINER_RUNTIME": ("container_runtime", _parse_container_runtime),
         "VP_CONTAINER_USERNS_MODE": ("container_userns_mode", lambda x: x.strip() or None),
         "VP_AUTO_PULL": ("auto_pull", lambda x: x.lower() == "true"),
         "VP_LOG_LEVEL": ("log_level", str),
