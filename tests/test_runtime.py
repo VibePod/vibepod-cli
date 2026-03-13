@@ -107,6 +107,21 @@ def test_resolve_runtime_rejects_unavailable_prompt_choice(monkeypatch) -> None:
         runtime.resolve_runtime()
 
 
+def test_resolve_runtime_normalizes_env_value(monkeypatch) -> None:
+    monkeypatch.setattr(
+        runtime,
+        "detect_available_runtimes",
+        lambda: {
+            "podman": "unix:///run/user/1000/podman/podman.sock",
+        },
+    )
+    monkeypatch.setenv("VP_CONTAINER_RUNTIME", " PodMan ")
+
+    selected = runtime.resolve_runtime()
+
+    assert selected == ("podman", "unix:///run/user/1000/podman/podman.sock")
+
+
 def test_get_manager_wraps_runtime_preference_errors(monkeypatch) -> None:
     def _raise_runtime_preference_error(**kwargs) -> tuple[str, str]:
         del kwargs
