@@ -10,7 +10,7 @@ from typing import Annotated, Any
 import typer
 import yaml
 
-from vibepod.constants import SUPPORTED_AGENTS
+from vibepod.constants import RUNTIME_AUTO, SUPPORTED_AGENTS, SUPPORTED_RUNTIMES
 from vibepod.core.allowed_dirs import (
     add_allowed_dir,
     is_protected_dir,
@@ -18,6 +18,7 @@ from vibepod.core.allowed_dirs import (
     remove_allowed_dir,
 )
 from vibepod.core.config import get_config, get_global_config_path, get_project_config_path
+from vibepod.core.runtime import get_saved_runtime_preference, save_runtime_preference
 from vibepod.utils.console import console, error, success
 
 app = typer.Typer(help="Manage configuration")
@@ -114,6 +115,48 @@ def show(
         return
     dumped = yaml.safe_dump(cfg, sort_keys=False)
     console.print(dumped)
+
+
+@app.command("runtime")
+def runtime(
+    value: Annotated[
+        str | None,
+        typer.Argument(help="Default global runtime: auto, docker, or podman"),
+    ] = None,
+) -> None:
+    """Show or set the saved default container runtime."""
+    if value is None:
+        try:
+            print(get_saved_runtime_preference())
+        except (OSError, ValueError) as exc:
+            error(str(exc))
+            raise typer.Exit(1) from exc
+        except yaml.YAMLError as exc:
+            error(f"Failed to parse global config at {get_global_config_path()}: {exc}")
+            raise typer.Exit(1) from exc
+        return
+
+    allowed = (RUNTIME_AUTO, *SUPPORTED_RUNTIMES)
+    normalized = value.strip().lower()
+    if normalized not in allowed:
+        error(f"Unknown runtime '{value}'. Supported: {', '.join(allowed)}")
+        raise typer.Exit(1)
+
+    try:
+        save_runtime_preference(normalized)
+    except OSError as exc:
+        error(f"Failed to update global config at {get_global_config_path()}: {exc}")
+        raise typer.Exit(1) from exc
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    except yaml.YAMLError as exc:
+        error(f"Failed to parse global config at {get_global_config_path()}: {exc}")
+        raise typer.Exit(1) from exc
+
+    success(
+        f"Set default container runtime to '{normalized}' in {get_global_config_path()}"
+    )
 
 
 @app.command("path")
