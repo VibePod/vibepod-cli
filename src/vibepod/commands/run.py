@@ -14,7 +14,7 @@ import typer
 from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
-from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, RUNTIME_PODMAN, SUPPORTED_AGENTS
 from vibepod.core.agents import (
     agent_config_dir,
     effective_agent_image,
@@ -22,8 +22,8 @@ from vibepod.core.agents import (
     get_agent_spec,
     resolve_agent_name,
 )
-from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.config import get_config, get_container_userns_mode
+from vibepod.core.docker import DockerClientError, DockerManager, get_manager
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
 
@@ -214,9 +214,18 @@ def run(
         str | None,
         typer.Option("--network", help="Additional Docker network to connect the container to"),
     ] = None,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
+    userns: Annotated[
+        str | None,
+        typer.Option("--userns", help="Container user namespace mode (for example keep-id)"),
+    ] = None,
 ) -> None:
     """Start an agent container."""
     config = get_config()
+    container_userns_mode = get_container_userns_mode(config, override=userns)
     selected_agent_input = agent or str(config.get("default_agent", "claude"))
     selected_agent = resolve_agent_name(selected_agent_input)
     if selected_agent is None:
@@ -247,7 +256,7 @@ def run(
     image = effective_agent_image(selected_agent, config)
 
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=config)
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
@@ -266,14 +275,30 @@ def run(
 
     command = spec.command
     entrypoint: list[str] | None = None
-    if init_commands:
-        info(f"Applying {len(init_commands)} init command(s) before startup")
+
+    # On rootless Podman the container starts as root (mapped from the host
+    # UID) but often switches to a non-root user via su/gosu.  That non-root
+    # user gets a subordinate UID that can't read files owned by root inside
+    # the container.  Injecting a chmod before the real entrypoint ensures the
+    # config mount is accessible after the user switch.
+    podman_fixup: list[str] = []
+    if manager.runtime == RUNTIME_PODMAN:
+        paths_to_fix = [spec.config_mount_path]
+        extra_volumes_pre = _agent_extra_volumes(selected_agent, agent_config_dir(selected_agent))
+        if extra_volumes_pre:
+            paths_to_fix.extend(cp for _, cp, _ in extra_volumes_pre)
+        quoted = " ".join(f"'{p}'" for p in dict.fromkeys(paths_to_fix))
+        podman_fixup = [f"chmod -R a+rwX {quoted} 2>/dev/null || true"]
+
+    if init_commands or podman_fixup:
+        if init_commands:
+            info(f"Applying {len(init_commands)} init command(s) before startup")
         try:
             command = manager.resolve_launch_command(image=image, command=spec.command)
         except DockerClientError as exc:
             error(str(exc))
             raise typer.Exit(1) from exc
-        entrypoint = _init_entrypoint(init_commands)
+        entrypoint = _init_entrypoint(podman_fixup + init_commands)
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -300,11 +325,12 @@ def run(
             .resolve()
         )
 
-        manager.ensure_proxy(
+        proxy_container = manager.ensure_proxy(
             image=proxy_image,
             db_path=proxy_db_path,
             ca_dir=proxy_ca_dir or proxy_db_path.parent / "mitmproxy",
             network=network_name,
+            userns_mode=container_userns_mode,
         )
 
         if proxy_ca_path:
@@ -318,7 +344,8 @@ def run(
             if not ca_ready:
                 warning(f"Proxy CA not found yet at {proxy_ca_path}")
 
-        proxy_url = "http://vibepod-proxy:8080"
+        proxy_host = _get_container_ip(proxy_container, network_name) or "vibepod-proxy"
+        proxy_url = f"http://{proxy_host}:8080"
         merged_env.setdefault("HTTP_PROXY", proxy_url)
         merged_env.setdefault("HTTPS_PROXY", proxy_url)
         merged_env.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
@@ -348,6 +375,7 @@ def run(
         extra_volumes=extra_volumes,
         platform=spec.platform,
         user=container_user,
+        userns_mode=container_userns_mode,
         entrypoint=entrypoint,
     )
 

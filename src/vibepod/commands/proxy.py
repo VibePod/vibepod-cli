@@ -8,17 +8,27 @@ from typing import Annotated
 import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
-from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.config import get_config, get_container_userns_mode
+from vibepod.core.docker import DockerClientError, get_manager
 from vibepod.utils.console import error, info, success, warning
 
 app = typer.Typer(help="Manage the HTTP(S) proxy")
 
 
 @app.command("start")
-def proxy_start() -> None:
+def proxy_start(
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
+    userns: Annotated[
+        str | None,
+        typer.Option("--userns", help="Container user namespace mode (for example keep-id)"),
+    ] = None,
+) -> None:
     """Start the proxy container."""
     config = get_config()
+    container_userns_mode = get_container_userns_mode(config, override=userns)
     proxy_cfg = config.get("proxy", {})
 
     proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
@@ -35,7 +45,7 @@ def proxy_start() -> None:
     network_name = str(config.get("network", "vibepod-network"))
 
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=config)
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
@@ -48,6 +58,7 @@ def proxy_start() -> None:
         db_path=db_path,
         ca_dir=ca_dir,
         network=network_name,
+        userns_mode=container_userns_mode,
     )
     success("Proxy is running")
 
@@ -55,10 +66,14 @@ def proxy_start() -> None:
 @app.command("stop")
 def proxy_stop(
     force: Annotated[bool, typer.Option("-f", "--force", help="Force stop")] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
 ) -> None:
     """Stop the proxy container."""
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=get_config())
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
@@ -73,10 +88,15 @@ def proxy_stop(
 
 
 @app.command("status")
-def proxy_status() -> None:
+def proxy_status(
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
+) -> None:
     """Show proxy container status."""
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=get_config())
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc

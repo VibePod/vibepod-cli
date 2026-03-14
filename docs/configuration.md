@@ -7,7 +7,7 @@ VibePod merges configuration from four sources in order, with each layer overrid
 3. **Project config** — `.vibepod/config.yaml` in the current directory
 4. **Environment variables** — override specific keys at runtime
 
-Run `vp config path` to print the exact paths in use, and `vp config show` to print the fully merged result.
+Run `vp config path` to print the exact paths in use, `vp config show` to print the fully merged result, and `vp config runtime` to view or change the saved global container runtime.
 
 ## Full reference
 
@@ -17,6 +17,14 @@ version: 1
 
 # Agent to run when no argument is given to `vp run`
 default_agent: claude
+
+# Container runtime: auto | docker | podman (default: auto)
+# See docs/podman.md for setup instructions
+container_runtime: auto
+
+# Container user namespace mode passed to new containers (default: null)
+# For Podman, "keep-id" preserves host UID/GID on compatible images
+container_userns_mode: null
 
 # Pull the latest image before every run (default: true)
 # Can be overridden per agent with agents.<agent>.auto_pull
@@ -105,6 +113,8 @@ These variables override the corresponding config keys without editing any file:
 
 | Variable | Config key | Example |
 |---|---|---|
+| `VP_CONTAINER_RUNTIME` | `container_runtime` | `VP_CONTAINER_RUNTIME=podman` |
+| `VP_CONTAINER_USERNS_MODE` | `container_userns_mode` | `VP_CONTAINER_USERNS_MODE=keep-id` |
 | `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=gemini` |
 | `VP_AUTO_PULL` | `auto_pull` | `VP_AUTO_PULL=true` |
 | `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
@@ -137,6 +147,24 @@ VP_IMAGE_NAMESPACE=myorg vp run claude
 ```
 
 For end-to-end examples (extending a base image and assigning a brand-new image to an agent), see [Agents > Image customization workflows](agents/index.md#image-customization-workflows).
+
+## Runtime preference
+
+Use `vp config runtime` to inspect the saved global runtime preference:
+
+```bash
+vp config runtime
+```
+
+Set it explicitly without editing YAML by hand:
+
+```bash
+vp config runtime podman
+vp config runtime docker
+vp config runtime auto
+```
+
+This updates `container_runtime` in the global config file (`~/.config/vibepod/config.yaml` by default).
 
 ## Project-level config
 
@@ -184,7 +212,7 @@ Commit this file to share project defaults with your team.
 
 VibePod starts a `vibepod-proxy` container alongside every agent. It acts as an HTTP(S) MITM proxy and logs all outbound requests to a SQLite database viewable in the Datasette UI (`vp logs start`).
 
-The proxy is reachable inside the Docker network as `http://vibepod-proxy:8080`. It is not published on a host port.
+VibePod injects the proxy endpoint into agent containers automatically over the internal runtime network. It is not published on a host port.
 
 To disable the proxy globally:
 

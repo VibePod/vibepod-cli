@@ -34,9 +34,14 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
 
 
 @app.command("ui", hidden=True)
-def alias_ui() -> None:
+def alias_ui(
+    port: int | None = None,
+    no_open: bool = False,
+    runtime: str | None = None,
+    userns: str | None = None,
+) -> None:
     """Alias for `vp logs start`."""
-    logs.logs_start()
+    logs.logs_start(port=port, no_open=no_open, runtime=runtime, userns=userns)
 
 
 for shortcut, agent in AGENT_SHORTCUTS.items():
