@@ -4,10 +4,22 @@
 [![PyPI](https://img.shields.io/pypi/v/vibepod)](https://pypi.org/project/vibepod/)
 [![CI](https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml)
 [![Docs Build](https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml/badge.svg)](https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml)
+![License](https://img.shields.io/github/license/VibePod/vibepod-cli)
 
-VibePod is a unified CLI (`vp`) for running AI coding agents in Docker containers.
+VibePod is a unified CLI (`vp`) for running AI coding agents in isolated
+Docker containers — no required configuration, no setup. Just
+`vp run <agent>`. Includes built-in local metrics collection, HTTP traffic
+tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
-![VibePod CLI preview](docs/assets/preview.png)
+## Features
+
+- ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
+- 🐳 **Isolated agents** — each agent runs in its own Docker container
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral, Copilot, Auggie & more
+- 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
+- ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
+- 🔒 **Privacy-first** — all metrics collected and stored locally, never sent to the cloud
+- 📦 **Simple install** — `pip install vibepod`
 
 ## Installation
 
@@ -17,6 +29,17 @@ VibePod is available on [PyPI](https://pypi.org/project/vibepod/):
 pip install vibepod
 ```
 
+## Quick Start
+
+```bash
+vp run <agent>
+# examples:
+vp run claude
+vp run codex
+```
+
+![VibePod CLI preview](docs/assets/preview.png)
+
 ## Current Status
 
 This repository contains an initial v1 implementation with:
@@ -24,16 +47,31 @@ This repository contains an initial v1 implementation with:
 - `vp run <agent>`
 - `vp stop <agent|--all>`
 - `vp list`
-- `vp logs start|stop|status`
 - `vp config init`
 - `vp config show`
 - `vp config path`
 - `vp version`
 
+## Analytics & Dashboard
+
+VibePod collects metrics locally while your agents run and serves them through
+a built-in dashboard.
+
+![VibePod Analytics Dashboard](docs/assets/dashboard.png)
+
+| Command          | Description                                        |
+|------------------|----------------------------------------------------|
+| `vp logs start`  | Start or resume dashboard for collected metrics     |
+| `vp logs stop`   | Stop the dashboard container                       |
+| `vp logs status` | Show dashboard container status                    |
+
+The dashboard shows per-agent HTTP traffic, usage over time, and Claude token
+metrics. It also lets you compare agents side-by-side. All data stays on your
+machine.
+
 ## Image Namespace
 
 By default, agent images use the `vibepod` namespace for Claude, Codex, and platform services, and `nezhar` for Gemini/OpenCode/Devstral/Auggie/Copilot.
-
 
 Current defaults are aligned to existing container repos:
 
