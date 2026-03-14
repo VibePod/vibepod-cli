@@ -47,6 +47,8 @@ Current defaults are aligned to existing container repos:
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
+## Overriding Images
+
 You can override any single image directly:
 
 ```bash
@@ -59,3 +61,7 @@ VP_IMAGE_COPILOT=nezhar/copilot-cli:latest vp run copilot
 VP_IMAGE_CODEX=vibepod/codex:latest vp run codex
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 ```
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
