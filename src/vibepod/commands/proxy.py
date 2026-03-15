@@ -9,7 +9,7 @@ import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.utils.console import error, info, success, warning
 
 app = typer.Typer(help="Manage the HTTP(S) proxy")
@@ -41,6 +41,10 @@ def proxy_start() -> None:
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
 
     manager.ensure_network(network_name)
+
+    if _is_latest_tag(proxy_image):
+        info("Checking for proxy image updates…")
+        manager.pull_if_newer(proxy_image)
 
     info("Starting proxy")
     manager.ensure_proxy(

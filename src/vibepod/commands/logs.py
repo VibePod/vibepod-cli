@@ -13,7 +13,7 @@ import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.utils.console import error, info, success, warning
 
 app = typer.Typer(help="View logs and traffic UI")
@@ -60,13 +60,14 @@ def logs_start(
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
 
-    info("Checking for datasette image updates…")
-    updated = manager.pull_if_newer(datasette_image)
-    if updated:
-        info("New image available — restarting datasette")
-        existing = manager.find_datasette()
-        if existing:
-            existing.remove(force=True)
+    if _is_latest_tag(datasette_image):
+        info("Checking for datasette image updates…")
+        updated = manager.pull_if_newer(datasette_image)
+        if updated:
+            info("New image available — restarting datasette")
+            existing = manager.find_datasette()
+            if existing:
+                existing.remove(force=True)
 
     info(f"Starting Datasette on http://localhost:{datasette_port}")
     manager.ensure_datasette(
