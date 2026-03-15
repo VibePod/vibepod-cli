@@ -23,7 +23,7 @@ from vibepod.core.agents import (
     resolve_agent_name,
 )
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
 
@@ -322,6 +322,9 @@ def run(
             .expanduser()
             .resolve()
         )
+
+        if _is_latest_tag(proxy_image):
+            manager.pull_if_newer(proxy_image)
 
         manager.ensure_proxy(
             image=proxy_image,

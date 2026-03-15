@@ -41,6 +41,12 @@ class DockerClientError(RuntimeError):
     """Raised for Docker availability or lifecycle errors."""
 
 
+def _is_latest_tag(image: str) -> bool:
+    """Return True when *image* uses the ``latest`` tag (explicitly or by omission)."""
+    name = image.split("/")[-1]
+    return ":" not in name or name.endswith(":latest")
+
+
 def _normalize_command(value: Any) -> list[str]:
     """Normalize Docker command/entrypoint values to a list of strings."""
     if value is None:
