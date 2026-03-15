@@ -149,6 +149,13 @@ def _agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, s
     return []
 
 
+def _x11_volumes_and_env(display: str) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
+    """Return X11 socket volumes and DISPLAY env for paste-image support."""
+    volumes: list[tuple[str, str, str]] = [("/tmp/.X11-unix", "/tmp/.X11-unix", "rw")]
+    env: dict[str, str] = {"DISPLAY": display}
+    return volumes, env
+
+
 def _host_user() -> str | None:
     """Return current user id in uid:gid format when available."""
     getuid = getattr(os, "getuid", None)
@@ -214,6 +221,13 @@ def run(
         str | None,
         typer.Option("--network", help="Additional Docker network to connect the container to"),
     ] = None,
+    paste_images: Annotated[
+        bool,
+        typer.Option(
+            "--paste-images",
+            help="Enable image pasting via X11 clipboard (requires DISPLAY to be set)",
+        ),
+    ] = False,
 ) -> None:
     """Start an agent container."""
     config = get_config()
@@ -291,6 +305,15 @@ def run(
     extra_volumes = _agent_extra_volumes(selected_agent, config_dir)
     for host_path, _, _ in extra_volumes:
         Path(host_path).mkdir(parents=True, exist_ok=True)
+
+    if paste_images:
+        display = os.environ.get("DISPLAY", "")
+        if not display:
+            warning("--paste-images requires DISPLAY to be set; skipping X11 forwarding")
+        else:
+            x11_vols, x11_env = _x11_volumes_and_env(display)
+            extra_volumes.extend(x11_vols)
+            merged_env.update(x11_env)
 
     if proxy_enabled:
         proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
