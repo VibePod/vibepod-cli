@@ -171,6 +171,150 @@ def test_run_agent_forwards_entrypoint(tmp_path: Path) -> None:
     assert run_kwargs["entrypoint"] == ["/bin/sh", "-lc", 'echo "init"; exec "$@"', "--"]
 
 
+def test_x11_volumes_and_env_returns_socket_and_display() -> None:
+    volumes, env = run_cmd._x11_volumes_and_env(":0")
+    assert ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw") in volumes
+    assert env == {"DISPLAY": ":0"}
+
+
+def test_x11_volumes_and_env_preserves_display_value() -> None:
+    volumes, env = run_cmd._x11_volumes_and_env(":1")
+    assert env["DISPLAY"] == ":1"
+
+
+def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path) -> None:
+    """--paste-images injects the X11 socket and DISPLAY into the container."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
+
+    assert ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw") in captured.get(
+        "extra_volumes", []
+    ), f"X11 socket not found in extra_volumes: {captured.get('extra_volumes')}"
+
+
+def test_paste_images_flag_warns_when_display_not_set(monkeypatch, tmp_path: Path) -> None:
+    """--paste-images warns and skips X11 when DISPLAY is unset."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
+
+    x11_vols = [v for v in captured.get("extra_volumes", []) if "/tmp/.X11-unix" in str(v)]
+    assert not x11_vols, "X11 socket should not be mounted when DISPLAY is unset"
+
+
+def test_paste_images_false_does_not_add_x11(monkeypatch, tmp_path: Path) -> None:
+    """Default (no --paste-images) does not inject X11 socket."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=False)
+
+    x11_vols = [v for v in captured.get("extra_volumes", []) if "/tmp/.X11-unix" in str(v)]
+    assert not x11_vols, "X11 socket should not be mounted when paste_images=False"
+
+
 def test_agent_init_commands_from_list() -> None:
     commands = run_cmd._agent_init_commands("claude", {"init": ["apk add --no-cache ripgrep"]})
     assert commands == ["apk add --no-cache ripgrep"]
