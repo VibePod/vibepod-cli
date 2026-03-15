@@ -271,9 +271,10 @@ def run(
     extra_network = network or _maybe_select_network(workspace_path, manager, network_name)
 
     agent_auto_pull = agent_cfg.get("auto_pull")
-    should_pull = pull or (
+    auto_pull_enabled = (
         agent_auto_pull if agent_auto_pull is not None else bool(config.get("auto_pull", False))
     )
+    should_pull = pull or (auto_pull_enabled and _is_latest_tag(image))
     if should_pull:
         info(f"Pulling image: {image}")
         manager.pull_image(image)
