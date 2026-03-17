@@ -138,3 +138,28 @@ def test_per_agent_auto_pull_override(monkeypatch, tmp_path: Path) -> None:
     assert config["agents"]["claude"]["auto_pull"] is True
     # Other agents should still have None (unset)
     assert config["agents"]["gemini"]["auto_pull"] is None
+
+
+def test_default_config_includes_llm_section(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+    llm = config.get("llm")
+    assert isinstance(llm, dict)
+    assert llm["enabled"] is False
+    assert llm["base_url"] == ""
+    assert llm["api_key"] == ""
+    assert llm["model"] == ""
+
+
+def test_llm_env_overrides(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VP_LLM_ENABLED", "true")
+    monkeypatch.setenv("VP_LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("VP_LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("VP_LLM_MODEL", "llama3")
+    config = get_config()
+    llm = config["llm"]
+    assert llm["enabled"] is True
+    assert llm["base_url"] == "http://localhost:11434/v1"
+    assert llm["api_key"] == "sk-test"
+    assert llm["model"] == "llama3"

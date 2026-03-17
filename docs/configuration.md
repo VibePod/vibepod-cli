@@ -85,6 +85,13 @@ agents:
     volumes: []
     init: []
 
+# Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
+llm:
+  enabled: false
+  base_url: ""       # Server endpoint URL
+  api_key: ""        # Auth token (set to "ollama" for Ollama)
+  model: ""          # Model name passed to the agent
+
 logging:
   enabled: true
   image: vibepod/datasette:latest
@@ -111,6 +118,10 @@ These variables override the corresponding config keys without editing any file:
 | `VP_NO_COLOR` | `no_color` | `VP_NO_COLOR=true` |
 | `VP_DATASETTE_PORT` | `logging.ui_port` | `VP_DATASETTE_PORT=9001` |
 | `VP_PROXY_ENABLED` | `proxy.enabled` | `VP_PROXY_ENABLED=false` |
+| `VP_LLM_ENABLED` | `llm.enabled` | `VP_LLM_ENABLED=true` |
+| `VP_LLM_BASE_URL` | `llm.base_url` | `VP_LLM_BASE_URL=http://localhost:11434` |
+| `VP_LLM_API_KEY` | `llm.api_key` | `VP_LLM_API_KEY=ollama` |
+| `VP_LLM_MODEL` | `llm.model` | `VP_LLM_MODEL=qwen3:14b` |
 | `VP_CONFIG_DIR` | *(config root)* | `VP_CONFIG_DIR=/custom/path` |
 
 ### Image overrides

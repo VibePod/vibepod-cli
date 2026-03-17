@@ -53,4 +53,5 @@ nav:
   - Development: development.md
   - Agents: agents/index.md
   - Configuration: configuration.md
+  - LLM Integration: llm.md
   - CLI Reference: cli-reference.md

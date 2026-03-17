@@ -265,6 +265,22 @@ def run(
         **_parse_env_pairs(env or []),
     }
 
+    llm_cfg = config.get("llm", {})
+    llm_command_extra: list[str] = []
+    if llm_cfg.get("enabled") and spec.llm_env_map:
+        llm_values = {
+            "base_url": str(llm_cfg.get("base_url", "")).strip(),
+            "api_key": str(llm_cfg.get("api_key", "")).strip(),
+            "model": str(llm_cfg.get("model", "")).strip(),
+        }
+        for key, env_var in spec.llm_env_map.items():
+            value = llm_values.get(key, "")
+            if value:
+                merged_env.setdefault(env_var, value)
+        llm_model = llm_values["model"]
+        if llm_model and spec.llm_model_args:
+            llm_command_extra = [*spec.llm_model_args, llm_model]
+
     image = effective_agent_image(selected_agent, config)
 
     try:
@@ -303,6 +319,9 @@ def run(
             command = list(command or []) + spec.ikwid_args
         else:
             warning(f"IKWID mode not supported for agent '{selected_agent}', ignoring")
+
+    if llm_command_extra:
+        command = list(command or []) + llm_command_extra
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)
