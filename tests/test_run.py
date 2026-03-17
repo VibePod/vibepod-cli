@@ -535,6 +535,179 @@ def test_auto_pull_per_agent_none_falls_back_to_global(monkeypatch, tmp_path: Pa
     assert len(stub.pulled) == 1
 
 
+def test_ikwid_appends_args_for_claude(monkeypatch, tmp_path: Path) -> None:
+    """--ikwid appends --dangerously-skip-permissions to claude command."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True, ikwid=True)
+
+    assert captured["command"] == ["claude", "--dangerously-skip-permissions"]
+
+
+def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
+    """--ikwid appends --full-auto to codex command."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-codex-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["codex"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="codex", workspace=tmp_path, detach=True, ikwid=True)
+
+    assert captured["command"] == ["codex", "--full-auto"]
+
+
+def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> None:
+    """--ikwid logs warning and proceeds for agents without ikwid_args."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-gemini-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["gemini"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="gemini", workspace=tmp_path, detach=True, ikwid=True)
+
+    # Command should be unchanged (no ikwid args appended)
+    assert captured["command"] == ["gemini"]
+
+
+def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> None:
+    """Without --ikwid, command is unchanged."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True, ikwid=False)
+
+    assert captured["command"] == ["claude"]
+
+
 def test_run_accepts_short_agent_name(monkeypatch, tmp_path: Path) -> None:
     class _UnavailableDockerManager:
         def __init__(self) -> None:

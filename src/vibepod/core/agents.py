@@ -21,6 +21,7 @@ class AgentSpec:
     extra_env: dict[str, str]
     platform: str | None = None
     run_as_host_user: bool = False
+    ikwid_args: list[str] | None = None
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -32,6 +33,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         ["claude"],
         "/claude",
         {"CLAUDE_CONFIG_DIR": "/claude"},
+        ikwid_args=["--dangerously-skip-permissions"],
     ),
     "gemini": AgentSpec(
         "gemini",
@@ -88,6 +90,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         ["codex"],
         "/config",
         {"HOME": "/config"},
+        ikwid_args=["--full-auto"],
     ),
 }
 
