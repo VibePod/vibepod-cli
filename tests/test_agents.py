@@ -54,6 +54,22 @@ def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
     assert resolve_agent_name("unknown") is None
 
 
+def test_claude_spec_has_ikwid_args() -> None:
+    spec = get_agent_spec("claude")
+    assert spec.ikwid_args == ["--dangerously-skip-permissions"]
+
+
+def test_codex_spec_has_ikwid_args() -> None:
+    spec = get_agent_spec("codex")
+    assert spec.ikwid_args == ["--full-auto"]
+
+
+def test_unsupported_agents_have_no_ikwid_args() -> None:
+    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot"):
+        spec = get_agent_spec(agent)
+        assert spec.ikwid_args is None, f"{agent} should not have ikwid_args"
+
+
 def test_get_agent_shortcut_known_agent() -> None:
     expected_by_agent = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
     assert set(expected_by_agent.keys()) == set(SUPPORTED_AGENTS)

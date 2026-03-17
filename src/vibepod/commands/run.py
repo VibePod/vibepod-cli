@@ -228,6 +228,13 @@ def run(
             help="Enable image pasting via X11 clipboard (requires DISPLAY to be set)",
         ),
     ] = False,
+    ikwid: Annotated[
+        bool,
+        typer.Option(
+            "--ikwid",
+            help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
+        ),
+    ] = False,
 ) -> None:
     """Start an agent container."""
     config = get_config()
@@ -289,6 +296,13 @@ def run(
             error(str(exc))
             raise typer.Exit(1) from exc
         entrypoint = _init_entrypoint(init_commands)
+
+    if ikwid:
+        if spec.ikwid_args:
+            info(f"IKWID mode: appending {spec.ikwid_args} to {selected_agent} command")
+            command = list(command or []) + spec.ikwid_args
+        else:
+            warning(f"IKWID mode not supported for agent '{selected_agent}', ignoring")
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)
