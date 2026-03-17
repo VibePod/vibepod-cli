@@ -708,6 +708,318 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
     assert captured["command"] == ["claude"]
 
 
+def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> None:
+    """When llm.enabled=true, OPENAI_BASE_URL/API_KEY/MODEL are injected."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["llm"] = {
+        "enabled": True,
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "sk-test-key",
+        "model": "llama3",
+    }
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    env = captured["env"]
+    assert env["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
+    assert env["ANTHROPIC_API_KEY"] == "sk-test-key"
+    assert "ANTHROPIC_MODEL" not in env
+    assert captured["command"] == ["claude", "--model", "llama3"]
+
+
+def test_llm_enabled_injects_openai_env_vars_for_codex(monkeypatch, tmp_path: Path) -> None:
+    """When llm.enabled=true, codex gets OPENAI_* env vars."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-codex-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["codex"] = {"env": {}, "init": []}
+    cfg["llm"] = {
+        "enabled": True,
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "sk-test-key",
+        "model": "llama3",
+    }
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="codex", workspace=tmp_path, detach=True)
+
+    env = captured["env"]
+    assert env["CODEX_OSS_BASE_URL"] == "http://localhost:11434/v1"
+    assert "OPENAI_API_KEY" not in env
+    assert captured["command"] == ["codex", "--oss", "-m", "llama3"]
+
+
+def test_llm_disabled_does_not_inject_env_vars(monkeypatch, tmp_path: Path) -> None:
+    """When llm.enabled=false, no LLM env vars are injected."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["llm"] = {
+        "enabled": False,
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "sk-test-key",
+        "model": "llama3",
+    }
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    env = captured["env"]
+    assert "ANTHROPIC_BASE_URL" not in env
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_MODEL" not in env
+
+
+def test_llm_skipped_for_agent_without_mapping(monkeypatch, tmp_path: Path) -> None:
+    """Agents without llm_env_map get no LLM env vars even when enabled."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-gemini-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["gemini"] = {"env": {}, "init": []}
+    cfg["llm"] = {
+        "enabled": True,
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "sk-test",
+        "model": "llama3",
+    }
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="gemini", workspace=tmp_path, detach=True)
+
+    env = captured["env"]
+    assert "ANTHROPIC_BASE_URL" not in env
+    assert "OPENAI_BASE_URL" not in env
+
+
+def test_llm_empty_model_not_injected(monkeypatch, tmp_path: Path) -> None:
+    """When llm.model is empty, model env var is not set."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["llm"] = {
+        "enabled": True,
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "sk-test",
+        "model": "",
+    }
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    env = captured["env"]
+    assert env["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
+    assert captured["command"] == ["claude"]
+
+
+def test_llm_per_agent_env_overrides_llm(monkeypatch, tmp_path: Path) -> None:
+    """Per-agent env settings take precedence over LLM injection."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["claude"]["env"] = {"ANTHROPIC_BASE_URL": "http://custom:9999/v1"}
+    cfg["llm"] = {
+        "enabled": True,
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "sk-test",
+        "model": "llama3",
+    }
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    env = captured["env"]
+    assert env["ANTHROPIC_BASE_URL"] == "http://custom:9999/v1"
+
+
 def test_run_accepts_short_agent_name(monkeypatch, tmp_path: Path) -> None:
     class _UnavailableDockerManager:
         def __init__(self) -> None:

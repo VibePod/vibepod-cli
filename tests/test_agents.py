@@ -77,3 +77,26 @@ def test_get_agent_shortcut_known_agent() -> None:
         assert get_agent_shortcut(agent) == expected_by_agent[agent]
         assert get_agent_shortcut(f" {agent.upper()} ") == expected_by_agent[agent]
     assert get_agent_shortcut("unknown") is None
+
+
+def test_claude_spec_has_llm_env_map() -> None:
+    spec = get_agent_spec("claude")
+    assert spec.llm_env_map == {
+        "base_url": "ANTHROPIC_BASE_URL",
+        "api_key": "ANTHROPIC_API_KEY",
+    }
+    assert spec.llm_model_args == ["--model"]
+
+
+def test_codex_spec_has_llm_env_map() -> None:
+    spec = get_agent_spec("codex")
+    assert spec.llm_env_map == {
+        "base_url": "CODEX_OSS_BASE_URL",
+    }
+    assert spec.llm_model_args == ["--oss", "-m"]
+
+
+def test_agents_without_llm_env_map() -> None:
+    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot"):
+        spec = get_agent_spec(agent)
+        assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"

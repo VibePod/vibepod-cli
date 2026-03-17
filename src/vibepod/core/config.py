@@ -105,6 +105,12 @@ def _default_config() -> dict[str, Any]:
             "ca_dir": str(config_root / "proxy" / "mitmproxy"),
             "ca_path": str(config_root / "proxy" / "mitmproxy" / "mitmproxy-ca-cert.pem"),
         },
+        "llm": {
+            "enabled": False,
+            "base_url": "",
+            "api_key": "",
+            "model": "",
+        },
         "aliases": DEFAULT_ALIASES.copy(),
     }
 
@@ -146,6 +152,10 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
         "VP_NO_COLOR": ("no_color", lambda x: x.lower() == "true"),
         "VP_DATASETTE_PORT": ("logging.ui_port", int),
         "VP_PROXY_ENABLED": ("proxy.enabled", lambda x: x.lower() == "true"),
+        "VP_LLM_ENABLED": ("llm.enabled", lambda x: x.lower() == "true"),
+        "VP_LLM_BASE_URL": ("llm.base_url", str),
+        "VP_LLM_API_KEY": ("llm.api_key", str),
+        "VP_LLM_MODEL": ("llm.model", str),
     }
 
     for env_key, (config_path, converter) in mappings.items():
