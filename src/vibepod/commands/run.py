@@ -276,7 +276,9 @@ def run(
         for key, env_var in spec.llm_env_map.items():
             value = llm_values.get(key, "")
             if value:
-                merged_env.setdefault(env_var, value)
+                targets = [env_var] if isinstance(env_var, str) else env_var
+                for target in targets:
+                    merged_env.setdefault(target, value)
         llm_model = llm_values["model"]
         if llm_model and spec.llm_model_args:
             llm_command_extra = [*spec.llm_model_args, llm_model]

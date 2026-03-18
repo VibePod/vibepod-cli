@@ -757,7 +757,11 @@ def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> Non
     env = captured["env"]
     assert env["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
     assert env["ANTHROPIC_API_KEY"] == "sk-test-key"
-    assert "ANTHROPIC_MODEL" not in env
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-test-key"
+    assert env["ANTHROPIC_MODEL"] == "llama3"
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "llama3"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "llama3"
+    assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "llama3"
     assert captured["command"] == ["claude", "--model", "llama3"]
 
 
@@ -863,6 +867,10 @@ def test_llm_disabled_does_not_inject_env_vars(monkeypatch, tmp_path: Path) -> N
     env = captured["env"]
     assert "ANTHROPIC_BASE_URL" not in env
     assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert "ANTHROPIC_DEFAULT_OPUS_MODEL" not in env
+    assert "ANTHROPIC_DEFAULT_SONNET_MODEL" not in env
+    assert "ANTHROPIC_DEFAULT_HAIKU_MODEL" not in env
     assert "ANTHROPIC_MODEL" not in env
 
 
@@ -966,6 +974,9 @@ def test_llm_empty_model_not_injected(monkeypatch, tmp_path: Path) -> None:
 
     env = captured["env"]
     assert env["ANTHROPIC_BASE_URL"] == "http://localhost:11434/v1"
+    assert "ANTHROPIC_DEFAULT_OPUS_MODEL" not in env
+    assert "ANTHROPIC_DEFAULT_SONNET_MODEL" not in env
+    assert "ANTHROPIC_DEFAULT_HAIKU_MODEL" not in env
     assert captured["command"] == ["claude"]
 
 
