@@ -83,7 +83,13 @@ def test_claude_spec_has_llm_env_map() -> None:
     spec = get_agent_spec("claude")
     assert spec.llm_env_map == {
         "base_url": "ANTHROPIC_BASE_URL",
-        "api_key": "ANTHROPIC_API_KEY",
+        "api_key": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+        "model": [
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ],
     }
     assert spec.llm_model_args == ["--model"]
 

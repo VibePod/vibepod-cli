@@ -22,7 +22,7 @@ class AgentSpec:
     platform: str | None = None
     run_as_host_user: bool = False
     ikwid_args: list[str] | None = None
-    llm_env_map: dict[str, str] | None = None
+    llm_env_map: dict[str, str | list[str]] | None = None
     llm_model_args: list[str] | None = None
 
 
@@ -36,7 +36,16 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/claude",
         {"CLAUDE_CONFIG_DIR": "/claude"},
         ikwid_args=["--dangerously-skip-permissions"],
-        llm_env_map={"base_url": "ANTHROPIC_BASE_URL", "api_key": "ANTHROPIC_API_KEY"},
+        llm_env_map={
+            "base_url": "ANTHROPIC_BASE_URL",
+            "api_key": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+            "model": [
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            ],
+        },
         llm_model_args=["--model"],
     ),
     "gemini": AgentSpec(

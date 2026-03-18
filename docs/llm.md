@@ -6,7 +6,7 @@ VibePod can connect agents to external LLM servers that expose OpenAI- or Anthro
 
 | Agent | Env vars injected | CLI flags appended |
 |-------|------------------|--------------------|
-| claude | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` | `--model <model>` |
+| claude | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `--model <model>` |
 | codex | `CODEX_OSS_BASE_URL` | `--oss -m <model>` |
 
 Other agents do not yet have LLM mapping and will not receive any LLM configuration.
@@ -42,6 +42,11 @@ vp run claude
 # Starts Claude Code with:
 #   ANTHROPIC_BASE_URL=http://host.docker.internal:11434
 #   ANTHROPIC_API_KEY=ollama
+#   ANTHROPIC_AUTH_TOKEN=ollama
+#   ANTHROPIC_MODEL=qwen3:14b
+#   ANTHROPIC_DEFAULT_OPUS_MODEL=qwen3:14b
+#   ANTHROPIC_DEFAULT_SONNET_MODEL=qwen3:14b
+#   ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3:14b
 #   claude --model qwen3:14b
 
 vp run codex
