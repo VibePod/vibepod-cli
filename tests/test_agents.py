@@ -61,7 +61,7 @@ def test_claude_spec_has_ikwid_args() -> None:
 
 def test_codex_spec_has_ikwid_args() -> None:
     spec = get_agent_spec("codex")
-    assert spec.ikwid_args == ["--full-auto"]
+    assert spec.ikwid_args == ["--dangerously-bypass-approvals-and-sandbox"]
 
 
 def test_unsupported_agents_have_no_ikwid_args() -> None:
