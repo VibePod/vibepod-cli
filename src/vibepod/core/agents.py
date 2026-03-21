@@ -103,7 +103,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         ["codex"],
         "/config",
         {"HOME": "/config"},
-        ikwid_args=["--full-auto"],
+        ikwid_args=["--dangerously-bypass-approvals-and-sandbox"],
         llm_env_map={
             "base_url": "CODEX_OSS_BASE_URL",
         },

@@ -578,7 +578,7 @@ def test_ikwid_appends_args_for_claude(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
-    """--ikwid appends --full-auto to codex command."""
+    """--ikwid appends --dangerously-bypass-approvals-and-sandbox to codex command."""
     captured: dict = {}
 
     class _CapturingDockerManager:
@@ -618,7 +618,7 @@ def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
 
     run_cmd.run(agent="codex", workspace=tmp_path, detach=True, ikwid=True)
 
-    assert captured["command"] == ["codex", "--full-auto"]
+    assert captured["command"] == ["codex", "--dangerously-bypass-approvals-and-sandbox"]
 
 
 def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> None:
