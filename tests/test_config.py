@@ -126,6 +126,28 @@ def test_default_config_exposes_agent_auto_pull(monkeypatch, tmp_path: Path) -> 
         assert agents[agent]["auto_pull"] is None
 
 
+def test_default_config_exposes_container_userns_mode(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+    assert config["container_userns_mode"] is None
+
+
+def test_container_userns_mode_env_override(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VP_CONTAINER_USERNS_MODE", "keep-id")
+    config = get_config()
+    assert config["container_userns_mode"] == "keep-id"
+
+
+def test_container_runtime_env_override_is_normalized(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VP_CONTAINER_RUNTIME", " PodMan ")
+    config = get_config()
+    assert config["container_runtime"] == "podman"
+
+
 def test_per_agent_auto_pull_override(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
     global_config = tmp_path / "config.yaml"
@@ -163,3 +185,38 @@ def test_llm_env_overrides(monkeypatch, tmp_path: Path) -> None:
     assert llm["base_url"] == "http://localhost:11434/v1"
     assert llm["api_key"] == "sk-test"
     assert llm["model"] == "llama3"
+
+
+def test_config_runtime_shows_saved_global_runtime(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+
+    result = runner.invoke(app, ["config", "runtime"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "auto"
+
+
+def test_config_runtime_updates_global_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    global_config = tmp_path / "config.yaml"
+    global_config.write_text("default_agent: codex\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["config", "runtime", "podman"])
+
+    assert result.exit_code == 0
+    loaded = yaml.safe_load(global_config.read_text(encoding="utf-8"))
+    assert loaded == {
+        "default_agent": "codex",
+        "container_runtime": "podman",
+    }
+    assert "Set default container runtime to 'podman'" in result.stdout
+
+
+def test_config_runtime_rejects_unknown_value(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+
+    result = runner.invoke(app, ["config", "runtime", "nerdctl"])
+
+    assert result.exit_code == 1
+    assert "Supported: auto, docker, podman" in result.stdout
+    assert not (tmp_path / "config.yaml").exists()

@@ -53,6 +53,7 @@ def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
 
     manager = object.__new__(DockerManager)
     manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
 
     workspace = tmp_path / "workspace"
     config_dir = tmp_path / "agents" / "auggie"
@@ -102,6 +103,7 @@ def test_run_agent_forwards_platform_and_user(tmp_path: Path) -> None:
 
     manager = object.__new__(DockerManager)
     manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
 
     workspace = tmp_path / "workspace"
     config_dir = tmp_path / "agents" / "devstral"
@@ -130,6 +132,132 @@ def test_run_agent_forwards_platform_and_user(tmp_path: Path) -> None:
     assert run_kwargs["user"] == "1000:1000"
 
 
+def test_run_agent_forwards_userns_mode(tmp_path: Path) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "agent"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "podman"
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "claude"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    manager.run_agent(
+        agent="claude",
+        image="vibepod/claude:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/claude",
+        env={},
+        command=["claude"],
+        auto_remove=True,
+        name=None,
+        version="0.2.1",
+        network="vibepod-network",
+        userns_mode="keep-id",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert run_kwargs["userns_mode"] == "keep-id"
+
+
+def test_run_agent_omits_podman_userns_mode_for_docker(tmp_path: Path) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "agent"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "claude"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    manager.run_agent(
+        agent="claude",
+        image="vibepod/claude:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/claude",
+        env={},
+        command=["claude"],
+        auto_remove=True,
+        name=None,
+        version="0.2.1",
+        network="vibepod-network",
+        userns_mode="keep-id",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert "userns_mode" not in run_kwargs
+
+
+def test_run_agent_preserves_host_userns_mode_for_docker(tmp_path: Path) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "agent"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "claude"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    manager.run_agent(
+        agent="claude",
+        image="vibepod/claude:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/claude",
+        env={},
+        command=["claude"],
+        auto_remove=True,
+        name=None,
+        version="0.2.1",
+        network="vibepod-network",
+        userns_mode="host",
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    assert run_kwargs["userns_mode"] == "host"
+
+
 def test_run_agent_forwards_entrypoint(tmp_path: Path) -> None:
     class _FakeContainers:
         def __init__(self) -> None:
@@ -145,6 +273,7 @@ def test_run_agent_forwards_entrypoint(tmp_path: Path) -> None:
 
     manager = object.__new__(DockerManager)
     manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "docker"
 
     workspace = tmp_path / "workspace"
     config_dir = tmp_path / "agents" / "claude"
@@ -187,6 +316,8 @@ def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path)
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -218,7 +349,7 @@ def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path)
 
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
 
@@ -232,6 +363,8 @@ def test_paste_images_flag_warns_when_display_not_set(monkeypatch, tmp_path: Pat
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -263,7 +396,7 @@ def test_paste_images_flag_warns_when_display_not_set(monkeypatch, tmp_path: Pat
 
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
 
@@ -276,6 +409,8 @@ def test_paste_images_false_does_not_add_x11(monkeypatch, tmp_path: Path) -> Non
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -307,7 +442,7 @@ def test_paste_images_false_does_not_add_x11(monkeypatch, tmp_path: Path) -> Non
 
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=False)
 
@@ -411,6 +546,9 @@ class _StubDockerManager:
 
     def __init__(self) -> None:
         self.pulled: list[str] = []
+        self.runtime = "docker"
+        self.ensure_proxy_kwargs: dict | None = None
+        self.run_agent_kwargs: dict | None = None
         self._container = type(
             "_Container",
             (),
@@ -424,6 +562,24 @@ class _StubDockerManager:
                 "logs": lambda self, **kw: b"",
             },
         )()
+        self._proxy = type(
+            "_Proxy",
+            (),
+            {
+                "name": "vibepod-proxy",
+                "status": "running",
+                "attrs": {
+                    "NetworkSettings": {
+                        "Networks": {
+                            "vibepod-network": {
+                                "IPAddress": "172.18.0.2",
+                            }
+                        }
+                    }
+                },
+                "reload": lambda self: None,
+            },
+        )()
 
     def ensure_network(self, name: str) -> None:
         pass
@@ -431,10 +587,15 @@ class _StubDockerManager:
     def pull_image(self, image: str) -> None:
         self.pulled.append(image)
 
-    def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
-        pass
+    def pull_if_newer(self, image: str) -> bool:
+        return False
+
+    def ensure_proxy(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+        self.ensure_proxy_kwargs = kwargs
+        return self._proxy
 
     def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+        self.run_agent_kwargs = kwargs
         return self._container
 
     def networks_with_running_containers(self) -> list[str]:
@@ -444,6 +605,7 @@ class _StubDockerManager:
 def _make_config(
     global_auto_pull: bool = False,
     agent_auto_pull: bool | None = None,
+    container_userns_mode: str | None = None,
 ) -> dict:
     agent_cfg: dict = {"env": {}, "init": []}
     if agent_auto_pull is not None:
@@ -452,6 +614,7 @@ def _make_config(
         "default_agent": "claude",
         "auto_pull": global_auto_pull,
         "auto_remove": True,
+        "container_userns_mode": container_userns_mode,
         "network": "vibepod-network",
         "agents": {"claude": agent_cfg},
         "proxy": {"enabled": False},
@@ -463,7 +626,7 @@ def test_auto_pull_global_triggers_pull(monkeypatch, tmp_path: Path) -> None:
     """Global auto_pull=true causes image pull on run."""
     stub = _StubDockerManager()
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config(global_auto_pull=True))
-    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
     assert len(stub.pulled) == 1
@@ -473,7 +636,7 @@ def test_auto_pull_global_false_skips_pull(monkeypatch, tmp_path: Path) -> None:
     """Global auto_pull=false skips image pull."""
     stub = _StubDockerManager()
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config(global_auto_pull=False))
-    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
     assert stub.pulled == []
@@ -487,7 +650,7 @@ def test_auto_pull_per_agent_true_overrides_global_false(monkeypatch, tmp_path: 
         "get_config",
         lambda: _make_config(global_auto_pull=False, agent_auto_pull=True),
     )
-    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
     assert len(stub.pulled) == 1
@@ -501,7 +664,7 @@ def test_auto_pull_per_agent_false_overrides_global_true(monkeypatch, tmp_path: 
         "get_config",
         lambda: _make_config(global_auto_pull=True, agent_auto_pull=False),
     )
-    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
     assert stub.pulled == []
@@ -515,7 +678,7 @@ def test_auto_pull_cli_flag_overrides_config(monkeypatch, tmp_path: Path) -> Non
         "get_config",
         lambda: _make_config(global_auto_pull=False, agent_auto_pull=False),
     )
-    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, pull=True)
     assert len(stub.pulled) == 1
@@ -529,7 +692,7 @@ def test_auto_pull_per_agent_none_falls_back_to_global(monkeypatch, tmp_path: Pa
         "get_config",
         lambda: _make_config(global_auto_pull=True, agent_auto_pull=None),
     )
-    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
     assert len(stub.pulled) == 1
@@ -540,6 +703,8 @@ def test_ikwid_appends_args_for_claude(monkeypatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -570,7 +735,7 @@ def test_ikwid_appends_args_for_claude(monkeypatch, tmp_path: Path) -> None:
             return container
 
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, ikwid=True)
 
@@ -582,6 +747,8 @@ def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -614,7 +781,7 @@ def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
     cfg = _make_config()
     cfg["agents"]["codex"] = {"env": {}, "init": []}
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="codex", workspace=tmp_path, detach=True, ikwid=True)
 
@@ -626,6 +793,8 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -658,7 +827,7 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
     cfg = _make_config()
     cfg["agents"]["gemini"] = {"env": {}, "init": []}
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="gemini", workspace=tmp_path, detach=True, ikwid=True)
 
@@ -671,6 +840,8 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -701,7 +872,7 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
             return container
 
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, ikwid=False)
 
@@ -713,6 +884,8 @@ def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> Non
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -750,7 +923,7 @@ def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> Non
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
@@ -770,6 +943,8 @@ def test_llm_enabled_injects_openai_env_vars_for_codex(monkeypatch, tmp_path: Pa
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -808,7 +983,7 @@ def test_llm_enabled_injects_openai_env_vars_for_codex(monkeypatch, tmp_path: Pa
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="codex", workspace=tmp_path, detach=True)
 
@@ -823,6 +998,8 @@ def test_llm_disabled_does_not_inject_env_vars(monkeypatch, tmp_path: Path) -> N
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -860,7 +1037,7 @@ def test_llm_disabled_does_not_inject_env_vars(monkeypatch, tmp_path: Path) -> N
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
@@ -879,6 +1056,8 @@ def test_llm_skipped_for_agent_without_mapping(monkeypatch, tmp_path: Path) -> N
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -917,7 +1096,7 @@ def test_llm_skipped_for_agent_without_mapping(monkeypatch, tmp_path: Path) -> N
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="gemini", workspace=tmp_path, detach=True)
 
@@ -931,6 +1110,8 @@ def test_llm_empty_model_not_injected(monkeypatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -968,7 +1149,7 @@ def test_llm_empty_model_not_injected(monkeypatch, tmp_path: Path) -> None:
         "model": "",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
@@ -985,6 +1166,8 @@ def test_llm_per_agent_env_overrides_llm(monkeypatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -1023,7 +1206,7 @@ def test_llm_per_agent_env_overrides_llm(monkeypatch, tmp_path: Path) -> None:
         "model": "llama3",
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
@@ -1032,18 +1215,71 @@ def test_llm_per_agent_env_overrides_llm(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_run_accepts_short_agent_name(monkeypatch, tmp_path: Path) -> None:
-    class _UnavailableDockerManager:
-        def __init__(self) -> None:
-            raise DockerClientError("Docker unavailable")
+    def _unavailable_get_manager(**kwargs):
+        raise DockerClientError("Docker unavailable")
 
     monkeypatch.setattr(
         run_cmd,
         "get_config",
         lambda: {"default_agent": "claude", "agents": {"claude": {"env": {}}}},
     )
-    monkeypatch.setattr(run_cmd, "DockerManager", _UnavailableDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", _unavailable_get_manager)
 
     with pytest.raises(typer.Exit) as exc:
         run_cmd.run(agent="c", workspace=tmp_path)
 
     assert exc.value.exit_code == EXIT_DOCKER_NOT_RUNNING
+
+
+def test_run_passes_configured_userns_mode(monkeypatch, tmp_path: Path) -> None:
+    stub = _StubDockerManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _make_config(container_userns_mode="keep-id"),
+    )
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    assert stub.run_agent_kwargs is not None
+    assert stub.run_agent_kwargs["userns_mode"] == "keep-id"
+
+
+def test_run_cli_userns_overrides_config(monkeypatch, tmp_path: Path) -> None:
+    stub = _StubDockerManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _make_config(container_userns_mode="host"),
+    )
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True, userns="keep-id")
+
+    assert stub.run_agent_kwargs is not None
+    assert stub.run_agent_kwargs["userns_mode"] == "keep-id"
+
+
+def test_run_uses_proxy_container_ip_for_proxy_env(monkeypatch, tmp_path: Path) -> None:
+    stub = _StubDockerManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: {
+            **_make_config(),
+            "proxy": {
+                "enabled": True,
+                "image": "vibepod/proxy:latest",
+                "db_path": str(tmp_path / "proxy" / "proxy.db"),
+            },
+        },
+    )
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    assert stub.run_agent_kwargs is not None
+    env = stub.run_agent_kwargs["env"]
+    assert env["HTTP_PROXY"] == "http://172.18.0.2:8080"
+    assert env["HTTPS_PROXY"] == "http://172.18.0.2:8080"
