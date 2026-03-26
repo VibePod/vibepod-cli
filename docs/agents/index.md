@@ -7,11 +7,11 @@ VibePod manages each agent as a Docker container. Credentials and config are per
 | Agent | Provider | Shortcut | Image |
 |-------|----------|----------|-------|
 | `claude` | Anthropic | `vp c` | `vibepod/claude:latest` |
-| `gemini` | Google | `vp g` | `nezhar/gemini-container:latest` |
-| `opencode` | OpenAI | `vp o` | `nezhar/opencode-cli:latest` |
-| `devstral` | Mistral | `vp d` | `nezhar/devstral-cli:latest` |
-| `auggie` | Augment Code | `vp a` | `nezhar/auggie-cli:latest` |
-| `copilot` | GitHub | `vp p` | `nezhar/copilot-cli:latest` |
+| `gemini` | Google | `vp g` | `vibepod/gemini:latest` |
+| `opencode` | OpenAI | `vp o` | `vibepod/opencode:latest` |
+| `devstral` | Mistral | `vp d` | `vibepod/devstral:latest` |
+| `auggie` | Augment Code | `vp a` | `vibepod/auggie:latest` |
+| `copilot` | GitHub | `vp p` | `vibepod/copilot:latest` |
 | `codex` | OpenAI | `vp x` | `vibepod/codex:latest` |
 
 ## First run & authentication

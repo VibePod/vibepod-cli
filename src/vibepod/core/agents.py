@@ -53,7 +53,9 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "google",
         DEFAULT_IMAGES["gemini"],
         "gemini",
-        ["gemini"],
+        # Run via node to bypass shebang parsing in Alpine BusyBox (/usr/bin/env has no -S),
+        # and force HOME to the mounted config path expected by VibePod.
+        ["env", "HOME=/config", "node", "/usr/local/bin/gemini"],
         "/config",
         {"HOME": "/config"},
     ),

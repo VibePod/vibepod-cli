@@ -45,35 +45,35 @@ agents:
 
   gemini:
     enabled: true
-    image: nezhar/gemini-container:latest
+    image: vibepod/gemini:latest
     env: {}
     volumes: []
     init: []
 
   opencode:
     enabled: true
-    image: nezhar/opencode-cli:latest
+    image: vibepod/opencode:latest
     env: {}
     volumes: []
     init: []
 
   devstral:
     enabled: true
-    image: nezhar/devstral-cli:latest
+    image: vibepod/devstral:latest
     env: {}
     volumes: []
     init: []
 
   auggie:
     enabled: true
-    image: nezhar/auggie-cli:latest
+    image: vibepod/auggie:latest
     env: {}
     volumes: []
     init: []
 
   copilot:
     enabled: true
-    image: nezhar/copilot-cli:latest
+    image: vibepod/copilot:latest
     env: {}
     volumes: []
     init: []

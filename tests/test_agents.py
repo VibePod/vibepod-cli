@@ -64,6 +64,11 @@ def test_codex_spec_has_ikwid_args() -> None:
     assert spec.ikwid_args == ["--dangerously-bypass-approvals-and-sandbox"]
 
 
+def test_gemini_spec_runs_via_node_wrapper() -> None:
+    spec = get_agent_spec("gemini")
+    assert spec.command == ["env", "HOME=/config", "node", "/usr/local/bin/gemini"]
+
+
 def test_unsupported_agents_have_no_ikwid_args() -> None:
     for agent in ("gemini", "opencode", "devstral", "auggie", "copilot"):
         spec = get_agent_spec(agent)

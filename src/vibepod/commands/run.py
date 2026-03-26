@@ -165,6 +165,14 @@ def _host_user() -> str | None:
     return f"{getuid()}:{getgid()}"
 
 
+def _terminal_env_defaults() -> dict[str, str]:
+    """Return host terminal-related env vars for interactive container apps."""
+    keys = ("TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "LANG")
+    values = {key: value for key in keys if (value := os.environ.get(key))}
+    values.setdefault("TERM", "xterm-256color")
+    return values
+
+
 def _compose_file_present(workspace: Path) -> bool:
     return (workspace / "docker-compose.yml").exists() or (workspace / "compose.yml").exists()
 
@@ -260,6 +268,7 @@ def run(
     merged_env = {
         "USER_UID": str(os.getuid()),
         "USER_GID": str(os.getgid()),
+        **_terminal_env_defaults(),
         **spec.extra_env,
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
