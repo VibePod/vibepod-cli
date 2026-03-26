@@ -62,7 +62,7 @@ def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
 
     manager.run_agent(
         agent="auggie",
-        image="nezhar/auggie-cli:latest",
+        image="vibepod/auggie:latest",
         workspace=workspace,
         config_dir=config_dir,
         config_mount_path="/config",
@@ -110,7 +110,7 @@ def test_run_agent_forwards_platform_and_user(tmp_path: Path) -> None:
 
     manager.run_agent(
         agent="devstral",
-        image="nezhar/devstral-cli:latest",
+        image="vibepod/devstral:latest",
         workspace=workspace,
         config_dir=config_dir,
         config_mount_path="/config",
@@ -663,7 +663,7 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
     run_cmd.run(agent="gemini", workspace=tmp_path, detach=True, ikwid=True)
 
     # Command should be unchanged (no ikwid args appended)
-    assert captured["command"] == ["gemini"]
+    assert captured["command"] == ["env", "HOME=/config", "node", "/usr/local/bin/gemini"]
 
 
 def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> None:
@@ -1047,3 +1047,101 @@ def test_run_accepts_short_agent_name(monkeypatch, tmp_path: Path) -> None:
         run_cmd.run(agent="c", workspace=tmp_path)
 
     assert exc.value.exit_code == EXIT_DOCKER_NOT_RUNNING
+
+
+def test_run_forwards_host_terminal_env(monkeypatch, tmp_path: Path) -> None:
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-gemini-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("COLORTERM", "truecolor")
+    monkeypatch.setenv("TERM_PROGRAM", "vscode")
+    monkeypatch.setenv("TERM_PROGRAM_VERSION", "1.100.0")
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="gemini", workspace=tmp_path, detach=True)
+
+    env = captured["env"]
+    assert env["TERM"] == "xterm-256color"
+    assert env["COLORTERM"] == "truecolor"
+    assert env["TERM_PROGRAM"] == "vscode"
+    assert env["TERM_PROGRAM_VERSION"] == "1.100.0"
+    assert env["LANG"] == "en_US.UTF-8"
+
+
+def test_run_sets_default_term_when_host_term_missing(monkeypatch, tmp_path: Path) -> None:
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-gemini-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.delenv("COLORTERM", raising=False)
+    monkeypatch.delenv("TERM_PROGRAM", raising=False)
+    monkeypatch.delenv("TERM_PROGRAM_VERSION", raising=False)
+    monkeypatch.delenv("LANG", raising=False)
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="gemini", workspace=tmp_path, detach=True)
+
+    env = captured["env"]
+    assert env["TERM"] == "xterm-256color"
