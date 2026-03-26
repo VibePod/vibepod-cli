@@ -71,16 +71,16 @@ machine.
 
 ## Image Namespace
 
-By default, agent images use the `vibepod` namespace for Claude, Codex, and platform services, and `nezhar` for Gemini/OpenCode/Devstral/Auggie/Copilot.
+All agent images are published under the [`vibepod` namespace on Docker Hub](https://hub.docker.com/u/vibepod). Source Dockerfiles are in [VibePod/vibepod-agents](https://github.com/VibePod/vibepod-agents/tree/main/docker).
 
-Current defaults are aligned to existing container repos:
+Current defaults:
 
 - `claude` -> `vibepod/claude:latest`
-- `gemini` -> `nezhar/gemini-container:latest` ([repo](https://github.com/nezhar/gemini-container))
-- `opencode` -> `nezhar/opencode-cli:latest` ([repo](https://github.com/nezhar/opencode-container))
-- `devstral` -> `nezhar/devstral-cli:latest` ([repo](https://github.com/nezhar/devstral-container))
-- `auggie` -> `nezhar/auggie-cli:latest` ([repo](https://github.com/nezhar/auggie-container))
-- `copilot` -> `nezhar/copilot-cli:latest` ([repo](https://github.com/nezhar/copilot-container))
+- `gemini` -> `vibepod/gemini:latest`
+- `opencode` -> `vibepod/opencode:latest`
+- `devstral` -> `vibepod/devstral:latest`
+- `auggie` -> `vibepod/auggie:latest`
+- `copilot` -> `vibepod/copilot:latest`
 - `codex` -> `vibepod/codex:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
@@ -91,11 +91,11 @@ You can override any single image directly:
 
 ```bash
 VP_IMAGE_CLAUDE=vibepod/claude:latest vp run claude
-VP_IMAGE_GEMINI=nezhar/gemini-container:latest vp run gemini
-VP_IMAGE_OPENCODE=nezhar/opencode-cli:latest vp run opencode
-VP_IMAGE_DEVSTRAL=nezhar/devstral-cli:latest vp run devstral
-VP_IMAGE_AUGGIE=nezhar/auggie-cli:latest vp run auggie
-VP_IMAGE_COPILOT=nezhar/copilot-cli:latest vp run copilot
+VP_IMAGE_GEMINI=vibepod/gemini:latest vp run gemini
+VP_IMAGE_OPENCODE=vibepod/opencode:latest vp run opencode
+VP_IMAGE_DEVSTRAL=vibepod/devstral:latest vp run devstral
+VP_IMAGE_AUGGIE=vibepod/auggie:latest vp run auggie
+VP_IMAGE_COPILOT=vibepod/copilot:latest vp run copilot
 VP_IMAGE_CODEX=vibepod/codex:latest vp run codex
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 ```

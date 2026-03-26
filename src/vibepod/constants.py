@@ -60,23 +60,23 @@ def get_default_images() -> dict[str, str]:
         ),
         "gemini": os.environ.get(
             "VP_IMAGE_GEMINI",
-            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/gemini-container:latest",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/gemini:latest",
         ),
         "opencode": os.environ.get(
             "VP_IMAGE_OPENCODE",
-            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/opencode-cli:latest",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/opencode:latest",
         ),
         "devstral": os.environ.get(
             "VP_IMAGE_DEVSTRAL",
-            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/devstral-cli:latest",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/devstral:latest",
         ),
         "auggie": os.environ.get(
             "VP_IMAGE_AUGGIE",
-            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/auggie-cli:latest",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/auggie:latest",
         ),
         "copilot": os.environ.get(
             "VP_IMAGE_COPILOT",
-            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'nezhar')}/copilot-cli:latest",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/copilot:latest",
         ),
         "codex": os.environ.get(
             "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/codex:latest"
