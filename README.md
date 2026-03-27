@@ -1,10 +1,16 @@
-# VibePod
+<p align="center">
+  <img src="docs/assets/icon.png" alt="VibePod icon" width="150" />
+</p>
 
-[![Docs](https://img.shields.io/badge/docs-vibepod.dev-blue)](https://vibepod.dev/docs/)
-[![PyPI](https://img.shields.io/pypi/v/vibepod)](https://pypi.org/project/vibepod/)
-[![CI](https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml)
-[![Docs Build](https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml/badge.svg)](https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml)
-![License](https://img.shields.io/github/license/VibePod/vibepod-cli)
+<h1 align="center">VibePod</h1>
+
+<p align="center">
+  <a href="https://vibepod.dev/docs/"><img alt="Docs" src="https://img.shields.io/badge/docs-vibepod.dev-blue" /></a>
+  <a href="https://pypi.org/project/vibepod/"><img alt="PyPI" src="https://img.shields.io/pypi/v/vibepod" /></a>
+  <a href="https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml"><img alt="Docs Build" src="https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml/badge.svg" /></a>
+  <img alt="License" src="https://img.shields.io/github/license/VibePod/vibepod-cli" />
+</p>
 
 VibePod is a unified CLI (`vp`) for running AI coding agents in isolated
 Docker containers — no required configuration, no setup. Just
@@ -39,6 +45,18 @@ vp run codex
 ```
 
 ![VibePod CLI preview](docs/assets/preview.png)
+
+## Tool Thumbnails
+
+<p>
+  <a href="docs/assets/claude%20code.png"><img src="docs/assets/claude%20code.png" alt="Claude Code" width="180" /></a>
+  <a href="docs/assets/google%20gemini.png"><img src="docs/assets/google%20gemini.png" alt="Google Gemini" width="180" /></a>
+  <a href="docs/assets/openai%20codex.png"><img src="docs/assets/openai%20codex.png" alt="OpenAI Codex" width="180" /></a>
+  <a href="docs/assets/github%20copilot.png"><img src="docs/assets/github%20copilot.png" alt="GitHub Copilot" width="180" /></a>
+  <a href="docs/assets/opencode.png"><img src="docs/assets/opencode.png" alt="OpenCode" width="180" /></a>
+  <a href="docs/assets/mistral%20vibe.png"><img src="docs/assets/mistral%20vibe.png" alt="Mistral Vibe" width="180" /></a>
+  <a href="docs/assets/augment%20auggie.png"><img src="docs/assets/augment%20auggie.png" alt="Augment Auggie" width="180" /></a>
+</p>
 
 ## Current Status
 
