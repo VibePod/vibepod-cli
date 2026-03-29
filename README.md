@@ -21,7 +21,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral, Copilot, Auggie & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie & more
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
 - 🔒 **Privacy-first** — all metrics collected and stored locally, never sent to the cloud
@@ -42,7 +42,22 @@ vp run <agent>
 # examples:
 vp run claude
 vp run codex
+vp run vibe   # alias of devstral
 ```
+
+## IKWID Mode (`--ikwid`)
+
+Use `--ikwid` to append each agent's auto-approval / permission-skip flag when supported.
+
+| Agent | `--ikwid` appended args |
+|---|---|
+| `claude` | `--dangerously-skip-permissions` |
+| `gemini` | `--approval-mode=yolo` |
+| `devstral` (`vibe`) | `--auto-approve` |
+| `copilot` | `--yolo` |
+| `codex` | `--dangerously-bypass-approvals-and-sandbox` |
+| `opencode` | Not supported |
+| `auggie` | Not supported |
 
 ![VibePod CLI preview](docs/assets/preview.png)
 
@@ -96,7 +111,7 @@ Current defaults:
 - `claude` -> `vibepod/claude:latest`
 - `gemini` -> `vibepod/gemini:latest`
 - `opencode` -> `vibepod/opencode:latest`
-- `devstral` -> `vibepod/devstral:latest`
+- `devstral` (alias: `vibe`) -> `vibepod/devstral:latest`
 - `auggie` -> `vibepod/auggie:latest`
 - `copilot` -> `vibepod/copilot:latest`
 - `codex` -> `vibepod/codex:latest`
@@ -112,6 +127,7 @@ VP_IMAGE_CLAUDE=vibepod/claude:latest vp run claude
 VP_IMAGE_GEMINI=vibepod/gemini:latest vp run gemini
 VP_IMAGE_OPENCODE=vibepod/opencode:latest vp run opencode
 VP_IMAGE_DEVSTRAL=vibepod/devstral:latest vp run devstral
+VP_IMAGE_DEVSTRAL=vibepod/devstral:latest vp run vibe   # same agent/image as devstral
 VP_IMAGE_AUGGIE=vibepod/auggie:latest vp run auggie
 VP_IMAGE_COPILOT=vibepod/copilot:latest vp run copilot
 VP_IMAGE_CODEX=vibepod/codex:latest vp run codex

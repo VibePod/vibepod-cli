@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from vibepod.constants import AGENT_SHORTCUTS, DEFAULT_IMAGES, SUPPORTED_AGENTS
+from vibepod.constants import AGENT_ALIASES, AGENT_SHORTCUTS, DEFAULT_IMAGES, SUPPORTED_AGENTS
 from vibepod.core.config import get_config_root
 
 
@@ -58,6 +58,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         ["env", "HOME=/config", "node", "/usr/local/bin/gemini"],
         "/config",
         {"HOME": "/config"},
+        ikwid_args=["--approval-mode=yolo"],
     ),
     "opencode": AgentSpec(
         "opencode",
@@ -78,6 +79,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         {"HOME": "/config", "WORKSPACE_PATH": "/workspace"},
         platform="linux/amd64",
         run_as_host_user=True,
+        ikwid_args=["--auto-approve"],
     ),
     "auggie": AgentSpec(
         "auggie",
@@ -96,6 +98,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         ["copilot"],
         "/config",
         {"HOME": "/config"},
+        ikwid_args=["--yolo"],
     ),
     "codex": AgentSpec(
         "codex",
@@ -124,7 +127,7 @@ def resolve_agent_name(agent: str) -> str | None:
     normalized = agent.strip().lower()
     if normalized in SUPPORTED_AGENTS:
         return normalized
-    return AGENT_SHORTCUTS.get(normalized)
+    return AGENT_SHORTCUTS.get(normalized) or AGENT_ALIASES.get(normalized)
 
 
 def get_agent_shortcut(agent: str) -> str | None:

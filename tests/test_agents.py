@@ -51,6 +51,8 @@ def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
     for agent in SUPPORTED_AGENTS:
         assert resolve_agent_name(agent) == agent
         assert resolve_agent_name(f" {agent.upper()} ") == agent
+    assert resolve_agent_name("vibe") == "devstral"
+    assert resolve_agent_name("VIBE") == "devstral"
     assert resolve_agent_name("unknown") is None
 
 
@@ -64,13 +66,28 @@ def test_codex_spec_has_ikwid_args() -> None:
     assert spec.ikwid_args == ["--dangerously-bypass-approvals-and-sandbox"]
 
 
+def test_gemini_spec_has_ikwid_args() -> None:
+    spec = get_agent_spec("gemini")
+    assert spec.ikwid_args == ["--approval-mode=yolo"]
+
+
+def test_copilot_spec_has_ikwid_args() -> None:
+    spec = get_agent_spec("copilot")
+    assert spec.ikwid_args == ["--yolo"]
+
+
+def test_devstral_spec_has_ikwid_args() -> None:
+    spec = get_agent_spec("devstral")
+    assert spec.ikwid_args == ["--auto-approve"]
+
+
 def test_gemini_spec_runs_via_node_wrapper() -> None:
     spec = get_agent_spec("gemini")
     assert spec.command == ["env", "HOME=/config", "node", "/usr/local/bin/gemini"]
 
 
 def test_unsupported_agents_have_no_ikwid_args() -> None:
-    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot"):
+    for agent in ("opencode", "auggie"):
         spec = get_agent_spec(agent)
         assert spec.ikwid_args is None, f"{agent} should not have ikwid_args"
 

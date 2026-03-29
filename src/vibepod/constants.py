@@ -38,6 +38,10 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "x": "codex",
 }
 
+AGENT_ALIASES: dict[str, str] = {
+    "vibe": "devstral",
+}
+
 IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_NAMESPACE",
     "VP_IMAGE_CLAUDE",
