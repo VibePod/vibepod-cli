@@ -16,6 +16,7 @@ Run `vp config path` to print the exact paths in use, and `vp config show` to pr
 version: 1
 
 # Agent to run when no argument is given to `vp run`
+# Alias `vibe` resolves to `devstral`.
 default_agent: claude
 
 # Pull the latest image before every run (default: true)
@@ -112,7 +113,7 @@ These variables override the corresponding config keys without editing any file:
 
 | Variable | Config key | Example |
 |---|---|---|
-| `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=gemini` |
+| `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=vibe` |
 | `VP_AUTO_PULL` | `auto_pull` | `VP_AUTO_PULL=true` |
 | `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
 | `VP_NO_COLOR` | `no_color` | `VP_NO_COLOR=true` |

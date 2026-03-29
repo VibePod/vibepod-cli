@@ -18,7 +18,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 | `claude` | Anthropic | `vp c` |
 | `gemini` | Google | `vp g` |
 | `opencode` | OpenAI | `vp o` |
-| `devstral` | Mistral | `vp d` |
+| `devstral` (alias: `vibe`) | Mistral | `vp d` |
 | `auggie` | Augment Code | `vp a` |
 | `copilot` | GitHub | `vp p` |
 | `codex` | OpenAI | `vp x` |

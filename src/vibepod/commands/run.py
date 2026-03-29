@@ -326,6 +326,12 @@ def run(
 
     if ikwid:
         if spec.ikwid_args:
+            if command is None:
+                try:
+                    command = manager.resolve_launch_command(image=image, command=spec.command)
+                except DockerClientError as exc:
+                    error(str(exc))
+                    raise typer.Exit(1) from exc
             info(f"IKWID mode: appending {spec.ikwid_args} to {selected_agent} command")
             command = list(command or []) + spec.ikwid_args
         else:

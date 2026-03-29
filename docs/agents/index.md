@@ -9,10 +9,12 @@ VibePod manages each agent as a Docker container. Credentials and config are per
 | `claude` | Anthropic | `vp c` | `vibepod/claude:latest` |
 | `gemini` | Google | `vp g` | `vibepod/gemini:latest` |
 | `opencode` | OpenAI | `vp o` | `vibepod/opencode:latest` |
-| `devstral` | Mistral | `vp d` | `vibepod/devstral:latest` |
+| `devstral` (alias: `vibe`) | Mistral | `vp d` | `vibepod/devstral:latest` |
 | `auggie` | Augment Code | `vp a` | `vibepod/auggie:latest` |
 | `copilot` | GitHub | `vp p` | `vibepod/copilot:latest` |
 | `codex` | OpenAI | `vp x` | `vibepod/codex:latest` |
+
+Alias note: `vp run vibe` resolves to `vp run devstral`.
 
 ## First run & authentication
 
@@ -71,7 +73,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -165,6 +167,26 @@ agents:
 
 The `init` commands run on every `vp run` for that agent and must be idempotent.
 
+## IKWID mode (`--ikwid`)
+
+Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mode when supported.
+
+| Agent | `--ikwid` appended args |
+|-------|--------------------------|
+| `claude` | `--dangerously-skip-permissions` |
+| `gemini` | `--approval-mode=yolo` |
+| `devstral` | `--auto-approve` |
+| `copilot` | `--yolo` |
+| `codex` | `--dangerously-bypass-approvals-and-sandbox` |
+| `opencode` | Not supported |
+| `auggie` | Not supported |
+
+Example:
+
+```bash
+vp run codex --ikwid
+```
+
 ## Detached mode
 
 Use `-d` / `--detach` to start an agent container in the background without attaching your terminal. The agent process starts immediately inside the container — `-d` only controls whether VibePod attaches your terminal to it.
@@ -251,10 +273,11 @@ vp run gemini   # or: vp g
 vp run opencode   # or: vp o
 ```
 
-### Devstral (Mistral)
+### Devstral / Vibe (Mistral)
 
 ```bash
 vp run devstral   # or: vp d
+vp run vibe       # alias of devstral
 ```
 
 !!! note

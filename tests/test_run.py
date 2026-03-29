@@ -621,8 +621,8 @@ def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
     assert captured["command"] == ["codex", "--dangerously-bypass-approvals-and-sandbox"]
 
 
-def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> None:
-    """--ikwid logs warning and proceeds for agents without ikwid_args."""
+def test_ikwid_appends_args_for_gemini(monkeypatch, tmp_path: Path) -> None:
+    """--ikwid appends --approval-mode=yolo to gemini command."""
     captured: dict = {}
 
     class _CapturingDockerManager:
@@ -662,8 +662,151 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
 
     run_cmd.run(agent="gemini", workspace=tmp_path, detach=True, ikwid=True)
 
+    assert captured["command"] == [
+        "env",
+        "HOME=/config",
+        "node",
+        "/usr/local/bin/gemini",
+        "--approval-mode=yolo",
+    ]
+
+
+def test_ikwid_appends_args_for_copilot(monkeypatch, tmp_path: Path) -> None:
+    """--ikwid appends --yolo to copilot command."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-copilot-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["copilot"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="copilot", workspace=tmp_path, detach=True, ikwid=True)
+
+    assert captured["command"] == ["copilot", "--yolo"]
+
+
+def test_ikwid_appends_args_for_devstral(monkeypatch, tmp_path: Path) -> None:
+    """--ikwid resolves devstral launch command and appends --auto-approve."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def resolve_launch_command(self, image: str, command: list[str] | None) -> list[str]:
+            assert image == "vibepod/devstral:latest"
+            assert command is None
+            return ["vibe"]
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-devstral-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["devstral"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="devstral", workspace=tmp_path, detach=True, ikwid=True)
+
+    assert captured["command"] == ["vibe", "--auto-approve"]
+
+
+def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> None:
+    """--ikwid logs warning and proceeds for agents without ikwid_args."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-opencode-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["opencode"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="opencode", workspace=tmp_path, detach=True, ikwid=True)
+
     # Command should be unchanged (no ikwid args appended)
-    assert captured["command"] == ["env", "HOME=/config", "node", "/usr/local/bin/gemini"]
+    assert captured["command"] == ["opencode"]
 
 
 def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> None:
