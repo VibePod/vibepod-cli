@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,16 @@ import typer
 from vibepod.commands import run as run_cmd
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.docker import DockerClientError, DockerManager
+
+# ---------------------------------------------------------------------------
+# Autouse fixture: allow workspace dirs by default so existing tests still pass
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _allow_all_dirs(monkeypatch):
+    """Patch is_dir_allowed to return True so permission prompts don't break unrelated tests."""
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: True)
 
 
 def test_agent_extra_volumes_for_auggie(tmp_path: Path) -> None:
@@ -1288,3 +1299,109 @@ def test_run_sets_default_term_when_host_term_missing(monkeypatch, tmp_path: Pat
 
     env = captured["env"]
     assert env["TERM"] == "xterm-256color"
+
+
+
+# ---------------------------------------------------------------------------
+# Directory permission tests
+# ---------------------------------------------------------------------------
+
+
+def _make_capturing_docker_manager():
+    """Return a Docker manager stub that records run_agent kwargs."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            return type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+
+    return _CapturingDockerManager, captured
+
+
+def test_run_aborts_when_dir_not_allowed_and_non_interactive(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Non-interactive stdin + disallowed dir → Exit(1) with no prompt."""
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    monkeypatch.setattr(run_cmd, "is_protected_dir", lambda p: False)
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+    assert exc.value.exit_code == 1
+
+
+def test_run_aborts_on_protected_dir(monkeypatch, tmp_path: Path) -> None:
+    """Protected directory (home/root) → Exit(1) without prompt."""
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    monkeypatch.setattr(run_cmd, "is_protected_dir", lambda p: True)
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+    assert exc.value.exit_code == 1
+
+
+def test_run_prompts_and_proceeds_when_user_accepts(monkeypatch, tmp_path: Path) -> None:
+    """Interactive: user accepts the prompt → dir is added and run proceeds."""
+    added: list[Path] = []
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    monkeypatch.setattr(run_cmd, "is_protected_dir", lambda p: False)
+    monkeypatch.setattr(run_cmd, "add_allowed_dir", lambda p: added.append(p))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    # Patch Confirm.ask to always return True (user presses Y)
+    _confirm_yes = type("_C", (), {"ask": staticmethod(lambda *a, **kw: True)})()
+    monkeypatch.setattr(run_cmd, "Confirm", _confirm_yes)
+    _CapturingDockerManager, _ = _make_capturing_docker_manager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    assert len(added) == 1
+    assert added[0] == tmp_path.resolve()
+
+
+def test_run_aborts_when_user_declines_prompt(monkeypatch, tmp_path: Path) -> None:
+    """Interactive: user declines the prompt → Exit(1) and dir NOT added."""
+    added: list[Path] = []
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    monkeypatch.setattr(run_cmd, "is_protected_dir", lambda p: False)
+    monkeypatch.setattr(run_cmd, "add_allowed_dir", lambda p: added.append(p))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    # Patch Confirm.ask to return False (user presses N)
+    _confirm_no = type("_C", (), {"ask": staticmethod(lambda *a, **kw: False)})()
+    monkeypatch.setattr(run_cmd, "Confirm", _confirm_no)
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    assert exc.value.exit_code == 1
+    assert added == []

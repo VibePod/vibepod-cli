@@ -163,3 +163,91 @@ def test_llm_env_overrides(monkeypatch, tmp_path: Path) -> None:
     assert llm["base_url"] == "http://localhost:11434/v1"
     assert llm["api_key"] == "sk-test"
     assert llm["model"] == "llama3"
+
+
+
+# ---------------------------------------------------------------------------
+# allow-dir / remove-dir / list-allowed-dirs subcommand tests
+# ---------------------------------------------------------------------------
+
+
+def test_allow_dir_adds_current_directory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["config", "allow-dir"])
+    assert result.exit_code == 0, result.stdout
+    assert str(tmp_path) in result.stdout
+
+
+def test_allow_dir_accepts_explicit_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+    target = tmp_path / "myproject"
+    target.mkdir()
+
+    result = runner.invoke(app, ["config", "allow-dir", str(target)])
+    assert result.exit_code == 0, result.stdout
+    assert str(target) in result.stdout
+
+
+def test_allow_dir_rejects_nonexistent_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+
+    result = runner.invoke(app, ["config", "allow-dir", str(tmp_path / "nonexistent")])
+    assert result.exit_code == 1
+
+
+def test_allow_dir_rejects_home_directory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+    home = str(Path.home())
+
+    result = runner.invoke(app, ["config", "allow-dir", home])
+    assert result.exit_code == 1
+    assert "protected" in result.stdout
+
+
+def test_allow_dir_rejects_root_directory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+
+    result = runner.invoke(app, ["config", "allow-dir", "/"])
+    assert result.exit_code == 1
+    assert "protected" in result.stdout
+
+
+def test_remove_dir_removes_allowed_directory(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+    target = tmp_path / "myproject"
+    target.mkdir()
+
+    runner.invoke(app, ["config", "allow-dir", str(target)])
+    result = runner.invoke(app, ["config", "remove-dir", str(target)])
+    assert result.exit_code == 0, result.stdout
+    assert str(target) in result.stdout
+
+
+def test_remove_dir_fails_when_not_in_list(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+    target = tmp_path / "myproject"
+    target.mkdir()
+
+    result = runner.invoke(app, ["config", "remove-dir", str(target)])
+    assert result.exit_code == 1
+
+
+def test_list_allowed_dirs_shows_added_directories(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+    target = tmp_path / "myproject"
+    target.mkdir()
+
+    runner.invoke(app, ["config", "allow-dir", str(target)])
+    result = runner.invoke(app, ["config", "list-allowed-dirs"])
+    assert result.exit_code == 0, result.stdout
+    assert str(target) in result.stdout
+
+
+def test_list_allowed_dirs_empty(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "cfg"))
+
+    result = runner.invoke(app, ["config", "list-allowed-dirs"])
+    assert result.exit_code == 0
+    assert "No directories" in result.stdout
