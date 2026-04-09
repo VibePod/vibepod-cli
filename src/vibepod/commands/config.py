@@ -11,6 +11,12 @@ import typer
 import yaml
 
 from vibepod.constants import SUPPORTED_AGENTS
+from vibepod.core.allowed_dirs import (
+    add_allowed_dir,
+    is_protected_dir,
+    load_allowed_dirs,
+    remove_allowed_dir,
+)
 from vibepod.core.config import get_config, get_global_config_path, get_project_config_path
 from vibepod.utils.console import console, error, success
 
@@ -142,3 +148,69 @@ def path(
     print(f"Global:  {global_path}")
     print(f"Project: {project_path}")
     print(f"Logs:    {logs_path}")
+
+
+@app.command("allow-dir")
+def allow_dir(
+    directory: Annotated[
+        Path | None,
+        typer.Argument(help="Directory to allow (defaults to current directory)"),
+    ] = None,
+) -> None:
+    """Add a directory to the vp run allow list."""
+    try:
+        target = (directory or Path.cwd()).expanduser().resolve()
+    except (OSError, ValueError) as exc:
+        error(f"Could not resolve directory path: {exc}")
+        raise typer.Exit(1) from exc
+    if not target.exists() or not target.is_dir():
+        error(f"Not a valid directory: {target}")
+        raise typer.Exit(1)
+    if is_protected_dir(target):
+        error(
+            f"'{target}' is a protected directory (home or root) and cannot be added "
+            "to the allow list."
+        )
+        raise typer.Exit(1)
+    try:
+        add_allowed_dir(target)
+    except OSError as exc:
+        error(f"Could not update allow list: {exc}")
+        raise typer.Exit(1) from exc
+    success(f"Allowed: {target}")
+
+
+@app.command("remove-dir")
+def remove_dir(
+    directory: Annotated[
+        Path | None,
+        typer.Argument(help="Directory to remove (defaults to current directory)"),
+    ] = None,
+) -> None:
+    """Remove a directory from the vp run allow list."""
+    try:
+        target = (directory or Path.cwd()).expanduser().resolve()
+    except (OSError, ValueError) as exc:
+        error(f"Could not resolve directory path: {exc}")
+        raise typer.Exit(1) from exc
+    try:
+        removed = remove_allowed_dir(target)
+    except OSError as exc:
+        error(f"Could not update allow list: {exc}")
+        raise typer.Exit(1) from exc
+    if removed:
+        success(f"Removed: {target}")
+    else:
+        error(f"Directory not in allow list: {target}")
+        raise typer.Exit(1)
+
+
+@app.command("list-allowed-dirs")
+def list_allowed_dirs() -> None:
+    """List all directories in the vp run allow list."""
+    dirs = load_allowed_dirs()
+    if not dirs:
+        console.print("No directories in the allow list.")
+        return
+    for d in dirs:
+        console.print(d)

@@ -22,6 +22,7 @@ from vibepod.core.agents import (
     get_agent_spec,
     resolve_agent_name,
 )
+from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.session_logger import SessionLogger
@@ -261,6 +262,32 @@ def run(
     workspace_path = workspace.expanduser().resolve()
     if not workspace_path.exists() or not workspace_path.is_dir():
         raise typer.BadParameter(f"Workspace not found: {workspace_path}")
+
+    if is_protected_dir(workspace_path):
+        error(
+            f"'{workspace_path}' is a protected directory (home or root) and cannot be "
+            "added to the allow list. Change to a project directory first."
+        )
+        raise typer.Exit(1)
+
+    if not is_dir_allowed(workspace_path):
+        if not sys.stdin.isatty():
+            error(
+                f"'{workspace_path}' is not in the allowed directories list. "
+                "Run `vp config allow-dir` to add it."
+            )
+            raise typer.Exit(1)
+        if not Confirm.ask(
+            f"'{workspace_path}' is not allowed for `vp run`. Would you like to allow it?",
+            default=True,
+        ):
+            error("Directory not allowed. Aborting.")
+            raise typer.Exit(1)
+        try:
+            add_allowed_dir(workspace_path)
+        except OSError as exc:
+            error(f"Could not update allow list for '{workspace_path}': {exc}")
+            raise typer.Exit(1) from exc
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
