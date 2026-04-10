@@ -319,6 +319,7 @@ class DockerManager:
             },
             "volumes": volumes,
             "network": network,
+            "extra_hosts": {"host.docker.internal": "host-gateway"},
         }
 
         getuid = getattr(os, "getuid", None)

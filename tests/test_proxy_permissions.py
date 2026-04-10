@@ -84,5 +84,6 @@ def test_ensure_proxy_runs_container_as_current_user(tmp_path: Path, monkeypatch
     assert run_kwargs is not None
     assert run_kwargs["user"] == "1234:2345"
     assert "ports" not in run_kwargs
+    assert run_kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
     assert db_path.parent.exists()
     assert ca_dir.exists()
