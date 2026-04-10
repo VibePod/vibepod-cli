@@ -19,6 +19,66 @@ Other agents do not yet have LLM mapping and will not receive any LLM configurat
 ollama pull qwen3:14b
 ```
 
+!!! note "Linux: expose Ollama to Docker"
+    On Linux, Ollama binds to `127.0.0.1` by default. Docker containers reach the host via the Docker bridge gateway (for example `172.17.0.1` on the default Docker bridge), so the default binding will refuse connections.
+
+    **If running Ollama manually:**
+
+    ```bash
+    OLLAMA_HOST=0.0.0.0 ollama serve
+    ```
+
+    **If running Ollama as a systemd service** (the recommended Linux install), create an override:
+
+    ```bash
+    sudo systemctl edit ollama
+    ```
+
+    Add the following and save:
+
+    ```ini
+    [Service]
+    Environment="OLLAMA_HOST=0.0.0.0"
+    ```
+
+    Then reload and restart:
+
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl restart ollama
+    ```
+
+    Verify it is listening on all interfaces:
+
+    ```bash
+    sudo ss -tlnp | grep 11434
+    # Should show 0.0.0.0:11434, not 127.0.0.1:11434
+    # (sudo is required for -p to display process names; omit sudo or drop -p to just check the port)
+    ```
+
+    !!! warning "Security: binding to `0.0.0.0` exposes Ollama on all interfaces"
+        Setting `OLLAMA_HOST=0.0.0.0` makes Ollama reachable on **every** network
+        interface of the host, including public-facing ones. Only do this on trusted
+        networks or when the host is protected by a firewall.
+
+        **Safer alternatives:**
+
+        - **Bind to the Docker bridge gateway only** (e.g., `OLLAMA_HOST=172.17.0.1`)
+          so only containers on the default Docker bridge can reach Ollama while the
+          service remains unreachable from other interfaces. Substitute the actual
+          gateway IP reported by `docker network inspect bridge`.
+        - **Restrict access at the network level** with firewall rules (e.g.,
+          `ufw` or `iptables`) that allow port `11434` only from the Docker bridge
+          subnet before widening the bind address.
+        - **Add authentication** before exposing the service beyond localhost.
+          `OLLAMA_ORIGINS` controls which origins may make cross-origin (CORS)
+          requests to Ollama — it is **not** an authentication mechanism. The
+          local Ollama server has no built-in auth; API-key support is only
+          available for Ollama's cloud API. To protect a locally-exposed
+          instance, place a reverse proxy (e.g., nginx or Traefik) with proper
+          authentication in front of it, or enforce access via network ACLs /
+          firewall rules.
+
 ### 2. Configure VibePod
 
 Add the following to your global or project config:
