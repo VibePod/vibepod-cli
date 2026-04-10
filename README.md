@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/icon.png" alt="VibePod icon" width="150" />
+  <img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/icon.png" alt="VibePod icon" width="150" />
 </p>
 
 <h1 align="center">VibePod</h1>
@@ -59,18 +59,18 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `opencode` | Not supported |
 | `auggie` | Not supported |
 
-![VibePod CLI preview](docs/assets/preview.png)
+![VibePod CLI preview](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/preview.png)
 
 ## Tool Thumbnails
 
 <p>
-  <a href="docs/assets/claude%20code.png"><img src="docs/assets/claude%20code.png" alt="Claude Code" width="180" /></a>
-  <a href="docs/assets/google%20gemini.png"><img src="docs/assets/google%20gemini.png" alt="Google Gemini" width="180" /></a>
-  <a href="docs/assets/openai%20codex.png"><img src="docs/assets/openai%20codex.png" alt="OpenAI Codex" width="180" /></a>
-  <a href="docs/assets/github%20copilot.png"><img src="docs/assets/github%20copilot.png" alt="GitHub Copilot" width="180" /></a>
-  <a href="docs/assets/opencode.png"><img src="docs/assets/opencode.png" alt="OpenCode" width="180" /></a>
-  <a href="docs/assets/mistral%20vibe.png"><img src="docs/assets/mistral%20vibe.png" alt="Mistral Vibe" width="180" /></a>
-  <a href="docs/assets/augment%20auggie.png"><img src="docs/assets/augment%20auggie.png" alt="Augment Auggie" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/claude%20code.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/claude%20code.png" alt="Claude Code" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/google%20gemini.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/google%20gemini.png" alt="Google Gemini" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/openai%20codex.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/openai%20codex.png" alt="OpenAI Codex" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/github%20copilot.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/github%20copilot.png" alt="GitHub Copilot" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/opencode.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/opencode.png" alt="OpenCode" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/mistral%20vibe.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/mistral%20vibe.png" alt="Mistral Vibe" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/augment%20auggie.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/augment%20auggie.png" alt="Augment Auggie" width="180" /></a>
 </p>
 
 ## Current Status
@@ -90,7 +90,7 @@ This repository contains an initial v1 implementation with:
 VibePod collects metrics locally while your agents run and serves them through
 a built-in dashboard.
 
-![VibePod Analytics Dashboard](docs/assets/dashboard.png)
+![VibePod Analytics Dashboard](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/dashboard.png)
 
 | Command          | Description                                        |
 |------------------|----------------------------------------------------|
