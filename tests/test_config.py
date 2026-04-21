@@ -142,6 +142,9 @@ def test_per_agent_auto_pull_override(monkeypatch, tmp_path: Path) -> None:
 
 def test_default_config_includes_llm_section(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    for var in ("VP_LLM_ENABLED", "VP_LLM_BASE_URL", "VP_LLM_API_KEY", "VP_LLM_MODEL"):
+        monkeypatch.delenv(var, raising=False)
     config = get_config()
     llm = config.get("llm")
     assert isinstance(llm, dict)

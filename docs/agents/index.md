@@ -261,6 +261,153 @@ vp run claude   # or: vp c
 
 Credentials are stored in `~/.config/vibepod/agents/claude/`. On first run, Claude's interactive setup will guide you through API key configuration.
 
+#### Long-lived token (recommended)
+
+Claude Code has a known upstream bug where OAuth access tokens (~8 h TTL) are not automatically refreshed from disk, forcing users to run `/login` roughly once per day. See [Why this workaround exists](#why-this-workaround-exists) below for the full bug history and links.
+
+VibePod works around this by storing a ~1-year long-lived token on the host and injecting it as `CLAUDE_CODE_OAUTH_TOKEN` on every run. This sidesteps the refresh path entirely.
+
+!!! info "This is an official authentication method"
+    `claude setup-token` and the `CLAUDE_CODE_OAUTH_TOKEN` environment variable are both documented by Anthropic as a supported authentication path for CI pipelines, scripts, and other environments where an interactive browser login isn't available. See the [official Claude Code authentication docs](https://code.claude.com/docs/en/authentication#long-lived-tokens) and the [`claude-code-action` setup guide](https://github.com/anthropics/claude-code-action/blob/main/docs/setup.md). VibePod just automates the storage and injection.
+
+**One-time setup:**
+
+```bash
+vp run claude setup-token
+```
+
+This starts the container with `claude setup-token`, which opens Anthropic's OAuth flow in your browser. After you authorise, the container prints a token. VibePod then prompts you to paste it and saves it to:
+
+```text
+~/.config/vibepod/agents/claude/oauth-token   (mode 0600)
+```
+
+**Subsequent runs:**
+
+```bash
+vp run claude
+```
+
+VibePod detects the stored token and injects `CLAUDE_CODE_OAUTH_TOKEN` automatically. Look for `Using stored Claude OAuth token` in the startup output to confirm.
+
+**Precedence** (first match wins):
+
+1. `-e ANTHROPIC_API_KEY=...` or `-e CLAUDE_CODE_OAUTH_TOKEN=...` passed on the CLI
+2. `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` set in your per-agent `env:` config
+3. Stored `oauth-token` file
+4. Interactive OAuth via `.credentials.json` (subject to the refresh bug)
+
+**Verifying the token is stored:**
+
+```bash
+vp doctor claude
+```
+
+Shows credentials state, stored-token presence and mtime, and which auth mode the next run will use. You can also inspect the file directly:
+
+```bash
+ls -l ~/.config/vibepod/agents/claude/oauth-token
+# or to view contents (treat as a secret — do not share):
+nano ~/.config/vibepod/agents/claude/oauth-token
+```
+
+**Verifying the token works:**
+
+```bash
+vp run claude -p "say ok"
+```
+
+`-p` runs Claude Code in headless mode — one API call, one response. If you see "ok", the token is valid.
+
+**Caveats:**
+
+- The long-lived token is **inference-only** — it cannot establish [Remote Control](https://code.claude.com/docs/en/remote-control) sessions (steering a container from claude.ai/code or the mobile app).
+- `claude setup-token` requires a **Pro, Max, Team, or Enterprise** plan. Console (pay-per-token) accounts should use `ANTHROPIC_API_KEY` instead.
+- The token rotates roughly once a year. When it expires, just run `vp run claude setup-token` again.
+
+#### Using an API key instead
+
+If you're on a Console (pay-per-token) account, set `ANTHROPIC_API_KEY` and skip the setup-token flow entirely:
+
+```bash
+vp run claude -e ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Or permanently in config:
+
+```yaml
+agents:
+  claude:
+    env:
+      ANTHROPIC_API_KEY: sk-ant-...
+```
+
+#### Diagnostics
+
+`vp doctor claude` is the first tool to reach for when auth misbehaves. It reports:
+
+- `.credentials.json` — file owner/mode, `expiresAt`, presence of `refreshToken`, scopes, subscription type
+- `.claude.json` — mtime cross-check
+- Stored long-lived token state
+- Which host env vars (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR`) are set
+- **Effective auth mode** — what the next `vp run claude` will actually use
+
+Exit codes: `0` healthy, `1` config dir missing, `2` OAuth token expired (useful in scripts).
+
+#### Why this workaround exists
+
+The root cause is in Claude Code itself, not in VibePod. The OAuth `refreshToken` is stored in `.credentials.json` but never used: the access token is loaded from disk, sent as-is until it 401s, and nothing is written back when a refresh would have succeeded. The bug affects native Linux, WSL, macOS, and every container-based deployment equally.
+
+Community forensics ([#33995 comment](https://github.com/anthropics/claude-code/issues/33995#issuecomment-2718892341)):
+
+> Set `expiresAt` in `~/.claude/.credentials.json` to `Date.now()` to force expiry. Send a message — Claude processes it successfully, meaning the in-memory token refresh worked. Check `~/.claude/.credentials.json` afterward — file was never written. Conclusion: `refreshOAuthToken` succeeds and returns new tokens, but the credential store's `update()` is never called (or silently fails) after a successful refresh. The new token lives only in memory. Next session launch reads the stale expired token from disk and requires re-login.
+
+The community-validated workaround ([#24317 comment](https://github.com/anthropics/claude-code/issues/24317#issuecomment-2664923815)) is exactly what VibePod implements:
+
+> I worked around this using `claude setup-token` and then feeding it in as the `CLAUDE_CODE_OAUTH_TOKEN` environment variable. It skips all the "OAuth tokens invalidating each other", but has the downside that it doesn't allow `/usage`.
+
+`claude setup-token` itself is an **officially supported** Claude Code authentication path, documented for exactly this kind of non-interactive deployment. See Anthropic's [authentication guide](https://code.claude.com/docs/en/authentication#long-lived-tokens) and the [`claude-code-action` setup guide](https://github.com/anthropics/claude-code-action/blob/main/docs/setup.md) — the same mechanism used by Anthropic's own GitHub Action.
+
+**Upstream tracking issues — core bug (access-token not refreshed from disk):**
+
+| # | Status | Summary |
+|---|---|---|
+| [#50743](https://github.com/anthropics/claude-code/issues/50743) | open · `has repro` · `area:auth` | Newest and cleanest repro on headless Linux — `refreshToken` ignored |
+| [#42904](https://github.com/anthropics/claude-code/issues/42904) | closed as duplicate | Canonical "daily re-login required for subscription users" report |
+| [#40985](https://github.com/anthropics/claude-code/issues/40985) | open · `stale` | "Auth tokens expire too frequently" — confirms ~8 h TTL |
+| [#33995](https://github.com/anthropics/claude-code/issues/33995) | closed not-planned | Best technical forensics (quoted above); proves write-back is the broken step |
+| [#21765](https://github.com/anthropics/claude-code/issues/21765) | closed not-planned | First clear statement: "Claude Code doesn't use refresh tokens to get new access tokens" |
+| [#12447](https://github.com/anthropics/claude-code/issues/12447) | open | OAuth expiry disrupts autonomous workflows; refresh token handling needed |
+| [#37402](https://github.com/anthropics/claude-code/issues/37402) | open | `--print` / automation mode also affected |
+
+**Multi-session race condition** (why a shared `.credentials.json` across simultaneous sessions makes things worse):
+
+| # | Status | Summary |
+|---|---|---|
+| [#24317](https://github.com/anthropics/claude-code/issues/24317) | open · `has repro` · 18 comments | Canonical thread; documents refresh-token rotation and single-use semantics |
+| [#48786](https://github.com/anthropics/claude-code/issues/48786) | closed as dup of #24317 | Independent reproduction |
+| [#27933](https://github.com/anthropics/claude-code/issues/27933) | closed | Early race-condition report |
+| [#45129](https://github.com/anthropics/claude-code/issues/45129) | closed as dup | Agent worktree subprocesses hit this constantly |
+
+**Container / headless specifically:**
+
+| # | Status | Summary |
+|---|---|---|
+| [#22066](https://github.com/anthropics/claude-code/issues/22066) | closed as duplicate | OAuth authentication not persisting in Docker |
+| [#34917](https://github.com/anthropics/claude-code/issues/34917) | closed | OAuth "Redirect URI not supported" in headless/Docker |
+| [#34141](https://github.com/anthropics/claude-code/issues/34141) | closed | Claude Code ignores `ANTHROPIC_API_KEY` when OAuth redirect fails in devcontainers |
+| [#7100](https://github.com/anthropics/claude-code/issues/7100) | closed not-planned | Request for official headless-auth documentation |
+| [#22992](https://github.com/anthropics/claude-code/issues/22992) | open | Feature request: RFC 8628 device-code flow for headless |
+
+**Proxy / Cloudflare interaction** (relevant if you run vibepod behind the built-in mitmproxy):
+
+| # | Status | Summary |
+|---|---|---|
+| [#47754](https://github.com/anthropics/claude-code/issues/47754) | open · `area:auth` · `platform:linux` | Cloudflare WAF blocks OAuth token refresh from headless Linux servers |
+| [#33269](https://github.com/anthropics/claude-code/issues/33269) | open | Cloudflare challenge race during `auth login` / `setup-token` |
+
+**Anthropic's posture:** most reports are auto-closed as duplicates by a bot; the core issues (#21765, #33995) were closed as "not planned." A changelog line for Claude Code v2.1.44 mentioned "Fixed auth refresh errors" but users report the same behaviour on every later version (v2.1.62, 2.1.74, 2.1.116 observed). No committed fix has landed as of this writing.
+
 ### Gemini (Google)
 
 ```bash
