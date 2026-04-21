@@ -23,13 +23,36 @@ def test_version() -> None:
 
 
 def test_full_agent_name_alias_runs_agent(monkeypatch) -> None:
-    called: dict[str, str | None] = {"agent": None}
+    called: dict[str, object] = {"agent": None, "passthrough": None}
 
     def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        import click
+
+        ctx = click.get_current_context(silent=True)
         called["agent"] = agent
+        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
 
     monkeypatch.setattr(run_cmd, "run", _fake_run)
 
     result = runner.invoke(app, ["claude"])
     assert result.exit_code == 0
     assert called["agent"] == "claude"
+    assert called["passthrough"] == []
+
+
+def test_alias_forwards_extra_args(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        import click
+
+        ctx = click.get_current_context(silent=True)
+        called["agent"] = agent
+        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["claude", "setup-token"])
+    assert result.exit_code == 0
+    assert called["agent"] == "claude"
+    assert called["passthrough"] == ["setup-token"]

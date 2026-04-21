@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
+import click
 import typer
 from rich.prompt import Confirm, Prompt
 
@@ -27,6 +28,38 @@ from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
+
+CLAUDE_TOKEN_FILENAME = "oauth-token"
+
+
+def _claude_stored_token_path(config_dir: Path) -> Path:
+    return config_dir / CLAUDE_TOKEN_FILENAME
+
+
+def _read_claude_stored_token(config_dir: Path) -> str | None:
+    path = _claude_stored_token_path(config_dir)
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        warning(f"Could not read stored claude token at {path}: {exc}")
+        return None
+    return token or None
+
+
+def _write_claude_stored_token(config_dir: Path, token: str) -> Path:
+    path = _claude_stored_token_path(config_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        # fchmod overrides umask; os.open mode alone is umask-filtered
+        os.fchmod(fd, 0o600)
+    except OSError:
+        warning(f"Could not restrict permissions on {path}; token may be readable by other users")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(token.strip() + "\n")
+    return path
 
 
 def _parse_env_pairs(values: list[str]) -> dict[str, str]:
@@ -245,7 +278,15 @@ def run(
         ),
     ] = False,
 ) -> None:
-    """Start an agent container."""
+    """Start an agent container.
+
+    Any trailing arguments after the agent name are forwarded to the agent's
+    command inside the container, e.g. `vp run claude setup-token`.
+    """
+    click_ctx = click.get_current_context(silent=True)
+    passthrough_args: list[str] = (
+        list(click_ctx.args) if click_ctx is not None and click_ctx.args else []
+    )
     config = get_config()
     selected_agent_input = agent or str(config.get("default_agent", "claude"))
     selected_agent = resolve_agent_name(selected_agent_input)
@@ -300,6 +341,17 @@ def run(
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
     }
+
+    if (
+        selected_agent == "claude"
+        and "CLAUDE_CODE_OAUTH_TOKEN" not in merged_env
+        and "ANTHROPIC_API_KEY" not in merged_env
+        and "setup-token" not in passthrough_args
+    ):
+        stored_token = _read_claude_stored_token(agent_config_dir(selected_agent))
+        if stored_token:
+            merged_env["CLAUDE_CODE_OAUTH_TOKEN"] = stored_token
+            info("Using stored Claude OAuth token (from `vp run claude setup-token`)")
 
     llm_cfg = config.get("llm", {})
     llm_command_extra: list[str] = []
@@ -366,6 +418,15 @@ def run(
 
     if llm_command_extra:
         command = list(command or []) + llm_command_extra
+
+    if passthrough_args:
+        if command is None:
+            try:
+                command = manager.resolve_launch_command(image=image, command=spec.command)
+            except DockerClientError as exc:
+                error(str(exc))
+                raise typer.Exit(1) from exc
+        command = list(command or []) + passthrough_args
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -484,6 +545,13 @@ def run(
                 )
 
     if detach:
+        if selected_agent == "claude" and "setup-token" in passthrough_args:
+            error(
+                "Cannot use --detach with `claude setup-token`: "
+                "the setup-token flow requires an interactive session."
+            )
+            container.stop(timeout=5)
+            raise typer.Exit(1)
         success(f"Started {container.name}")
         return
 
@@ -517,3 +585,74 @@ def run(
         raise
     finally:
         logger.close_session(exit_reason)
+
+    if (
+        selected_agent == "claude"
+        and "setup-token" in passthrough_args
+        and exit_reason == "normal"
+    ):
+        _capture_claude_setup_token(config_dir)
+
+
+def _read_masked_line(prompt: str) -> str:
+    """Read a line from stdin echoing '*' for each character.
+
+    Falls back to plain readline (no echo) on non-TTY stdin or platforms
+    without termios (e.g., Windows).
+    """
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip("\r\n")
+    try:
+        import termios
+        import tty
+    except ImportError:
+        from getpass import getpass
+
+        return getpass(prompt="")
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    buf: list[str] = []
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                break
+            if ch == "\x03":  # Ctrl-C
+                raise KeyboardInterrupt
+            if ch in ("\x7f", "\b"):  # backspace / delete
+                if buf:
+                    buf.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            if ch < " ":  # other control chars — ignore
+                continue
+            buf.append(ch)
+            sys.stdout.write("*")
+            sys.stdout.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    return "".join(buf)
+
+
+def _capture_claude_setup_token(config_dir: Path) -> None:
+    """Prompt the user to paste the token printed by `claude setup-token`."""
+    info("")
+    info("Paste the long-lived token printed by `claude setup-token` above.")
+    info("It will be saved to the host so `vp run claude` can reuse it.")
+    token = _read_masked_line("Token: ").strip()
+    if not token:
+        warning("No token entered; nothing saved.")
+        return
+    try:
+        path = _write_claude_stored_token(config_dir, token)
+    except OSError as exc:
+        error(f"Could not write stored token: {exc}")
+        raise typer.Exit(1) from exc
+    success(f"Saved Claude OAuth token to {path} ({len(token)} chars)")
+    info("Future `vp run claude` invocations will use it automatically.")
