@@ -35,6 +35,9 @@ VibePod will:
 
 Press **Ctrl+C** to stop the container when you are done.
 
+!!! note
+    Closing the terminal window does not stop the container — the agent keeps running in the background. Use `vp list --running` to see it and `vp attach <container>` to rejoin the session. See [Reattaching a terminal](agents/index.md#reattaching-a-terminal) for details.
+
 ## Shortcuts
 
 You can start agents with either the full name or a single-letter shortcut:

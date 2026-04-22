@@ -124,6 +124,16 @@ class DockerManager:
         except APIError as exc:
             raise DockerClientError(f"Failed to connect to network {network_name}: {exc}") from exc
 
+    def get_container(self, name_or_id: str) -> Any:
+        try:
+            return self.client.containers.get(name_or_id)
+        except NotFound as exc:
+            raise DockerClientError(f"Container '{name_or_id}' not found") from exc
+        except APIError as exc:
+            raise DockerClientError(f"Failed to look up container '{name_or_id}': {exc}") from exc
+        except DockerException as exc:
+            raise DockerClientError(f"Failed to look up container '{name_or_id}': {exc}") from exc
+
     def resolve_launch_command(self, image: str, command: list[str] | None) -> list[str]:
         """Resolve the full executable argv for a container start."""
         try:
@@ -218,23 +228,67 @@ class DockerManager:
 
     def stop_agent(self, agent: str, force: bool = False) -> int:
         stopped = 0
+        timeout = 0 if force else 10
         for container in self.list_managed(all_containers=True):
             if container.labels.get("vibepod.agent") != agent:
                 continue
-            container.stop(timeout=0 if force else 10)
+            try:
+                container.stop(timeout=timeout)
+            except APIError as exc:
+                raise DockerClientError(
+                    f"Failed to stop container '{container.name}': {exc}"
+                ) from exc
+            except DockerException as exc:
+                raise DockerClientError(
+                    f"Failed to stop container '{container.name}': {exc}"
+                ) from exc
             stopped += 1
         return stopped
 
+    def stop_container(self, name_or_id: str, force: bool = False) -> Any:
+        container = self.get_container(name_or_id)
+        labels = getattr(container, "labels", {}) or {}
+        if labels.get(CONTAINER_LABEL_MANAGED) != "true":
+            raise DockerClientError(
+                f"Container '{name_or_id}' is not managed by VibePod; refusing to stop."
+            )
+        try:
+            container.stop(timeout=0 if force else 10)
+        except APIError as exc:
+            raise DockerClientError(
+                f"Failed to stop container '{name_or_id}': {exc}"
+            ) from exc
+        except DockerException as exc:
+            raise DockerClientError(
+                f"Failed to stop container '{name_or_id}': {exc}"
+            ) from exc
+        return container
+
     def stop_all(self, force: bool = False) -> int:
         stopped = 0
+        timeout = 0 if force else 10
         for container in self.list_managed(all_containers=True):
-            container.stop(timeout=0 if force else 10)
+            try:
+                container.stop(timeout=timeout)
+            except APIError as exc:
+                raise DockerClientError(
+                    f"Failed to stop container '{container.name}': {exc}"
+                ) from exc
+            except DockerException as exc:
+                raise DockerClientError(
+                    f"Failed to stop container '{container.name}': {exc}"
+                ) from exc
             stopped += 1
         return stopped
 
     def list_managed(self, all_containers: bool = False) -> list[Any]:
         filters = {"label": f"{CONTAINER_LABEL_MANAGED}=true"}
-        return list(self.client.containers.list(all=all_containers, filters=filters))
+        try:
+            return list(self.client.containers.list(all=all_containers, filters=filters))
+        except APIError as exc:
+            raise DockerClientError(f"Failed to list containers: {exc}") from exc
+        except DockerException as exc:
+            raise DockerClientError(f"Failed to list containers: {exc}") from exc
 
     def find_datasette(self) -> Any | None:
         containers = self.client.containers.list(
