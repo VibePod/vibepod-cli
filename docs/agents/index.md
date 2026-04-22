@@ -260,6 +260,68 @@ The argument is resolved as an agent name/shortcut first; anything else is looke
 - **`auto_remove` (default: `true`)** — By default, containers are automatically removed when they stop. This means you cannot restart a stopped detached container; you need to `vp run` again. Set `auto_remove: false` in your [configuration](../configuration.md) if you want stopped containers to persist.
 - **Session logging** — Sessions started with `--detach` are not recorded in the VibePod session log since VibePod does not capture the interactive I/O. If you need session logging, run without `--detach`.
 
+## Task mode (headless)
+
+Run an agent non-interactively as a background task. Claude calls this "headless mode"; codex and auggie expose equivalent flags. VibePod wraps them in a uniform `vp task` command.
+
+```bash
+vp task run claude "Summarize the README"
+# ✓ Task started: 9f1e8a20b4c14e2f89d7f6a1c3e42b99
+#   container: vibepod-claude-abcdef12
+#   follow:    vp task logs 9f1e8a20b4c1 --follow
+```
+
+The command starts a detached container, writes a row to `~/.config/vibepod/tasks.db`, and returns a task id. The container is **not** auto-removed, so you can inspect logs and exit status after it finishes.
+
+### Supported agents (v1)
+
+| Agent | Invocation inside container |
+|-------|------------------------------|
+| `claude` | `claude -p "<prompt>"` |
+| `codex` | `codex exec "<prompt>"` |
+| `auggie` | `auggie --print "<prompt>"` |
+
+Other agents error with a clear message; support can be added by setting `headless_prefix` on their `AgentSpec`.
+
+### Managing tasks
+
+```bash
+vp task list                     # recent tasks + container status
+vp task list --agent claude      # filter
+vp task list --json              # machine-readable
+
+vp task logs <id>                # dump captured stdout/stderr
+vp task logs <id> --follow       # stream
+
+vp task status <id>              # state, exit code, timestamps
+vp task rm <id>                  # remove task + its (stopped) container
+vp task rm <id> -f               # kill running container before removing
+```
+
+Task ids can be abbreviated to any unique prefix (e.g., the first 12 chars shown by `vp task list`).
+
+### Passing agent flags
+
+Anything after `--` is forwarded to the agent's command after the prompt, matching the CLI's documented form (`claude -p "..." --allowedTools ...`):
+
+```bash
+vp task run claude "review staged changes" -- --output-format json
+```
+
+### Auto-approval for automation
+
+Headless tasks typically need to run without permission prompts. Pass `--ikwid` to apply the agent's documented auto-approve flag (e.g., `--dangerously-skip-permissions` for Claude):
+
+```bash
+vp task run claude "fix the failing test in auth.py" --ikwid
+```
+
+### Caveats
+
+- **No `--resume` in v1.** Task mode starts a fresh session every time. Use the agent's own resume flag via passthrough (`-- --resume <session_id>` for Claude) if you need continuity.
+- **LLM config model flag is skipped in task mode.** `llm.base_url` / `llm.api_key` / `llm.model` are still injected as env vars, but the `--model`-style CLI flag is not appended — different agents place it differently relative to subcommands. Pass an explicit model via `--`.
+- **Task containers are not auto-removed.** Run `vp task rm <id>` when you're done inspecting results.
+
 ## Reattaching a terminal
 
 Closing the terminal window that runs `vp run` does **not** stop the container — the agent keeps running in the background under Docker. This is by design: the container's lifecycle is tied to Docker, not to your shell. Use it as a feature when you want to keep a long-running session alive across terminal restarts.
