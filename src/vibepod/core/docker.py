@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import yaml
+
 from vibepod.constants import CONTAINER_LABEL_MANAGED, RUNTIME_DOCKER, RUNTIME_PODMAN
 
 docker: Any | None
@@ -61,6 +63,10 @@ def get_manager(
         runtime_name, socket_url = resolve_runtime(override=runtime_override, config=config)
     except (RuntimeError, ValueError) as exc:
         raise DockerClientError(str(exc)) from exc
+    except OSError as exc:
+        raise DockerClientError(f"Failed to access runtime config: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise DockerClientError(f"Failed to parse runtime config: {exc}") from exc
 
     return DockerManager(base_url=socket_url, runtime=runtime_name)
 
@@ -97,26 +103,23 @@ class DockerManager:
     # ------------------------------------------------------------------
 
     def _prepare_volume_dir(self, path: Path) -> None:
-        """Ensure *path* is accessible inside a rootless Podman container.
+        """Tighten permissions on VibePod-managed bind-mount sources.
 
-        Rootless Podman maps the host UID to root inside the container, but
-        a non-root process started via ``su`` / ``gosu`` in the entrypoint
-        gets a subordinate UID that cannot read host files with standard
-        permissions.  Making VibePod-managed directories world-accessible
-        (``0o777``) avoids "Permission denied" errors in the default Podman
-        setup. Users can opt into ``userns_mode=keep-id`` for compatible
-        images, but entrypoints that switch users may still need this fallback.
-
-        This is only applied to directories VibePod itself creates — never
-        to the user's workspace.
+        These directories hold sensitive state (agent credentials, the
+        mitmproxy CA private key, proxy/logs DBs) and must stay owner-only
+        on the host. Container access is arranged without widening host
+        perms: rootless Podman maps the host UID to container root by
+        default (owner can read), ``userns_mode=keep-id`` keeps the UID,
+        and for user-switching agent images an in-container chmod fixup
+        runs as root before the user-switch (see ``commands/run.py``).
         """
         if self.runtime != RUNTIME_PODMAN:
             return
         try:
-            path.chmod(0o777)
+            path.chmod(0o700)
             for child in path.rglob("*"):
                 try:
-                    child.chmod(0o777 if child.is_dir() else 0o666)
+                    child.chmod(0o700 if child.is_dir() else 0o600)
                 except OSError:
                     pass
         except OSError:
@@ -245,6 +248,7 @@ class DockerManager:
         version: str,
         network: str | None = None,
         extra_volumes: list[tuple[str, str, str]] | None = None,
+        managed_extra_dirs: list[Path] | None = None,
         platform: str | None = None,
         user: str | None = None,
         userns_mode: str | None = None,
@@ -261,11 +265,13 @@ class DockerManager:
 
         environment = {**env}
 
-        # Ensure VibePod-managed dirs are accessible inside rootless Podman
+        # Ensure VibePod-managed dirs are accessible inside rootless Podman.
+        # Only explicitly declared managed dirs are tightened; generic
+        # extra_volumes (e.g. X11 sockets) must not be touched.
         self._prepare_volume_dir(config_dir)
-        if extra_volumes:
-            for host_path, _, _ in extra_volumes:
-                self._prepare_volume_dir(Path(host_path))
+        if managed_extra_dirs:
+            for path in managed_extra_dirs:
+                self._prepare_volume_dir(path)
 
         volumes: list[str] = [
             f"{workspace}:/workspace:rw",

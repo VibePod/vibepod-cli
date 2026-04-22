@@ -468,8 +468,11 @@ def run(
     proxy_db_path: Path | None = None
 
     extra_volumes = _agent_extra_volumes(selected_agent, config_dir)
-    for host_path, _, _ in extra_volumes:
-        Path(host_path).mkdir(parents=True, exist_ok=True)
+    # Capture the VibePod-managed host paths *before* non-managed volumes
+    # (e.g. X11 sockets) are appended; only these get permission tightening.
+    managed_extra_dirs = list(dict.fromkeys(Path(hp) for hp, _, _ in extra_volumes))
+    for path in managed_extra_dirs:
+        path.mkdir(parents=True, exist_ok=True)
 
     if paste_images:
         display = os.environ.get("DISPLAY", "")
@@ -539,6 +542,7 @@ def run(
         version=__version__,
         network=network_name,
         extra_volumes=extra_volumes,
+        managed_extra_dirs=managed_extra_dirs,
         platform=spec.platform,
         user=container_user,
         userns_mode=container_userns_mode,

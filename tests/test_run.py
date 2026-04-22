@@ -313,6 +313,57 @@ def test_run_agent_forwards_entrypoint(tmp_path: Path) -> None:
     assert run_kwargs["entrypoint"] == ["/bin/sh", "-lc", 'echo "init"; exec "$@"', "--"]
 
 
+def test_run_agent_prepare_volume_dir_only_on_managed_dirs(tmp_path: Path) -> None:
+    """_prepare_volume_dir must be called on managed_extra_dirs but NOT on
+    unmanaged extra_volumes such as X11 sockets."""
+    prepared: list[Path] = []
+
+    class _FakeContainers:
+        def run(self, **kwargs):
+            return {"id": "agent"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    manager.runtime = "podman"
+    # Intercept permission-tightening calls to record which paths were touched.
+    manager._prepare_volume_dir = lambda path: prepared.append(path)  # type: ignore[method-assign]
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "claude"
+    managed_dir = tmp_path / "managed"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    managed_dir.mkdir(parents=True, exist_ok=True)
+
+    manager.run_agent(
+        agent="claude",
+        image="vibepod/claude:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/claude",
+        env={},
+        command=["claude"],
+        auto_remove=True,
+        name=None,
+        version="0.2.1",
+        network="vibepod-network",
+        extra_volumes=[
+            ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw"),  # non-managed — must NOT be tightened
+        ],
+        managed_extra_dirs=[managed_dir],
+    )
+
+    assert config_dir in prepared, "config_dir should always be prepared"
+    assert managed_dir in prepared, "managed_extra_dirs entries should be prepared"
+    assert Path("/tmp/.X11-unix") not in prepared, (
+        "non-managed extra_volumes (e.g. X11 sockets) must not have permissions tightened"
+    )
+
+
 def test_x11_volumes_and_env_returns_socket_and_display() -> None:
     volumes, env = run_cmd._x11_volumes_and_env(":0")
     assert ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw") in volumes
@@ -640,6 +691,8 @@ def test_cli_run_forwards_extra_args_to_agent_command(monkeypatch, tmp_path: Pat
     captured: dict = {}
 
     class _CapturingDockerManager:
+        runtime = "docker"
+
         def ensure_network(self, name: str) -> None:
             pass
 
@@ -670,7 +723,7 @@ def test_cli_run_forwards_extra_args_to_agent_command(monkeypatch, tmp_path: Pat
             return container
 
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
-    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "get_manager", lambda **kwargs: _CapturingDockerManager())
 
     result = CliRunner().invoke(
         app,

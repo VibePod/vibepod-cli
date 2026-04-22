@@ -6,6 +6,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from rich.prompt import Prompt
 
 from vibepod.core import docker as docker_core
@@ -134,4 +135,26 @@ def test_get_manager_wraps_runtime_preference_errors(monkeypatch) -> None:
     )
 
     with pytest.raises(docker_core.DockerClientError, match="Global config must contain"):
+        docker_core.get_manager()
+
+
+def test_get_manager_wraps_oserror_from_resolve_runtime(monkeypatch) -> None:
+    def _raise_oserror(**kwargs) -> tuple[str, str]:
+        del kwargs
+        raise OSError("Permission denied: '/home/user/.config/vibepod/config.yaml'")
+
+    monkeypatch.setattr(runtime, "resolve_runtime", _raise_oserror)
+
+    with pytest.raises(docker_core.DockerClientError, match="Failed to access runtime config"):
+        docker_core.get_manager()
+
+
+def test_get_manager_wraps_yaml_error_from_resolve_runtime(monkeypatch) -> None:
+    def _raise_yaml_error(**kwargs) -> tuple[str, str]:
+        del kwargs
+        raise yaml.YAMLError("mapping values are not allowed here")
+
+    monkeypatch.setattr(runtime, "resolve_runtime", _raise_yaml_error)
+
+    with pytest.raises(docker_core.DockerClientError, match="Failed to parse runtime config"):
         docker_core.get_manager()
