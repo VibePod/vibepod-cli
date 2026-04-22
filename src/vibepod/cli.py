@@ -17,6 +17,7 @@ from vibepod.commands import (
     run,
     skills,
     stop,
+    task,
     update,
 )
 from vibepod.constants import AGENT_SHORTCUTS, SUPPORTED_AGENTS
@@ -96,6 +97,7 @@ app.add_typer(config.app, name="config")
 app.add_typer(proxy.app, name="proxy")
 app.add_typer(doctor.app, name="doctor")
 app.add_typer(skills.app, name="skills")
+app.add_typer(task.app, name="task")
 
 
 def _register_run_alias(command_name: str, agent_name: str) -> None:
