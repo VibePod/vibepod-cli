@@ -45,6 +45,16 @@ vp run codex
 vp run vibe   # alias of devstral
 ```
 
+Run in the background and retrieve collected output by task ID:
+
+```bash
+vp run <agent> --detached --prompt "Write TEST.md"
+vp logs show <task-id>
+```
+
+Use `--prompt` to run a single non-interactive task. VibePod maps it to each
+agent's documented prompt mode.
+
 Extra arguments after the agent are forwarded to the agent process. Use `--`
 before agent flags so VibePod does not parse them as its own options:
 

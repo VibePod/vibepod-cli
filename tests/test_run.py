@@ -528,6 +528,62 @@ def test_cli_run_forwards_extra_args_to_agent_command(monkeypatch, tmp_path: Pat
     assert captured["command"] == ["claude", "--model", "sonnet", "hello world"]
 
 
+def test_detached_run_returns_task_id_and_starts_collector(monkeypatch, tmp_path: Path) -> None:
+    captured: dict = {}
+    collector: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["logging"] = {"enabled": True, "db_path": str(tmp_path / "logs.db")}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "new_session_id", lambda: "task123")
+
+    def _fake_collector(session_id: str, db_path: Path) -> bool:
+        collector.update({"session_id": session_id, "db_path": db_path})
+        return True
+
+    monkeypatch.setattr(run_cmd, "_start_detached_log_collector", _fake_collector)
+
+    result = CliRunner().invoke(app, ["run", "--detached", "-w", str(tmp_path), "claude"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["session_id"] == "task123"
+    assert captured["auto_remove"] is False
+    assert captured["interactive"] is True
+    assert collector["session_id"] == "task123"
+    assert "Task ID: task123" in result.output
+
+
 def test_auto_pull_global_triggers_pull(monkeypatch, tmp_path: Path) -> None:
     """Global auto_pull=true causes image pull on run."""
     stub = _StubDockerManager()
@@ -688,6 +744,72 @@ def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
     run_cmd.run(agent="codex", workspace=tmp_path, detach=True, ikwid=True)
 
     assert captured["command"] == ["codex", "--dangerously-bypass-approvals-and-sandbox"]
+
+
+def test_codex_exec_uses_shell_wrapper_to_preserve_prompt_spacing() -> None:
+    command = run_cmd._append_command_extras(
+        ["codex"],
+        agent="codex",
+        ikwid_args=["--dangerously-bypass-approvals-and-sandbox"],
+        llm_args=[],
+        passthrough_args=["exec", "Write a TEST.md file"],
+    )
+
+    assert command == [
+        "/bin/sh",
+        "-lc",
+        "exec codex exec --dangerously-bypass-approvals-and-sandbox 'Write a TEST.md file'",
+    ]
+
+
+def test_prompt_maps_to_codex_exec(monkeypatch, tmp_path: Path) -> None:
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-codex-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+        def attach_interactive(self, container, logger=None) -> None:  # noqa: ANN001, ARG002
+            return None
+
+        def stream_logs(self, container) -> tuple[int, str]:  # noqa: ANN001, ARG002
+            return 0, "ok\n"
+
+    cfg = _make_config()
+    cfg["agents"]["codex"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="codex", workspace=tmp_path, prompt="Write TEST.md")
+
+    assert captured["command"] == ["/bin/sh", "-lc", "exec codex exec 'Write TEST.md'"]
+    assert captured["interactive"] is False
 
 
 def test_ikwid_appends_args_for_gemini(monkeypatch, tmp_path: Path) -> None:

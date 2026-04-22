@@ -171,6 +171,8 @@ class DockerManager:
         platform: str | None = None,
         user: str | None = None,
         entrypoint: list[str] | None = None,
+        session_id: str | None = None,
+        interactive: bool = True,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -180,6 +182,8 @@ class DockerManager:
             "vibepod.workspace": str(workspace),
             "vibepod.version": version,
         }
+        if session_id:
+            labels["vibepod.session_id"] = session_id
 
         environment = {**env}
 
@@ -196,8 +200,8 @@ class DockerManager:
                 "name": container_name,
                 "command": command,
                 "detach": True,
-                "tty": True,
-                "stdin_open": True,
+                "tty": interactive,
+                "stdin_open": interactive,
                 "auto_remove": auto_remove,
                 "labels": labels,
                 "environment": environment,
@@ -215,6 +219,48 @@ class DockerManager:
             return self.client.containers.run(**run_kwargs)
         except APIError as exc:
             raise DockerClientError(f"Failed to start container: {exc}") from exc
+
+    def get_container(self, container_id: str) -> Any:
+        try:
+            return self.client.containers.get(container_id)
+        except NotFound as exc:
+            raise DockerClientError(f"Container not found: {container_id}") from exc
+        except APIError as exc:
+            raise DockerClientError(f"Failed to inspect container {container_id}: {exc}") from exc
+
+    def container_logs(self, container_id: str, tail: str | int = "all") -> str:
+        """Return Docker's stored logs for a container."""
+        container = self.get_container(container_id)
+        try:
+            logs = container.logs(stdout=True, stderr=True, tail=tail)
+        except APIError as exc:
+            raise DockerClientError(
+                f"Failed to read logs for container {container_id}: {exc}"
+            ) from exc
+        if isinstance(logs, bytes):
+            return logs.decode("utf-8", errors="replace")
+        return str(logs)
+
+    def stream_logs(self, container: Any) -> tuple[int | None, str]:
+        """Stream Docker logs for a container until it exits."""
+        chunks: list[str] = []
+        try:
+            for chunk in container.logs(stream=True, follow=True, stdout=True, stderr=True):
+                if isinstance(chunk, bytes):
+                    text = chunk.decode("utf-8", errors="replace")
+                else:
+                    text = str(chunk)
+                chunks.append(text)
+                sys.stdout.write(text)
+                sys.stdout.flush()
+            result = container.wait()
+        except APIError as exc:
+            raise DockerClientError(f"Failed to stream container logs: {exc}") from exc
+        if isinstance(result, dict):
+            status_code = result.get("StatusCode")
+            code = int(status_code) if status_code is not None else None
+            return code, "".join(chunks)
+        return None, "".join(chunks)
 
     def stop_agent(self, agent: str, force: bool = False) -> int:
         stopped = 0

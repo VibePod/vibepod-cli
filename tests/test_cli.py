@@ -74,3 +74,18 @@ def test_alias_forwards_extra_option_args_after_delimiter(monkeypatch) -> None:
     assert result.exit_code == 0
     assert called["agent"] == "claude"
     assert called["passthrough"] == ["--model", "sonnet", "hello"]
+
+
+def test_alias_accepts_prompt_option(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "prompt": None}
+
+    def _fake_run(agent=None, prompt=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["prompt"] = prompt
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["codex", "--prompt", "Write TEST.md"])
+    assert result.exit_code == 0
+    assert called["agent"] == "codex"
+    assert called["prompt"] == "Write TEST.md"

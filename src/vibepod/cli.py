@@ -40,8 +40,15 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             bool, typer.Option("--pull", help="Pull latest image before run")
         ] = False,
         detach: Annotated[
-            bool, typer.Option("-d", "--detach", help="Run container in background")
+            bool, typer.Option("-d", "--detach", "--detached", help="Run container in background")
         ] = False,
+        prompt: Annotated[
+            str | None,
+            typer.Option(
+                "--prompt",
+                help="Run a single prompt in the agent's non-interactive mode",
+            ),
+        ] = None,
         env: Annotated[
             list[str] | None,
             typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
@@ -76,6 +83,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             workspace=workspace,
             pull=pull,
             detach=detach,
+            prompt=prompt,
             env=env,
             name=name,
             network=network,

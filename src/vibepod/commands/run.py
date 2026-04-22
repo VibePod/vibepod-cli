@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -26,7 +28,7 @@ from vibepod.core.agents import (
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
-from vibepod.core.session_logger import SessionLogger
+from vibepod.core.session_logger import SessionLogger, new_session_id
 from vibepod.utils.console import error, info, success, warning
 
 CLAUDE_TOKEN_FILENAME = "oauth-token"
@@ -207,6 +209,84 @@ def _terminal_env_defaults() -> dict[str, str]:
     return values
 
 
+def _log_db_path(config: dict[str, Any]) -> Path:
+    log_cfg = config.get("logging", {})
+    return Path(str(log_cfg.get("db_path", "~/.config/vibepod/logs.db"))).expanduser().resolve()
+
+
+def _logging_enabled(config: dict[str, Any]) -> bool:
+    return bool(config.get("logging", {}).get("enabled", True))
+
+
+def _start_detached_log_collector(session_id: str, log_db_path: Path) -> bool:
+    """Start a background process that persists detached container output."""
+    error_log_path = log_db_path.with_suffix(".collector.log")
+    try:
+        error_log_path.parent.mkdir(parents=True, exist_ok=True)
+        error_log = error_log_path.open("ab")
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "vibepod.cli",
+                "logs",
+                "collect",
+                session_id,
+                "--db-path",
+                str(log_db_path),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=error_log,
+            start_new_session=True,
+            close_fds=True,
+        )
+        error_log.close()
+    except OSError as exc:
+        try:
+            error_log.close()
+        except UnboundLocalError:
+            pass
+        warning(f"Could not start detached log collector: {exc}")
+        return False
+    return True
+
+
+def _append_command_extras(
+    command: list[str],
+    *,
+    agent: str,
+    ikwid_args: list[str],
+    llm_args: list[str],
+    passthrough_args: list[str],
+) -> list[str]:
+    """Append VibePod-generated and user-provided args to an agent command."""
+    if agent == "codex" and passthrough_args[:1] in (["exec"], ["e"]):
+        subcommand, *rest = passthrough_args
+        argv = [*command, subcommand, *ikwid_args, *llm_args, *rest]
+        return ["/bin/sh", "-lc", "exec " + " ".join(shlex.quote(arg) for arg in argv)]
+    return [*command, *ikwid_args, *llm_args, *passthrough_args]
+
+
+def _prompt_passthrough_args(agent: str, prompt: str) -> list[str]:
+    """Return agent-specific non-interactive prompt args."""
+    if agent == "claude":
+        return ["-p", prompt]
+    if agent == "gemini":
+        return ["-p", prompt]
+    if agent == "codex":
+        return ["exec", prompt]
+    if agent == "opencode":
+        return ["run", prompt]
+    if agent == "devstral":
+        return ["--prompt", prompt]
+    if agent == "auggie":
+        return ["--print", prompt]
+    if agent == "copilot":
+        return ["-p", prompt]
+    return [prompt]
+
+
 def _compose_file_present(workspace: Path) -> bool:
     return (workspace / "docker-compose.yml").exists() or (workspace / "compose.yml").exists()
 
@@ -252,8 +332,15 @@ def run(
     ] = Path("."),
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     detach: Annotated[
-        bool, typer.Option("-d", "--detach", help="Run container in background")
+        bool, typer.Option("-d", "--detach", "--detached", help="Run container in background")
     ] = False,
+    prompt: Annotated[
+        str | None,
+        typer.Option(
+            "--prompt",
+            help="Run a single prompt in the agent's non-interactive mode",
+        ),
+    ] = None,
     env: Annotated[
         list[str] | None,
         typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
@@ -300,6 +387,12 @@ def run(
             )
         error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
+
+    if prompt is not None:
+        if passthrough_args:
+            error("Cannot combine --prompt with trailing agent arguments.")
+            raise typer.Exit(1)
+        passthrough_args = _prompt_passthrough_args(selected_agent, prompt)
 
     workspace_path = workspace.expanduser().resolve()
     if not workspace_path.exists() or not workspace_path.is_dir():
@@ -395,6 +488,7 @@ def run(
 
     command = spec.command
     entrypoint: list[str] | None = None
+    ikwid_command_extra: list[str] = []
     if init_commands:
         info(f"Applying {len(init_commands)} init command(s) before startup")
         try:
@@ -413,21 +507,24 @@ def run(
                     error(str(exc))
                     raise typer.Exit(1) from exc
             info(f"IKWID mode: appending {spec.ikwid_args} to {selected_agent} command")
-            command = list(command or []) + spec.ikwid_args
+            ikwid_command_extra = list(spec.ikwid_args)
         else:
             warning(f"IKWID mode not supported for agent '{selected_agent}', ignoring")
 
-    if llm_command_extra:
-        command = list(command or []) + llm_command_extra
-
-    if passthrough_args:
+    if ikwid_command_extra or llm_command_extra or passthrough_args:
         if command is None:
             try:
                 command = manager.resolve_launch_command(image=image, command=spec.command)
             except DockerClientError as exc:
                 error(str(exc))
                 raise typer.Exit(1) from exc
-        command = list(command or []) + passthrough_args
+        command = _append_command_extras(
+            list(command or []),
+            agent=selected_agent,
+            ikwid_args=ikwid_command_extra,
+            llm_args=llm_command_extra,
+            passthrough_args=passthrough_args,
+        )
 
     config_dir = agent_config_dir(selected_agent)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -499,6 +596,8 @@ def run(
 
     info(f"Starting {selected_agent} with image {image}")
     container_user = _host_user() if spec.run_as_host_user else None
+    task_id = new_session_id()
+    auto_remove = bool(config.get("auto_remove", True)) and not detach
     container = manager.run_agent(
         agent=selected_agent,
         image=image,
@@ -507,7 +606,7 @@ def run(
         config_mount_path=spec.config_mount_path,
         env=merged_env,
         command=command,
-        auto_remove=bool(config.get("auto_remove", True)),
+        auto_remove=auto_remove,
         name=name,
         version=__version__,
         network=network_name,
@@ -515,6 +614,8 @@ def run(
         platform=spec.platform,
         user=container_user,
         entrypoint=entrypoint,
+        session_id=task_id,
+        interactive=prompt is None,
     )
 
     container.reload()
@@ -553,14 +654,59 @@ def run(
             )
             container.stop(timeout=5)
             raise typer.Exit(1)
+        collector_started = False
+        if _logging_enabled(config):
+            log_db_path = _log_db_path(config)
+            SessionLogger.create_session(
+                log_db_path,
+                session_id=task_id,
+                agent=selected_agent,
+                image=image,
+                workspace=str(workspace_path),
+                container_id=container.id,
+                container_name=container.name,
+                vibepod_version=__version__,
+            )
+            collector_started = _start_detached_log_collector(task_id, log_db_path)
         success(f"Started {container.name}")
+        success(f"Task ID: {task_id}")
+        if collector_started:
+            info(f"View logs with: vp logs show {task_id}")
+        elif _logging_enabled(config):
+            warning("Detached output collection is not running for this task.")
+        else:
+            warning("Session logging is disabled; detached output will not be collected.")
         return
 
-    log_cfg = config.get("logging", {})
-    log_enabled = bool(log_cfg.get("enabled", True))
-    log_db_path = (
-        Path(str(log_cfg.get("db_path", "~/.config/vibepod/logs.db"))).expanduser().resolve()
-    )
+    if prompt is not None:
+        log_enabled = _logging_enabled(config)
+        log_db_path = _log_db_path(config)
+        if log_enabled:
+            SessionLogger.create_session(
+                log_db_path,
+                session_id=task_id,
+                agent=selected_agent,
+                image=image,
+                workspace=str(workspace_path),
+                container_id=container.id,
+                container_name=container.name,
+                vibepod_version=__version__,
+            )
+        status_code, logs = manager.stream_logs(container)
+        exit_reason = f"exit_{status_code}" if status_code is not None else "normal"
+        if log_enabled:
+            SessionLogger.append_output(log_db_path, session_id=task_id, content=logs)
+            SessionLogger.close_session_by_id(
+                log_db_path,
+                session_id=task_id,
+                exit_reason=exit_reason,
+            )
+        if status_code not in (None, 0):
+            raise typer.Exit(status_code)
+        return
+
+    log_enabled = _logging_enabled(config)
+    log_db_path = _log_db_path(config)
 
     logger = SessionLogger(log_db_path, enabled=log_enabled)
     logger.open_session(
@@ -570,6 +716,7 @@ def run(
         container_id=container.id,
         container_name=container.name,
         vibepod_version=__version__,
+        session_id=task_id,
     )
 
     exit_reason = "normal"

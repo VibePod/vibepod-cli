@@ -153,7 +153,24 @@ agents:
       MY_VAR: value
 ```
 
-## Passing arguments to the agent
+## Running one prompt
+
+Use `--prompt` to run a single task in the selected agent's non-interactive mode:
+
+```bash
+vp run codex --prompt "Write TEST.md"
+vp run claude --prompt "Summarize this repository"
+```
+
+Combine it with detached mode to run the same non-interactive task in the background:
+
+```bash
+vp run codex --detached --prompt "Write TEST.md"
+```
+
+VibePod maps `--prompt` to each agent's documented prompt mode (`claude -p`, `codex exec`, `opencode run`, and so on).
+
+## Passing raw arguments to the agent
 
 Any extra arguments after the agent name are appended to the agent command inside the container:
 
@@ -206,19 +223,34 @@ vp run codex --ikwid
 
 ## Detached mode
 
-Use `-d` / `--detach` to start an agent container in the background without attaching your terminal. The agent process starts immediately inside the container — `-d` only controls whether VibePod attaches your terminal to it.
+Use `-d`, `--detach`, or `--detached` to start an agent container in the background without attaching your terminal. The agent process starts immediately inside the container and VibePod returns a task ID that can be used to retrieve logs later.
 
 ### Basic usage
 
 ```bash
-vp run claude -d
-# ✓ Started vibepod-claude-a1b2c3d4
+vp run codex --detached --prompt "Write TEST.md"
+# ✓ Started vibepod-codex-a1b2c3d4
+# ✓ Task ID: 9f2c7d4e8a1b4c6f9a0d2e3f4b5c6d7e
 ```
 
-The command prints the container name and returns immediately. You can also find it later with:
+The command prints the container name and task ID, then returns immediately. You can also find running task IDs later with:
 
 ```bash
 vp list --running
+```
+
+### Retrieving detached output
+
+Detached container output is collected in the local VibePod logs database while the task runs.
+
+```bash
+vp logs show 9f2c7d4e8a1b4c6f9a0d2e3f4b5c6d7e
+```
+
+For a still-running task, you can attach by task ID:
+
+```bash
+vp logs attach 9f2c7d4e8a1b4c6f9a0d2e3f4b5c6d7e
 ```
 
 ### Interacting with a detached container
@@ -254,9 +286,8 @@ vp stop --all        # stop every VibePod container
 
 ### Caveats
 
-- **`auto_remove` (default: `true`)** — By default, containers are automatically removed when they stop. This means you cannot restart a stopped detached container; you need to `vp run` again. Set `auto_remove: false` in your [configuration](../configuration.md) if you want stopped containers to persist.
-- **No built-in re-attach** — VibePod does not currently have a command to re-attach your terminal to a detached container. Use `docker attach <container>` or `docker exec -it <container> bash` directly.
-- **Session logging** — Sessions started with `--detach` are not recorded in the VibePod session log since VibePod does not capture the interactive I/O. If you need session logging, run without `--detach`.
+- **`auto_remove` (default: `true`)** — Foreground containers are automatically removed when they stop by default. Detached containers are kept so their Docker logs remain available through the task ID.
+- **Session logging disabled** — If `logging.enabled` is `false`, VibePod still starts the detached container and prints a task ID, but it does not collect detached output in SQLite.
 
 ## Connecting to a Docker Compose network
 
@@ -463,4 +494,16 @@ vp run copilot   # or: vp p
 
 ```bash
 vp run codex   # or: vp x
+```
+
+For non-interactive detached tasks, use Codex's `exec` subcommand:
+
+```bash
+vp run codex --detached -- exec "Write a TEST.md file with details to our test strategy"
+```
+
+For unattended edits, combine it with IKWID mode:
+
+```bash
+vp run codex --detached --ikwid -- exec "Write a TEST.md file with details to our test strategy"
 ```

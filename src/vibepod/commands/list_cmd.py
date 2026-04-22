@@ -39,6 +39,7 @@ def _running_rows(containers: list[Any]) -> list[dict[str, str]]:
                 "agent": agent,
                 "container": getattr(container, "name", "-"),
                 "context": labels.get("vibepod.workspace", "-"),
+                "task_id": labels.get("vibepod.session_id", "-"),
             }
         )
     return sorted(rows, key=lambda row: (row["agent"], row["container"]))
@@ -75,11 +76,12 @@ def list_agents(
     running_table = Table(title="Running Agents", title_justify="left")
     running_table.add_column("AGENT", style="cyan")
     running_table.add_column("CONTAINER", style="magenta")
+    running_table.add_column("TASK ID")
     running_table.add_column("CONTEXT")
 
     if running_rows:
         for row in running_rows:
-            running_table.add_row(row["agent"], row["container"], row["context"])
+            running_table.add_row(row["agent"], row["container"], row["task_id"], row["context"])
         console.print(running_table)
     else:
         console.print("No running agents.")

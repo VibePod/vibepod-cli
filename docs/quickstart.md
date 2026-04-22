@@ -53,15 +53,15 @@ Use `-w` / `--workspace` to target any directory:
 vp run claude -w ~/other-project
 ```
 
-## Pass arguments to the agent
+## Run one prompt
 
-Arguments after the agent name are forwarded to the agent command inside the container:
+Use `--prompt` to run a single non-interactive task. VibePod maps it to the selected agent's documented prompt mode:
 
 ```bash
-vp run <agent> <agent-args>
+vp run codex --prompt "Write TEST.md"
 ```
 
-When forwarding flags to the agent, use `--` to stop VibePod option parsing:
+For raw agent-specific arguments, use `--` to stop VibePod option parsing:
 
 ```bash
 vp run <agent> -- <agent-flag> <value>
@@ -91,10 +91,16 @@ If that agent is already configured under `agents`, the command exits without ch
 
 ## Run in the background
 
-Use `-d` / `--detach` to start the container without attaching your terminal:
+Use `-d`, `--detach`, or `--detached` to start the container without attaching your terminal:
 
 ```bash
-vp run claude -d
+vp run codex --detached --prompt "Write TEST.md"
+```
+
+Detached runs print a task ID. Use it to inspect collected output later:
+
+```bash
+vp logs show <task-id>
 ```
 
 Check which agents are running:

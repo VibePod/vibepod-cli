@@ -47,7 +47,11 @@ def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
                 _FakeContainer(
                     "vibepod-claude-1",
                     "running",
-                    {"vibepod.agent": "claude", "vibepod.workspace": "/workspace/a"},
+                    {
+                        "vibepod.agent": "claude",
+                        "vibepod.workspace": "/workspace/a",
+                        "vibepod.session_id": "task-a",
+                    },
                 ),
                 _FakeContainer(
                     "vibepod-claude-2",
@@ -72,4 +76,6 @@ def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
     assert len(rows) == 2
     assert [row["container"] for row in rows] == ["vibepod-claude-1", "vibepod-claude-2"]
     assert {row["context"] for row in rows} == {"/workspace/a", "/workspace/b"}
-    assert all(set(row) == {"agent", "container", "context"} for row in rows)
+    assert rows[0]["task_id"] == "task-a"
+    assert rows[1]["task_id"] == "-"
+    assert all(set(row) == {"agent", "container", "context", "task_id"} for row in rows)

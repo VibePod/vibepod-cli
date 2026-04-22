@@ -40,6 +40,7 @@ class TestSessionLogger:
         }
         assert "sessions" in tables
         assert "messages" in tables
+        assert "outputs" in tables
         conn.close()
 
     # -- Session lifecycle ------------------------------------------------
@@ -56,6 +57,42 @@ class TestSessionLogger:
         assert row == ("claude", "vibepod-claude-test")
         conn.close()
         logger.close_session()
+
+    def test_open_uses_provided_session_id(self, tmp_path):
+        logger = self._make_logger(tmp_path)
+        sid = logger.open_session(
+            agent="claude",
+            image="ghcr.io/anthropics/claude-code:latest",
+            workspace="/workspace",
+            container_id="abc123",
+            container_name="vibepod-claude-test",
+            vibepod_version="0.2.1",
+            session_id="task123",
+        )
+
+        assert sid == "task123"
+        logger.close_session()
+
+    def test_append_and_read_output(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        SessionLogger.create_session(
+            db_path,
+            session_id="task123",
+            agent="claude",
+            image="image",
+            workspace="/workspace",
+            container_id="abc123",
+            container_name="vibepod-claude-test",
+            vibepod_version="0.2.1",
+        )
+        SessionLogger.append_output(db_path, session_id="task123", content="hello\n")
+
+        outputs = SessionLogger.get_outputs(db_path, "task123")
+
+        assert len(outputs) == 1
+        assert outputs[0]["stream"] == "stdout"
+        assert outputs[0]["content"] == "hello\n"
+        assert outputs[0]["timestamp"]
 
     def test_close_sets_ended_at_and_reason(self, tmp_path):
         logger = self._make_logger(tmp_path)
