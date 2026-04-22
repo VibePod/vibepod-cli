@@ -24,6 +24,7 @@ class AgentSpec:
     ikwid_args: list[str] | None = None
     llm_env_map: dict[str, str | list[str]] | None = None
     llm_model_args: list[str] | None = None
+    headless_prefix: list[str] | None = None
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -47,6 +48,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
             ],
         },
         llm_model_args=["--model"],
+        headless_prefix=["-p"],
     ),
     "gemini": AgentSpec(
         "gemini",
@@ -89,6 +91,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         ["auggie"],
         "/config",
         {"HOME": "/config"},
+        headless_prefix=["--print"],
     ),
     "copilot": AgentSpec(
         "copilot",
@@ -113,6 +116,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
             "base_url": "CODEX_OSS_BASE_URL",
         },
         llm_model_args=["--oss", "-m"],
+        headless_prefix=["exec"],
     ),
 }
 
