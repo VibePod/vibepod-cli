@@ -7,7 +7,7 @@ from typing import Annotated
 
 import typer
 
-from vibepod.commands import config, doctor, list_cmd, logs, proxy, run, stop, update
+from vibepod.commands import attach, config, doctor, list_cmd, logs, proxy, run, stop, update
 from vibepod.constants import AGENT_SHORTCUTS, SUPPORTED_AGENTS
 
 app = typer.Typer(
@@ -22,6 +22,7 @@ app.command(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(run.run)
 app.command(name="stop")(stop.stop)
+app.command(name="attach")(attach.attach)
 app.command(name="list")(list_cmd.list_agents)
 app.command(name="version")(update.version)
 

@@ -244,19 +244,40 @@ vp list --running    # shows only running agents
 vp list --json       # machine-readable output
 ```
 
-Stop a specific agent or all agents:
+Stop a specific agent, a single container, or all agents:
 
 ```bash
-vp stop claude       # graceful stop (10 s timeout)
-vp stop claude -f    # force stop immediately
-vp stop --all        # stop every VibePod container
+vp stop claude                       # stop every container for the `claude` agent
+vp stop vibepod-claude-a1b2c3d4      # stop one specific container (from `vp list`)
+vp stop claude -f                    # force stop immediately
+vp stop --all                        # stop every VibePod container
 ```
+
+The argument is resolved as an agent name/shortcut first; anything else is looked up as a container name or ID. Only VibePod-managed containers can be stopped this way.
 
 ### Caveats
 
 - **`auto_remove` (default: `true`)** — By default, containers are automatically removed when they stop. This means you cannot restart a stopped detached container; you need to `vp run` again. Set `auto_remove: false` in your [configuration](../configuration.md) if you want stopped containers to persist.
-- **No built-in re-attach** — VibePod does not currently have a command to re-attach your terminal to a detached container. Use `docker attach <container>` or `docker exec -it <container> bash` directly.
 - **Session logging** — Sessions started with `--detach` are not recorded in the VibePod session log since VibePod does not capture the interactive I/O. If you need session logging, run without `--detach`.
+
+## Reattaching a terminal
+
+Closing the terminal window that runs `vp run` does **not** stop the container — the agent keeps running in the background under Docker. This is by design: the container's lifecycle is tied to Docker, not to your shell. Use it as a feature when you want to keep a long-running session alive across terminal restarts.
+
+To rejoin a running container:
+
+```bash
+vp list --running       # find the container name
+vp attach <container>   # reattach your terminal
+```
+
+If exactly one managed container is running you can omit the name:
+
+```bash
+vp attach
+```
+
+`vp attach` only works for containers that are already running and managed by VibePod. When you are done, close the terminal to leave it running, or stop it explicitly with `vp stop <container>`, `vp stop <agent>`, or `vp stop --all`.
 
 ## Connecting to a Docker Compose network
 
