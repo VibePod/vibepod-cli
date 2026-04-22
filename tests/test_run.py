@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
+from vibepod.cli import app
 from vibepod.commands import run as run_cmd
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.docker import DockerClientError, DockerManager
@@ -468,6 +470,62 @@ def _make_config(
         "proxy": {"enabled": False},
         "logging": {"enabled": False},
     }
+
+
+def test_cli_run_forwards_extra_args_to_agent_command(monkeypatch, tmp_path: Path) -> None:
+    """Extra args after -- are appended to the agent command as-is."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "-d",
+            "-w",
+            str(tmp_path),
+            "claude",
+            "--",
+            "--model",
+            "sonnet",
+            "hello world",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["command"] == ["claude", "--model", "sonnet", "hello world"]
 
 
 def test_auto_pull_global_triggers_pull(monkeypatch, tmp_path: Path) -> None:

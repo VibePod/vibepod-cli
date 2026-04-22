@@ -45,6 +45,13 @@ vp run codex
 vp run vibe   # alias of devstral
 ```
 
+Extra arguments after the agent are forwarded to the agent process. Use `--`
+before agent flags so VibePod does not parse them as its own options:
+
+```bash
+vp run <agent> -- <agent-args>
+```
+
 ## IKWID Mode (`--ikwid`)
 
 Use `--ikwid` to append each agent's auto-approval / permission-skip flag when supported.
