@@ -53,6 +53,20 @@ Use `-w` / `--workspace` to target any directory:
 vp run claude -w ~/other-project
 ```
 
+## Pass arguments to the agent
+
+Arguments after the agent name are forwarded to the agent command inside the container:
+
+```bash
+vp run <agent> <agent-args>
+```
+
+When forwarding flags to the agent, use `--` to stop VibePod option parsing:
+
+```bash
+vp run <agent> -- <agent-flag> <value>
+```
+
 ## Bootstrap a project config
 
 Create a project-level config file that you can extend later:

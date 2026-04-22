@@ -56,3 +56,21 @@ def test_alias_forwards_extra_args(monkeypatch) -> None:
     assert result.exit_code == 0
     assert called["agent"] == "claude"
     assert called["passthrough"] == ["setup-token"]
+
+
+def test_alias_forwards_extra_option_args_after_delimiter(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        import click
+
+        ctx = click.get_current_context(silent=True)
+        called["agent"] = agent
+        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["claude", "--", "--model", "sonnet", "hello"])
+    assert result.exit_code == 0
+    assert called["agent"] == "claude"
+    assert called["passthrough"] == ["--model", "sonnet", "hello"]

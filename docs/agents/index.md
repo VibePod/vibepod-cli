@@ -153,6 +153,23 @@ agents:
       MY_VAR: value
 ```
 
+## Passing arguments to the agent
+
+Any extra arguments after the agent name are appended to the agent command inside the container:
+
+```bash
+vp run <agent> <agent-args>
+```
+
+Use `--` before agent flags so VibePod does not parse them as its own options:
+
+```bash
+vp run <agent> -- <agent-flag> <value>
+```
+
+For concrete syntax, check the agent's own CLI help. For example, Claude and
+Codex both accept model flags, but their exact flag names and values differ.
+
 ## Init scripts before startup
 
 Use `agents.<agent>.init` to run shell commands in the container before the agent launches. This is useful for installing extra tools in a custom image workflow.

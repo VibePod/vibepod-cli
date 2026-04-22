@@ -281,7 +281,8 @@ def run(
     """Start an agent container.
 
     Any trailing arguments after the agent name are forwarded to the agent's
-    command inside the container, e.g. `vp run claude setup-token`.
+    command inside the container. Use `--` before agent flags when they could
+    be parsed as VibePod flags.
     """
     click_ctx = click.get_current_context(silent=True)
     passthrough_args: list[str] = (
