@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from vibepod.constants import CONTAINER_LABEL_MANAGED
+import yaml
+
+from vibepod.constants import CONTAINER_LABEL_MANAGED, RUNTIME_DOCKER, RUNTIME_PODMAN
 
 docker: Any | None
 APIError: type[Exception]
@@ -47,6 +49,28 @@ def _is_latest_tag(image: str) -> bool:
     return ":" not in name or name.endswith(":latest")
 
 
+def get_manager(
+    runtime_override: str | None = None,
+    config: dict[str, Any] | None = None,
+) -> DockerManager:
+    """Create a :class:`DockerManager` using the resolved container runtime.
+
+    Delegates runtime detection/selection to :mod:`vibepod.core.runtime`.
+    """
+    from vibepod.core.runtime import resolve_runtime
+
+    try:
+        runtime_name, socket_url = resolve_runtime(override=runtime_override, config=config)
+    except (RuntimeError, ValueError) as exc:
+        raise DockerClientError(str(exc)) from exc
+    except OSError as exc:
+        raise DockerClientError(f"Failed to access runtime config: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise DockerClientError(f"Failed to parse runtime config: {exc}") from exc
+
+    return DockerManager(base_url=socket_url, runtime=runtime_name)
+
+
 def _normalize_command(value: Any) -> list[str]:
     """Normalize Docker command/entrypoint values to a list of strings."""
     if value is None:
@@ -59,16 +83,72 @@ def _normalize_command(value: Any) -> list[str]:
 
 
 class DockerManager:
-    """Manager for all Docker operations."""
+    """Manager for all Docker/Podman operations via the Docker SDK."""
 
-    def __init__(self) -> None:
+    def __init__(self, base_url: str | None = None, runtime: str = RUNTIME_DOCKER) -> None:
         if docker is None:
             raise DockerClientError("Docker SDK not installed")
+        self.runtime = runtime
         try:
-            self.client = docker.from_env()
+            if base_url:
+                self.client = docker.DockerClient(base_url=base_url)
+            else:
+                self.client = docker.from_env()
             self.client.ping()
         except DockerException as exc:
-            raise DockerClientError(f"Docker is not available: {exc}") from exc
+            raise DockerClientError(f"Container runtime is not available: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _prepare_volume_dir(self, path: Path) -> None:
+        """Tighten permissions on VibePod-managed bind-mount sources.
+
+        These directories hold sensitive state (agent credentials, the
+        mitmproxy CA private key, proxy/logs DBs) and must stay owner-only
+        on the host. Container access is arranged without widening host
+        perms: rootless Podman maps the host UID to container root by
+        default (owner can read), ``userns_mode=keep-id`` keeps the UID,
+        and for user-switching agent images an in-container chmod fixup
+        runs as root before the user-switch (see ``commands/run.py``).
+        """
+        if self.runtime != RUNTIME_PODMAN:
+            return
+        try:
+            path.chmod(0o700)
+            for child in path.rglob("*"):
+                try:
+                    child.chmod(0o700 if child.is_dir() else 0o600)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+    def _resolved_userns_mode(self, userns_mode: str | None) -> str | None:
+        """Normalize user namespace modes per runtime.
+
+        Podman supports modes like ``keep-id`` that Docker rejects, so only
+        forward values that make sense for the selected runtime.
+        """
+        if userns_mode is None:
+            return None
+
+        normalized = userns_mode.strip().lower()
+        if not normalized:
+            return None
+
+        if self.runtime == RUNTIME_PODMAN:
+            return normalized if normalized in {"auto", "keep-id", "nomap"} else None
+
+        if normalized in {"auto", "keep-id", "nomap"}:
+            return None
+
+        return normalized
+
+    def _run_container(self, **kwargs: Any) -> Any:
+        """Create and start a container via the high-level SDK."""
+        return self.client.containers.run(**kwargs)
 
     def pull_image(self, image: str) -> None:
         try:
@@ -168,8 +248,10 @@ class DockerManager:
         version: str,
         network: str | None = None,
         extra_volumes: list[tuple[str, str, str]] | None = None,
+        managed_extra_dirs: list[Path] | None = None,
         platform: str | None = None,
         user: str | None = None,
+        userns_mode: str | None = None,
         entrypoint: list[str] | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
@@ -183,6 +265,14 @@ class DockerManager:
 
         environment = {**env}
 
+        # Ensure VibePod-managed dirs are accessible inside rootless Podman.
+        # Only explicitly declared managed dirs are tightened; generic
+        # extra_volumes (e.g. X11 sockets) must not be touched.
+        self._prepare_volume_dir(config_dir)
+        if managed_extra_dirs:
+            for path in managed_extra_dirs:
+                self._prepare_volume_dir(path)
+
         volumes: list[str] = [
             f"{workspace}:/workspace:rw",
             f"{config_dir}:{config_mount_path}:rw",
@@ -191,6 +281,7 @@ class DockerManager:
             volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
 
         try:
+            resolved_userns_mode = self._resolved_userns_mode(userns_mode)
             run_kwargs: dict[str, Any] = {
                 "image": image,
                 "name": container_name,
@@ -207,12 +298,14 @@ class DockerManager:
             }
             if platform:
                 run_kwargs["platform"] = platform
-            if user:
-                run_kwargs["user"] = user
             if entrypoint:
                 run_kwargs["entrypoint"] = entrypoint
+            if user:
+                run_kwargs["user"] = user
+            if resolved_userns_mode:
+                run_kwargs["userns_mode"] = resolved_userns_mode
 
-            return self.client.containers.run(**run_kwargs)
+            return self._run_container(**run_kwargs)
         except APIError as exc:
             raise DockerClientError(f"Failed to start container: {exc}") from exc
 
@@ -243,7 +336,12 @@ class DockerManager:
         return containers[0] if containers else None
 
     def ensure_datasette(
-        self, image: str, logs_db_path: Path, proxy_db_path: Path, port: int
+        self,
+        image: str,
+        logs_db_path: Path,
+        proxy_db_path: Path,
+        port: int,
+        userns_mode: str | None = None,
     ) -> Any:
         existing = self.find_datasette()
         if existing:
@@ -257,6 +355,9 @@ class DockerManager:
         logs_db_path.parent.mkdir(parents=True, exist_ok=True)
         if not logs_db_path.exists():
             logs_db_path.touch()
+
+        self._prepare_volume_dir(logs_db_path.parent)
+        self._prepare_volume_dir(proxy_db_path.parent)
 
         logs_parent = Path(os.path.abspath(str(logs_db_path.parent)))
         proxy_parent = Path(os.path.abspath(str(proxy_db_path.parent)))
@@ -273,19 +374,24 @@ class DockerManager:
             logs_db_container_path = f"/mount/logs/{logs_db_path.name}"
             proxy_db_container_path = f"/mount/proxy/{proxy_db_path.name}"
 
-        return self.client.containers.run(
-            image=image,
-            name="vibepod-datasette",
-            detach=True,
-            labels={"vibepod.managed": "true", "vibepod.role": "datasette"},
-            environment={
+        resolved_userns_mode = self._resolved_userns_mode(userns_mode)
+        run_kwargs: dict[str, Any] = {
+            "image": image,
+            "name": "vibepod-datasette",
+            "detach": True,
+            "labels": {"vibepod.managed": "true", "vibepod.role": "datasette"},
+            "environment": {
                 "LOGS_DB_PATH": logs_db_container_path,
                 "PROXY_DB_PATH": proxy_db_container_path,
                 "DATASETTE_PORT": "8001",
             },
-            volumes=volumes,
-            ports={"8001/tcp": port},
-        )
+            "volumes": volumes,
+            "ports": {"8001/tcp": port},
+        }
+        if resolved_userns_mode:
+            run_kwargs["userns_mode"] = resolved_userns_mode
+
+        return self._run_container(**run_kwargs)
 
     def find_proxy(self) -> Any | None:
         containers = self.client.containers.list(
@@ -293,15 +399,30 @@ class DockerManager:
         )
         return containers[0] if containers else None
 
-    def ensure_proxy(self, image: str, db_path: Path, ca_dir: Path, network: str) -> Any:
+    def ensure_proxy(
+        self,
+        image: str,
+        db_path: Path,
+        ca_dir: Path,
+        network: str,
+        userns_mode: str | None = None,
+    ) -> Any:
         existing = self.find_proxy()
         if existing:
+            existing.reload()
             if existing.status == "running":
+                attached = existing.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
+                if network not in attached:
+                    self.connect_network(existing, network)
+                    existing.reload()
                 return existing
             existing.remove(force=True)
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         ca_dir.mkdir(parents=True, exist_ok=True)
+
+        self._prepare_volume_dir(db_path.parent)
+        self._prepare_volume_dir(ca_dir)
 
         volumes = {
             str(db_path.parent): {"bind": "/data", "mode": "rw"},
@@ -322,15 +443,31 @@ class DockerManager:
             "extra_hosts": {"host.docker.internal": "host-gateway"},
         }
 
-        getuid = getattr(os, "getuid", None)
-        getgid = getattr(os, "getgid", None)
-        if callable(getuid) and callable(getgid):
-            run_kwargs["user"] = f"{getuid()}:{getgid()}"
+        resolved_userns_mode = self._resolved_userns_mode(userns_mode)
+        if self.runtime != RUNTIME_PODMAN:
+            getuid = getattr(os, "getuid", None)
+            getgid = getattr(os, "getgid", None)
+            if callable(getuid) and callable(getgid):
+                run_kwargs["user"] = f"{getuid()}:{getgid()}"
+        if resolved_userns_mode:
+            run_kwargs["userns_mode"] = resolved_userns_mode
 
-        return self.client.containers.run(**run_kwargs)
+        container = self._run_container(**run_kwargs)
+        try:
+            container.reload()
+        except Exception:
+            pass
+        return container
 
     def attach_interactive(self, container: Any, logger: Any = None) -> None:
         """Attach local stdin/stdout to a running container TTY."""
+        if self.runtime == RUNTIME_PODMAN:
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "Interactive attach via Podman compat API — "
+                "if you experience issues, try running with Docker instead."
+            )
 
         def resize_tty() -> None:
             size = shutil.get_terminal_size(fallback=(120, 40))

@@ -89,6 +89,7 @@ This repository contains an initial v1 implementation with:
 - `vp list`
 - `vp config init`
 - `vp config show`
+- `vp config runtime`
 - `vp config path`
 - `vp version`
 

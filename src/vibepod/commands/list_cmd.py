@@ -9,7 +9,8 @@ from rich.table import Table
 
 from vibepod.constants import DEFAULT_IMAGES, EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
 from vibepod.core.agents import get_agent_shortcut
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.config import get_config
+from vibepod.core.docker import DockerClientError, get_manager
 from vibepod.utils.console import console, error
 
 
@@ -49,10 +50,14 @@ def list_agents(
         bool, typer.Option("-r", "--running", help="Show only running agents")
     ] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Container runtime to use (docker or podman)"),
+    ] = None,
 ) -> None:
     """List available agents and running containers."""
     try:
-        manager = DockerManager()
+        manager = get_manager(runtime_override=runtime, config=get_config())
         containers = manager.list_managed(all_containers=True)
     except DockerClientError as exc:
         if running:

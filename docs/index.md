@@ -1,8 +1,8 @@
 # VibePod
 
-**One CLI for all AI coding agents — running in Docker containers.**
+**One CLI for all AI coding agents — running in Docker or Podman containers.**
 
-VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker container, pointed at any workspace directory, with a single command. Agent credentials, config, and session logs are persisted across runs without touching your host environment.
+VibePod (`vp`) lets you run any supported AI coding agent in an isolated container, pointed at any workspace directory, with a single command. Agent credentials, config, and session logs are persisted across runs without touching your host environment.
 
 ## Why VibePod?
 
@@ -26,6 +26,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 ## Next Steps
 
 - [**Quickstart**](quickstart.md) — install and run your first agent in two minutes.
+- [**Using Podman**](podman.md) — set up Podman as an alternative to Docker.
 - [**Development**](development.md) — local setup, tests, and docs workflow.
 - [**Agents**](agents/index.md) — per-agent setup and credential instructions.
 - [**Configuration**](configuration.md) — full reference for global and project-level config.

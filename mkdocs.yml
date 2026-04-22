@@ -50,6 +50,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Using Podman: podman.md
   - Development: development.md
   - Agents: agents/index.md
   - Configuration: configuration.md
