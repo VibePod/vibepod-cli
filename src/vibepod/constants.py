@@ -8,7 +8,7 @@ from pathlib import Path
 from platformdirs import user_config_dir
 
 APP_NAME = "vibepod"
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 
 CONFIG_DIR = Path(user_config_dir(APP_NAME))
 GLOBAL_CONFIG_FILE = CONFIG_DIR / "config.yaml"
