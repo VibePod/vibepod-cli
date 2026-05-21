@@ -52,6 +52,10 @@ nav:
   - Quickstart: quickstart.md
   - Development: development.md
   - Agents: agents/index.md
+  - Skills:
+    - Overview: skills/index.md
+    - Locator format: skills/locators.md
+    - Authoring: skills/authoring.md
   - Configuration: configuration.md
   - LLM Integration: llm.md
   - CLI Reference: cli-reference.md

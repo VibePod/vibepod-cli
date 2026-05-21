@@ -7,7 +7,18 @@ from typing import Annotated
 
 import typer
 
-from vibepod.commands import attach, config, doctor, list_cmd, logs, proxy, run, stop, update
+from vibepod.commands import (
+    attach,
+    config,
+    doctor,
+    list_cmd,
+    logs,
+    proxy,
+    run,
+    skills,
+    stop,
+    update,
+)
 from vibepod.constants import AGENT_SHORTCUTS, SUPPORTED_AGENTS
 
 app = typer.Typer(
@@ -30,6 +41,7 @@ app.add_typer(logs.app, name="logs")
 app.add_typer(config.app, name="config")
 app.add_typer(proxy.app, name="proxy")
 app.add_typer(doctor.app, name="doctor")
+app.add_typer(skills.app, name="skills")
 
 
 def _register_run_alias(command_name: str, agent_name: str) -> None:

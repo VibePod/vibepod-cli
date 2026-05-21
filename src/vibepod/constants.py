@@ -53,7 +53,23 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_CODEX",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
+    "VP_SKILLS_ENGINE_IMAGE",
 )
+
+
+def get_skills_engine_image() -> str:
+    return os.environ.get(
+        "VP_SKILLS_ENGINE_IMAGE",
+        f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/skills-engine:latest",
+    )
+
+
+SKILLS_ENGINE_IMAGE: str = get_skills_engine_image()
+
+# Skill storage paths
+USER_SKILLS_DIR = CONFIG_DIR / "skills"
+PROJECT_SKILLS_DIR = Path(".vibepod") / "skills"
+SKILLS_CACHE_DIR = CONFIG_DIR / "skills-cache"
 
 
 def get_default_images() -> dict[str, str]:
@@ -91,6 +107,10 @@ def get_default_images() -> dict[str, str]:
         ),
         "proxy": os.environ.get(
             "VP_PROXY_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/proxy:latest"
+        ),
+        "skills-engine": os.environ.get(
+            "VP_SKILLS_ENGINE_IMAGE",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/skills-engine:latest",
         ),
     }
 

@@ -140,6 +140,7 @@ Each agent image can be overridden individually:
 | `VP_IMAGE_CODEX` | codex |
 | `VP_DATASETTE_IMAGE` | datasette (logs UI) |
 | `VP_PROXY_IMAGE` | proxy |
+| `VP_SKILLS_ENGINE_IMAGE` | skills-engine (used by `vp skills`) |
 
 Set `VP_IMAGE_NAMESPACE` to change the prefix for all default images at once:
 

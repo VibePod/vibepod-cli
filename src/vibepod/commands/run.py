@@ -165,6 +165,62 @@ def _update_container_mapping(
     return True
 
 
+def _agent_skill_paths(agent: str) -> list[str]:
+    """Container paths where each agent auto-discovers SKILL.md folders.
+
+    Claude's entrypoint sets `CLAUDE_CONFIG_DIR=/claude`, and Claude Code uses
+    `$CLAUDE_CONFIG_DIR/skills/` (not `$HOME/.claude/skills/`) as the skills
+    discovery path when that env var is set. Mounting under `/claude/skills/`
+    nests inside the existing `/claude` config mount, which Docker handles.
+    """
+    if agent == "claude":
+        return ["/claude/skills"]
+    # Other agents don't have a documented skills discovery path yet.
+    return []
+
+
+def _resolved_skill_paths(workspace: Path) -> dict[str, Path]:
+    """Merge installed skills from local + user scope (local wins).
+
+    Returns id → absolute host path to the skill folder. Reads the lockfiles
+    directly so this stays cheap during `vp run` (no engine container call).
+    """
+    from vibepod.core.skills_engine import local_skills_dir, user_skills_dir
+
+    def _read_lock(path: Path) -> dict[str, object]:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {"skills": {}}
+
+    local_root = local_skills_dir(workspace).resolve()
+    user_root = user_skills_dir().resolve()
+
+    merged: dict[str, Path] = {}
+    for scope_root in (user_root, local_root):  # local processed second → wins
+        lock = _read_lock(scope_root / "skills-lock.json")
+        for sid, entry in (lock.get("skills") or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            rel = entry.get("path") or f"installed/{sid}"
+            abs_path = scope_root / rel
+            if abs_path.exists():
+                merged[sid] = abs_path
+    return merged
+
+
+def _skills_mounts_for_agent(agent: str, workspace: Path) -> list[tuple[str, str, str]]:
+    """One bind-mount per resolved skill into the agent's discovery path(s)."""
+    targets = _agent_skill_paths(agent)
+    if not targets:
+        return []
+    mounts: list[tuple[str, str, str]] = []
+    for skill_id, host_path in _resolved_skill_paths(workspace).items():
+        for base in targets:
+            mounts.append((str(host_path), f"{base}/{skill_id}", "ro"))
+    return mounts
+
+
 def _agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, str]]:
     """Return agent-specific bind mounts as (host_path, container_path, mode)."""
     if agent == "auggie":
@@ -445,6 +501,8 @@ def run(
     extra_volumes = _agent_extra_volumes(selected_agent, config_dir)
     for host_path, _, _ in extra_volumes:
         Path(host_path).mkdir(parents=True, exist_ok=True)
+
+    extra_volumes.extend(_skills_mounts_for_agent(selected_agent, workspace_path))
 
     if paste_images:
         display = os.environ.get("DISPLAY", "")
