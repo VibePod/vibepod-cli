@@ -15,7 +15,9 @@ from vibepod.core import skills_engine
 runner = CliRunner()
 
 
-def _fake_result(exit_code: int = 0, data: Any | None = None, stderr: str = "") -> skills_engine.EngineResult:
+def _fake_result(
+    exit_code: int = 0, data: Any | None = None, stderr: str = ""
+) -> skills_engine.EngineResult:
     return skills_engine.EngineResult(
         exit_code=exit_code,
         stdout=json.dumps(data) if data is not None else "",
@@ -34,7 +36,14 @@ def test_skills_help_lists_subcommands() -> None:
 def test_skills_add_invokes_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
-    def fake_add(locator: str, *, scope: str, skill_id: str | None = None, link: bool = False, cwd: Path | None = None) -> skills_engine.EngineResult:
+    def fake_add(
+        locator: str,
+        *,
+        scope: str,
+        skill_id: str | None = None,
+        link: bool = False,
+        cwd: Path | None = None,
+    ) -> skills_engine.EngineResult:
         seen.update(locator=locator, scope=scope, skill_id=skill_id, link=link)
         return _fake_result(
             data=[{"command": "add", "id": "researcher", "name": "Researcher", "path": "/x"}]
@@ -53,7 +62,13 @@ def test_skills_list_renders_table(monkeypatch: pytest.MonkeyPatch) -> None:
         {
             "command": "list",
             "skills": [
-                {"id": "sql", "name": "SQL Helper", "version": "1.0.0", "scope": "local", "status": "active"},
+                {
+                    "id": "sql",
+                    "name": "SQL Helper",
+                    "version": "1.0.0",
+                    "scope": "local",
+                    "status": "active",
+                },
                 {
                     "id": "sql",
                     "name": "SQL Helper",
@@ -78,14 +93,20 @@ def test_skills_list_renders_table(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_skills_list_json_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     data = [{"command": "list", "skills": []}]
-    monkeypatch.setattr(skills_engine, "list_skills", lambda scope=None, *, cwd=None: _fake_result(data=data))
+    monkeypatch.setattr(
+        skills_engine,
+        "list_skills",
+        lambda scope=None, *, cwd=None: _fake_result(data=data),
+    )
     result = runner.invoke(app, ["skills", "list", "--json"])
     assert result.exit_code == 0
     assert json.loads(result.stdout) == data
 
 
 def test_skills_delete_propagates_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_delete(skill_id: str, *, scope: str, cwd: Path | None = None) -> skills_engine.EngineResult:
+    def fake_delete(
+        skill_id: str, *, scope: str, cwd: Path | None = None
+    ) -> skills_engine.EngineResult:
         return _fake_result(exit_code=1, stderr="not found")
 
     monkeypatch.setattr(skills_engine, "delete", fake_delete)

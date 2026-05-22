@@ -24,7 +24,9 @@ def _fake_run_factory(stdout: str = "", exit_code: int = 0) -> Any:
     return fake_run, captured
 
 
-def test_run_engine_builds_expected_docker_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_engine_builds_expected_docker_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
     monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(skills_engine, "SKILLS_ENGINE_IMAGE", "vibepod/skills-engine:test")
@@ -48,7 +50,9 @@ def test_run_engine_builds_expected_docker_command(monkeypatch: pytest.MonkeyPat
     assert any("/vibepod/cache" in m for m in mount_args)
 
 
-def test_run_engine_propagates_trusted_sources_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_engine_propagates_trusted_sources_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
     monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setenv("VIBEPOD_TRUSTED_SOURCES", "github:vibepod/")

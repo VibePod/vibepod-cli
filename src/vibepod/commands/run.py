@@ -168,14 +168,24 @@ def _update_container_mapping(
 def _agent_skill_paths(agent: str) -> list[str]:
     """Container paths where each agent auto-discovers SKILL.md folders.
 
-    Claude's entrypoint sets `CLAUDE_CONFIG_DIR=/claude`, and Claude Code uses
-    `$CLAUDE_CONFIG_DIR/skills/` (not `$HOME/.claude/skills/`) as the skills
-    discovery path when that env var is set. Mounting under `/claude/skills/`
-    nests inside the existing `/claude` config mount, which Docker handles.
+    All paths assume the in-container HOME or CONFIG_DIR conventions wired by
+    vibepod-agents entrypoints. The SKILL.md format (Anthropic spec — frontmatter
+    `name` + `description` + markdown body) is shared verbatim across claude,
+    codex, opencode, and auggie. They differ only in which directory they scan.
+
+      - claude   reads $CLAUDE_CONFIG_DIR/skills/   → /claude/skills/
+      - codex    reads ~/.agents/skills/            → /config/.agents/skills/
+      - opencode reads ~/.agents/skills/ (also ~/.claude/skills/, ~/.config/opencode/skills/)
+      - auggie   reads ~/.agents/skills/ (also ~/.augment/skills/, ~/.claude/skills/)
+
+    Gemini wraps skills inside an extension manifest and would need a generated
+    gemini-extension.json — handled separately when we add that support.
+    Copilot CLI and Devstral Vibe have no documented SKILL.md auto-discovery.
     """
     if agent == "claude":
         return ["/claude/skills"]
-    # Other agents don't have a documented skills discovery path yet.
+    if agent in ("codex", "opencode", "auggie"):
+        return ["/config/.agents/skills"]
     return []
 
 
@@ -187,11 +197,21 @@ def _resolved_skill_paths(workspace: Path) -> dict[str, Path]:
     """
     from vibepod.core.skills_engine import local_skills_dir, user_skills_dir
 
+    def _string_keyed_dict(value: object) -> dict[str, object] | None:
+        if not isinstance(value, dict):
+            return None
+        result: dict[str, object] = {}
+        for key, item in value.items():
+            if isinstance(key, str):
+                result[key] = item
+        return result
+
     def _read_lock(path: Path) -> dict[str, object]:
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            raw: object = json.loads(path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return {"skills": {}}
+        return _string_keyed_dict(raw) or {"skills": {}}
 
     local_root = local_skills_dir(workspace).resolve()
     user_root = user_skills_dir().resolve()
@@ -199,10 +219,15 @@ def _resolved_skill_paths(workspace: Path) -> dict[str, Path]:
     merged: dict[str, Path] = {}
     for scope_root in (user_root, local_root):  # local processed second → wins
         lock = _read_lock(scope_root / "skills-lock.json")
-        for sid, entry in (lock.get("skills") or {}).items():
-            if not isinstance(entry, dict):
+        skills = _string_keyed_dict(lock.get("skills"))
+        if skills is None:
+            continue
+        for sid, raw_entry in skills.items():
+            entry = _string_keyed_dict(raw_entry)
+            if entry is None:
                 continue
-            rel = entry.get("path") or f"installed/{sid}"
+            path_value = entry.get("path")
+            rel = path_value if isinstance(path_value, str) and path_value else f"installed/{sid}"
             abs_path = scope_root / rel
             if abs_path.exists():
                 merged[sid] = abs_path

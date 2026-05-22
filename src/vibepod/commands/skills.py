@@ -39,7 +39,9 @@ def _emit_or_raise(result: skills_engine.EngineResult, json_out: bool) -> None:
 
 @app.command("add")
 def add_cmd(
-    locator: Annotated[str, typer.Argument(help="Skill locator (github:..., npm:..., ./path, ...)")],
+    locator: Annotated[
+        str, typer.Argument(help="Skill locator (github:..., npm:..., ./path, ...)")
+    ],
     skill_id: Annotated[
         str | None, typer.Option("--id", help="Override the derived skill ID")
     ] = None,
@@ -67,7 +69,10 @@ def add_cmd(
                 continue
             if record.get("bundle"):
                 installed = record.get("installed", [])
-                success(f"Installed {len(installed)} skill(s) from bundle {record.get('locator', '')}")
+                success(
+                    f"Installed {len(installed)} skill(s) from bundle "
+                    f"{record.get('locator', '')}"
+                )
                 for item in installed:
                     info(f"  + {item.get('id', '?')} ({item.get('name', '')})")
                 for fail in record.get("failed", []) or []:
@@ -101,7 +106,9 @@ def delete_cmd(
 
 @app.command("list")
 def list_cmd(
-    scope: Annotated[str | None, typer.Option("--scope", help="Filter by scope (local|user)")] = None,
+    scope: Annotated[
+        str | None, typer.Option("--scope", help="Filter by scope (local|user)")
+    ] = None,
     json_out: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """List installed skills across both scopes."""

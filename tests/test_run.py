@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from typer.testing import CliRunner
 from vibepod.cli import app
 from vibepod.commands import run as run_cmd
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
+from vibepod.core import skills_engine
 from vibepod.core.docker import DockerClientError, DockerManager
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,22 @@ def test_agent_extra_volumes_for_copilot(tmp_path: Path) -> None:
         (str(config_host), "/home/node/.copilot", "rw"),
         (str(config_host), "/home/coder/.copilot", "rw"),
     ]
+
+
+def test_skills_mounts_for_agent_ignores_malformed_lockfiles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    local_root.mkdir()
+    user_root.mkdir()
+    (local_root / "skills-lock.json").write_text(json.dumps({"skills": []}), encoding="utf-8")
+    (user_root / "skills-lock.json").write_text(json.dumps([]), encoding="utf-8")
+
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+
+    assert run_cmd._skills_mounts_for_agent("codex", tmp_path) == []
 
 
 def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
