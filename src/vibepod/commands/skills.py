@@ -25,6 +25,13 @@ def _resolve_scope(scope: str | None) -> Scope:
     return skills_engine.detect_scope_default()
 
 
+def _emit_diagnostic(message: str, json_out: bool) -> None:
+    if json_out:
+        typer.echo(message, err=True)
+    else:
+        error(message)
+
+
 def _emit_or_raise(result: skills_engine.EngineResult, json_out: bool) -> None:
     if json_out:
         if result.data is not None:
@@ -33,7 +40,7 @@ def _emit_or_raise(result: skills_engine.EngineResult, json_out: bool) -> None:
             typer.echo(result.stdout, nl=False)
     if result.exit_code != 0:
         if result.stderr:
-            error(result.stderr.strip())
+            _emit_diagnostic(result.stderr.strip(), json_out)
         raise typer.Exit(result.exit_code)
 
 
@@ -56,11 +63,12 @@ def add_cmd(
 ) -> None:
     """Install a skill from a locator."""
     resolved_scope = _resolve_scope(scope)
-    info(f"Adding {locator} → scope={resolved_scope}")
+    if not json_out:
+        info(f"Adding {locator} → scope={resolved_scope}")
     try:
         result = skills_engine.add(locator, scope=resolved_scope, skill_id=skill_id, link=link)
     except SkillsEngineError as exc:
-        error(str(exc))
+        _emit_diagnostic(str(exc), json_out)
         raise typer.Exit(1) from exc
 
     if not json_out and result.exit_code == 0 and result.data:
@@ -96,7 +104,7 @@ def delete_cmd(
     try:
         result = skills_engine.delete(skill_id, scope=resolved_scope)
     except SkillsEngineError as exc:
-        error(str(exc))
+        _emit_diagnostic(str(exc), json_out)
         raise typer.Exit(1) from exc
 
     if not json_out and result.exit_code == 0:
@@ -117,7 +125,7 @@ def list_cmd(
     try:
         result = skills_engine.list_skills(scope)  # type: ignore[arg-type]
     except SkillsEngineError as exc:
-        error(str(exc))
+        _emit_diagnostic(str(exc), json_out)
         raise typer.Exit(1) from exc
 
     if json_out:
@@ -171,7 +179,7 @@ def sync_cmd(
     try:
         result = skills_engine.sync(resolved_scope)
     except SkillsEngineError as exc:
-        error(str(exc))
+        _emit_diagnostic(str(exc), json_out)
         raise typer.Exit(1) from exc
 
     if not json_out and result.exit_code == 0 and result.data:
@@ -195,7 +203,7 @@ def update_cmd(
     try:
         result = skills_engine.update(resolved_scope, skill_id)
     except SkillsEngineError as exc:
-        error(str(exc))
+        _emit_diagnostic(str(exc), json_out)
         raise typer.Exit(1) from exc
 
     if not json_out and result.exit_code == 0:

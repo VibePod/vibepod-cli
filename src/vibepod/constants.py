@@ -108,10 +108,7 @@ def get_default_images() -> dict[str, str]:
         "proxy": os.environ.get(
             "VP_PROXY_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/proxy:latest"
         ),
-        "skills-engine": os.environ.get(
-            "VP_SKILLS_ENGINE_IMAGE",
-            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/skills-engine:latest",
-        ),
+        "skills-engine": get_skills_engine_image(),
     }
 
 

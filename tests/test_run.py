@@ -69,6 +69,43 @@ def test_skills_mounts_for_agent_ignores_malformed_lockfiles(
     assert run_cmd._skills_mounts_for_agent("codex", tmp_path) == []
 
 
+def test_skills_mounts_for_agent_requires_skill_directories_under_scope_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    outside_root = tmp_path / "outside"
+    valid_skill = local_root / "installed" / "valid"
+    file_skill = local_root / "installed" / "file-skill"
+    symlink_skill = local_root / "installed" / "symlink-skill"
+    for path in (local_root, user_root, outside_root, valid_skill):
+        path.mkdir(parents=True)
+    file_skill.write_text("not a directory", encoding="utf-8")
+    symlink_skill.symlink_to(outside_root, target_is_directory=True)
+    (local_root / "skills-lock.json").write_text(
+        json.dumps(
+            {
+                "skills": {
+                    "valid": {"path": "installed/valid"},
+                    "traversal": {"path": "../outside"},
+                    "absolute": {"path": str(outside_root)},
+                    "file": {"path": "installed/file-skill"},
+                    "symlink": {"path": "installed/symlink-skill"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (user_root / "skills-lock.json").write_text(json.dumps({"skills": {}}), encoding="utf-8")
+
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+
+    assert run_cmd._skills_mounts_for_agent("codex", tmp_path) == [
+        (str(valid_skill.resolve()), "/config/.agents/skills/valid", "ro")
+    ]
+
+
 def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
     class _FakeContainers:
         def __init__(self) -> None:

@@ -213,6 +213,16 @@ def _resolved_skill_paths(workspace: Path) -> dict[str, Path]:
             return {"skills": {}}
         return _string_keyed_dict(raw) or {"skills": {}}
 
+    def _safe_skill_path(scope_root: Path, skill_id: str, path_value: object) -> Path | None:
+        rel = path_value if isinstance(path_value, str) and path_value else f"installed/{skill_id}"
+        rel_path = Path(rel)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            rel_path = Path("installed") / skill_id
+        abs_path = (scope_root / rel_path).resolve(strict=False)
+        if not abs_path.is_relative_to(scope_root) or not abs_path.is_dir():
+            return None
+        return abs_path
+
     local_root = local_skills_dir(workspace).resolve()
     user_root = user_skills_dir().resolve()
 
@@ -226,10 +236,8 @@ def _resolved_skill_paths(workspace: Path) -> dict[str, Path]:
             entry = _string_keyed_dict(raw_entry)
             if entry is None:
                 continue
-            path_value = entry.get("path")
-            rel = path_value if isinstance(path_value, str) and path_value else f"installed/{sid}"
-            abs_path = scope_root / rel
-            if abs_path.exists():
+            abs_path = _safe_skill_path(scope_root, sid, entry.get("path"))
+            if abs_path is not None:
                 merged[sid] = abs_path
     return merged
 

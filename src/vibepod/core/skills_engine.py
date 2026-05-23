@@ -20,7 +20,7 @@ Scope = Literal["local", "user"]
 
 
 class SkillsEngineError(RuntimeError):
-    """Raised when the skills engine container exits non-zero or output is malformed."""
+    """Raised when the driver cannot return an engine result."""
 
 
 @dataclass(frozen=True)
@@ -75,7 +75,7 @@ def run_engine(
     *,
     json_output: bool = True,
     cwd: Path | None = None,
-    extra_mounts: list[tuple[Path, str]] | None = None,
+    extra_mounts: list[tuple[Path, str, str]] | None = None,
 ) -> EngineResult:
     """Invoke the engine container with the standard mount layout.
 
@@ -95,8 +95,8 @@ def run_engine(
         "-v",
         f"{cache}:/vibepod/cache",
     ]
-    for host_path, container_path in extra_mounts or []:
-        cmd.extend(["-v", f"{host_path}:{container_path}"])
+    for host_path, container_path, mode in extra_mounts or []:
+        cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
 
     # Pass through trusted-source allowlist if set on host.
     if "VIBEPOD_TRUSTED_SOURCES" in os.environ:
@@ -140,10 +140,14 @@ def add(
     if link:
         args.append("--link")
 
-    extra: list[tuple[Path, str]] = []
+    extra: list[tuple[Path, str, str]] = []
     if _is_local_locator(locator):
-        host = Path(locator).resolve()
-        extra.append((host, "/vibepod/source-in"))
+        locator_path = Path(locator)
+        base = Path(cwd) if cwd is not None else Path.cwd()
+        host = (locator_path if locator_path.is_absolute() else base / locator_path).resolve()
+        if not host.exists():
+            raise SkillsEngineError(f"Local skill locator not found: {host}")
+        extra.append((host, "/vibepod/source-in", "ro"))
         # Replace user-facing locator with the in-container mount path so the
         # engine sees a bare absolute path it can read.
         args[1] = "/vibepod/source-in"

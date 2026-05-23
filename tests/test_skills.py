@@ -103,6 +103,39 @@ def test_skills_list_json_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     assert json.loads(result.stdout) == data
 
 
+def test_skills_add_json_stdout_is_json_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    data = [{"command": "add", "id": "researcher", "name": "Researcher", "path": "/x"}]
+    monkeypatch.setattr(
+        skills_engine,
+        "add",
+        lambda locator, *, scope, skill_id=None, link=False, cwd=None: _fake_result(data=data),
+    )
+
+    result = runner.invoke(app, ["skills", "add", "./skills/researcher", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == data
+    assert "Adding" not in result.stdout
+
+
+def test_skills_json_failure_keeps_stdout_parseable_and_stderr_human(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = [{"command": "list", "skills": []}]
+    monkeypatch.setattr(
+        skills_engine,
+        "list_skills",
+        lambda scope=None, *, cwd=None: _fake_result(exit_code=2, data=data, stderr="not found"),
+    )
+
+    result = runner.invoke(app, ["skills", "list", "--json"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stdout) == data
+    assert "not found" in result.stderr
+    assert "not found" not in result.stdout
+
+
 def test_skills_delete_propagates_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_delete(
         skill_id: str, *, scope: str, cwd: Path | None = None
