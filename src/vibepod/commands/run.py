@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -30,6 +31,12 @@ from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
 
 CLAUDE_TOKEN_FILENAME = "oauth-token"
+_SAFE_SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def _is_safe_skill_id(skill_id: str) -> bool:
+    """Return True for skill IDs safe to use as one container path segment."""
+    return bool(_SAFE_SKILL_ID_RE.fullmatch(skill_id))
 
 
 def _claude_stored_token_path(config_dir: Path) -> Path:
@@ -233,6 +240,8 @@ def _resolved_skill_paths(workspace: Path) -> dict[str, Path]:
         if skills is None:
             continue
         for sid, raw_entry in skills.items():
+            if not _is_safe_skill_id(sid):
+                continue
             entry = _string_keyed_dict(raw_entry)
             if entry is None:
                 continue

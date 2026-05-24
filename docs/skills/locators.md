@@ -23,6 +23,14 @@ gitlab:acme/agent-skills//skills/sql#main
 https://git.example.com/org/repo.git//skills/foo#abc123
 ```
 
+You can also paste common GitHub `tree` URLs; VibePod normalizes them to
+the canonical `github:` locator before invoking the skills engine:
+
+```text
+https://github.com/org/repo/tree/main/skills/researcher
+# becomes github:org/repo//skills/researcher#main
+```
+
 ## npm
 
 ```

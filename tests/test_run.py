@@ -87,6 +87,13 @@ def test_skills_mounts_for_agent_requires_skill_directories_under_scope_root(
             {
                 "skills": {
                     "valid": {"path": "installed/valid"},
+                    "valid-name_2": {"path": "installed/valid"},
+                    "bad.name": {"path": "installed/valid"},
+                    "Upper": {"path": "installed/valid"},
+                    "../config": {"path": "installed/valid"},
+                    "nested/name": {"path": "installed/valid"},
+                    "nested\\name": {"path": "installed/valid"},
+                    "bad..name": {"path": "installed/valid"},
                     "traversal": {"path": "../outside"},
                     "absolute": {"path": str(outside_root)},
                     "file": {"path": "installed/file-skill"},
@@ -102,7 +109,8 @@ def test_skills_mounts_for_agent_requires_skill_directories_under_scope_root(
     monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
 
     assert run_cmd._skills_mounts_for_agent("codex", tmp_path) == [
-        (str(valid_skill.resolve()), "/config/.agents/skills/valid", "ro")
+        (str(valid_skill.resolve()), "/config/.agents/skills/valid", "ro"),
+        (str(valid_skill.resolve()), "/config/.agents/skills/valid-name_2", "ro"),
     ]
 
 

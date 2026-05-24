@@ -8,6 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import unquote, urlparse
 
 from vibepod.constants import (
     PROJECT_SKILLS_DIR,
@@ -33,19 +34,22 @@ class EngineResult:
 
 def detect_scope_default(cwd: Path | None = None) -> Scope:
     """Local when invoked from inside a `.vibepod` project, else user."""
+    return "local" if _project_root(cwd) is not None else "user"
+
+
+def _project_root(cwd: Path | None = None) -> Path | None:
     here = Path(cwd or Path.cwd()).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".vibepod").is_dir():
-            return "local"
-    return "user"
+            return parent
+    return None
 
 
 def local_skills_dir(cwd: Path | None = None) -> Path:
-    here = Path(cwd or Path.cwd()).resolve()
-    for parent in [here, *here.parents]:
-        if (parent / ".vibepod").is_dir():
-            return parent / PROJECT_SKILLS_DIR
-    return here / PROJECT_SKILLS_DIR
+    root = _project_root(cwd)
+    if root is not None:
+        return root / PROJECT_SKILLS_DIR
+    return Path(cwd or Path.cwd()).resolve() / PROJECT_SKILLS_DIR
 
 
 def user_skills_dir() -> Path:
@@ -56,11 +60,18 @@ def cache_dir() -> Path:
     return SKILLS_CACHE_DIR
 
 
-def _ensure_dirs(scope: Scope, cwd: Path | None = None) -> tuple[Path, Path, Path]:
-    local = local_skills_dir(cwd)
+def _local_mount_dir(cwd: Path | None, *, local_required: bool) -> Path:
+    if _project_root(cwd) is not None or local_required:
+        return local_skills_dir(cwd)
+    return cache_dir() / "empty-local-skills"
+
+
+def _ensure_dirs(
+    cwd: Path | None = None, *, local_required: bool = False
+) -> tuple[Path, Path, Path]:
+    local = _local_mount_dir(cwd, local_required=local_required)
     user = user_skills_dir()
     cache = cache_dir()
-    # Only the relevant scope must exist, but mounting both is fine.
     for d in (local, user, cache):
         d.mkdir(parents=True, exist_ok=True)
     return local, user, cache
@@ -70,19 +81,41 @@ def _is_local_locator(locator: str) -> bool:
     return locator.startswith("./") or locator.startswith("../") or locator.startswith("/")
 
 
+def _normalize_locator(locator: str) -> str:
+    """Accept common GitHub web URLs by converting them to skill locators."""
+    parsed = urlparse(locator)
+    if parsed.scheme not in {"http", "https"}:
+        return locator
+    if parsed.netloc.lower() not in {"github.com", "www.github.com"}:
+        return locator
+
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    if len(parts) < 4 or parts[2] != "tree":
+        return locator
+
+    owner, repo, _, ref, *subpath = parts
+    repo = repo.removesuffix(".git")
+    normalized = f"github:{owner}/{repo}"
+    if subpath:
+        normalized += f"//{'/'.join(subpath)}"
+    return f"{normalized}#{ref}"
+
+
 def run_engine(
     args: list[str],
     *,
     json_output: bool = True,
     cwd: Path | None = None,
     extra_mounts: list[tuple[Path, str, str]] | None = None,
+    local_required: bool = False,
+    working_dir: Path | None = None,
 ) -> EngineResult:
     """Invoke the engine container with the standard mount layout.
 
     Returns the parsed JSON payload if ``json_output`` is True. Stderr from the
     engine (human-readable progress) is always captured but never parsed.
     """
-    local, user, cache = _ensure_dirs("local", cwd)
+    local, user, cache = _ensure_dirs(cwd, local_required=local_required)
 
     cmd: list[str] = [
         "docker",
@@ -97,6 +130,8 @@ def run_engine(
     ]
     for host_path, container_path, mode in extra_mounts or []:
         cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
+    if working_dir is not None:
+        cmd.extend(["-w", str(working_dir)])
 
     # Pass through trusted-source allowlist if set on host.
     if "VIBEPOD_TRUSTED_SOURCES" in os.environ:
@@ -134,6 +169,7 @@ def add(
     link: bool = False,
     cwd: Path | None = None,
 ) -> EngineResult:
+    locator = _normalize_locator(locator)
     args = ["add", locator, "--scope", scope]
     if skill_id:
         args.extend(["--id", skill_id])
@@ -141,32 +177,39 @@ def add(
         args.append("--link")
 
     extra: list[tuple[Path, str, str]] = []
+    working_dir: Path | None = None
     if _is_local_locator(locator):
         locator_path = Path(locator)
         base = Path(cwd) if cwd is not None else Path.cwd()
         host = (locator_path if locator_path.is_absolute() else base / locator_path).resolve()
         if not host.exists():
             raise SkillsEngineError(f"Local skill locator not found: {host}")
-        extra.append((host, "/vibepod/source-in", "ro"))
-        # Replace user-facing locator with the in-container mount path so the
-        # engine sees a bare absolute path it can read.
-        args[1] = "/vibepod/source-in"
-    return run_engine(args, cwd=cwd, extra_mounts=extra)
+        extra.append((host, str(host), "ro"))
+        working_dir = base.resolve()
+    return run_engine(
+        args,
+        cwd=cwd,
+        extra_mounts=extra,
+        local_required=scope == "local",
+        working_dir=working_dir,
+    )
 
 
 def delete(skill_id: str, *, scope: Scope, cwd: Path | None = None) -> EngineResult:
-    return run_engine(["delete", skill_id, "--scope", scope], cwd=cwd)
+    return run_engine(
+        ["delete", skill_id, "--scope", scope], cwd=cwd, local_required=scope == "local"
+    )
 
 
 def list_skills(scope: Scope | None = None, *, cwd: Path | None = None) -> EngineResult:
     args = ["list"]
     if scope:
         args.extend(["--scope", scope])
-    return run_engine(args, cwd=cwd)
+    return run_engine(args, cwd=cwd, local_required=scope == "local")
 
 
 def sync(scope: Scope, *, cwd: Path | None = None) -> EngineResult:
-    return run_engine(["sync", "--scope", scope], cwd=cwd)
+    return run_engine(["sync", "--scope", scope], cwd=cwd, local_required=scope == "local")
 
 
 def update(scope: Scope, skill_id: str | None = None, *, cwd: Path | None = None) -> EngineResult:
@@ -174,11 +217,11 @@ def update(scope: Scope, skill_id: str | None = None, *, cwd: Path | None = None
     if skill_id:
         args.append(skill_id)
     args.extend(["--scope", scope])
-    return run_engine(args, cwd=cwd)
+    return run_engine(args, cwd=cwd, local_required=scope == "local")
 
 
 def resolve(scope: Scope | None = None, *, cwd: Path | None = None) -> EngineResult:
     args = ["resolve"]
     if scope:
         args.extend(["--scope", scope])
-    return run_engine(args, cwd=cwd)
+    return run_engine(args, cwd=cwd, local_required=scope == "local")

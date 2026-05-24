@@ -45,9 +45,30 @@ def test_run_engine_builds_expected_docker_command(
     assert "list" in cmd
     # all three mount sources are present
     mount_args = [arg for i, arg in enumerate(cmd) if cmd[i - 1] == "-v"]
-    assert any("/vibepod/local-skills" in m for m in mount_args)
+    empty_local = tmp_path / "cache" / "empty-local-skills"
+    assert f"{empty_local}:/vibepod/local-skills" in mount_args
     assert any("/vibepod/user-skills" in m for m in mount_args)
     assert any("/vibepod/cache" in m for m in mount_args)
+    assert not (tmp_path / ".vibepod").exists()
+
+
+def test_run_engine_explicit_local_scope_creates_local_skills_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+
+    fake_run, captured = _fake_run_factory(stdout=json.dumps([]))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    skills_engine.list_skills("local", cwd=tmp_path)
+
+    local = tmp_path / ".vibepod" / "skills"
+    mount_args = [
+        arg for i, arg in enumerate(captured["cmd"]) if captured["cmd"][i - 1] == "-v"
+    ]
+    assert local.is_dir()
+    assert f"{local}:/vibepod/local-skills" in mount_args
 
 
 def test_run_engine_propagates_trusted_sources_env(
@@ -97,10 +118,31 @@ def test_add_mounts_local_locator_from_cwd_read_only(
 
     cmd = captured["cmd"]
     mount_args = [arg for i, arg in enumerate(cmd) if cmd[i - 1] == "-v"]
-    assert f"{source.resolve()}:/vibepod/source-in:ro" in mount_args
+    assert f"{source.resolve()}:{source.resolve()}:ro" in mount_args
     assert "add" in cmd
-    assert "/vibepod/source-in" in cmd
-    assert "./skills/researcher" not in cmd
+    assert "-w" in cmd
+    assert str(cwd.resolve()) in cmd
+    assert "./skills/researcher" in cmd
+    assert "/vibepod/source-in" not in cmd
+
+
+def test_add_accepts_github_tree_url(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+
+    fake_run, captured = _fake_run_factory(stdout=json.dumps([]))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    url = (
+        "https://github.com/alirezarezvani/claude-skills/tree/main/"
+        "product-team/skills/spec-to-repo"
+    )
+    skills_engine.add(url, scope="user", cwd=tmp_path)
+
+    cmd = captured["cmd"]
+    expected = "github:alirezarezvani/claude-skills//product-team/skills/spec-to-repo#main"
+    assert expected in cmd
+    assert url not in cmd
 
 
 def test_add_rejects_missing_local_locator(tmp_path: Path) -> None:
