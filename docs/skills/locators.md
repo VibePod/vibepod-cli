@@ -23,13 +23,17 @@ gitlab:acme/agent-skills//skills/sql#main
 https://git.example.com/org/repo.git//skills/foo#abc123
 ```
 
-You can also paste common GitHub `tree` URLs; VibePod normalizes them to
-the canonical `github:` locator before invoking the skills engine:
+You can also paste common GitHub `tree` URLs from your browser; VibePod
+normalizes them to the canonical `github:` locator before invoking the skills
+engine:
 
 ```text
 https://github.com/org/repo/tree/main/skills/researcher
 # becomes github:org/repo//skills/researcher#main
 ```
+
+For branches with `/` in the name, prefer the canonical `github:` form so the
+branch/ref and subpath are unambiguous.
 
 ## npm
 
@@ -54,7 +58,8 @@ The recommended naming convention for the curated channel is `vibepod-skill-<id>
 <relative-or-absolute-path>
 ```
 
-There is no `file:` scheme — bare paths only. Distinguished from other sources by a leading `.` or `/`.
+There is no `file:` scheme — bare paths only. Local locators are distinguished
+from other sources by a leading `.` or `/`.
 
 Examples:
 
@@ -66,8 +71,12 @@ Examples:
 Use `--link` for symlink installs while authoring a skill:
 
 ```bash
-vp skills add ./skills/researcher --link
+vp skills add ./skills/researcher --link --scope local
 ```
+
+Relative local locators are resolved from the directory where you run
+`vp skills add`. The original locator string is kept in the registry so later
+`sync` and `update` commands can reproduce what you asked for.
 
 ## Bundle install
 

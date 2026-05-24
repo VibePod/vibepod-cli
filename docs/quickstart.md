@@ -114,6 +114,22 @@ vp stop claude
 
 For more details on detached mode workflows, see [Agents > Detached mode](agents/index.md#detached-mode).
 
+## Add reusable skills
+
+Skills are reusable prompt/recipe folders that supported agents can discover at
+runtime. Install one with:
+
+```bash
+vp skills add github:vibepod/vibepod-skills//skills/researcher --scope user
+```
+
+Use `--scope local` to install into the current project, or omit it to use the
+normal scope auto-detection. See [Skills](skills/index.md) for scopes, GitHub
+URL installs, bundles, and update/sync behavior.
+
+Browse example skills and future VibePod-specific skills in
+[`VibePod/vibepod-skills`](https://github.com/VibePod/vibepod-skills).
+
 ## View the session log UI
 
 VibePod records every session and proxied HTTP request. Open the Datasette UI with:
@@ -127,5 +143,6 @@ This starts a Datasette container and opens `http://localhost:8001` in your brow
 ## Next Steps
 
 - [Configure an agent](agents/index.md) — set API keys and per-agent options.
+- [Install skills](skills/index.md) — add reusable prompts/recipes to agents.
 - [Configuration reference](configuration.md) — tune defaults, the proxy, and logging.
 - [CLI Reference](cli-reference.md) — every command and flag.
