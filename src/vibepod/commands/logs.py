@@ -28,7 +28,8 @@ def _wait_for_datasette(port: int) -> bool:
     deadline = time.monotonic() + _HEALTH_TIMEOUT
     while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(url, timeout=2)  # noqa: S310
+            with urllib.request.urlopen(url, timeout=2) as _resp:  # noqa: S310
+                pass
             return True
         except urllib.error.HTTPError:
             return True  # server responded — healthy enough
