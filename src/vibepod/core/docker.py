@@ -9,7 +9,9 @@ import signal
 import sys
 import termios
 import tty
+import weakref
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 from uuid import uuid4
 
@@ -41,6 +43,94 @@ class DockerClientError(RuntimeError):
     """Raised for Docker availability or lifecycle errors."""
 
 
+def _close_docker_client(client: Any | None) -> None:
+    close = getattr(client, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
+def _discard_response_file_pointer(response: Any | None) -> None:
+    raw = getattr(response, "raw", response)
+    for candidate in (raw, response):
+        if candidate is None or not hasattr(candidate, "_fp"):
+            continue
+        try:
+            candidate._fp = None
+        except Exception:
+            pass
+
+
+def _close_response(response: Any | None) -> None:
+    close_response = getattr(response, "close", None)
+    if callable(close_response):
+        try:
+            close_response()
+        except Exception:
+            pass
+    _discard_response_file_pointer(response)
+
+
+def _docker_stream_response(stream: Any) -> Any | None:
+    response = getattr(stream, "_response", None)
+    if response is not None:
+        return response
+
+    frame = getattr(stream, "gi_frame", None)
+    if frame is None:
+        return None
+    return frame.f_locals.get("response")
+
+
+def _consume_docker_stream(stream: Any) -> None:
+    response = _docker_stream_response(stream)
+    try:
+        for _ in stream:
+            pass
+    finally:
+        close_stream = getattr(stream, "close", None)
+        if callable(close_stream):
+            try:
+                close_stream()
+            except Exception:
+                pass
+        _close_response(response)
+
+
+def _close_attach_resources(sock_wrapper: Any | None, response: Any | None) -> None:
+    _close_response(response)
+    close_socket = getattr(sock_wrapper, "close", None)
+    if callable(close_socket):
+        try:
+            close_socket()
+        except Exception:
+            pass
+
+
+def _attach_socket_with_response(
+    api: Any,
+    container_id: str,
+    params: dict[str, Any],
+) -> tuple[Any, Any]:
+    request_params = dict(params)
+    general_configs = getattr(api, "_general_configs", {}) or {}
+    if "detachKeys" not in request_params and "detachKeys" in general_configs:
+        request_params["detachKeys"] = general_configs["detachKeys"]
+
+    headers = {"Connection": "Upgrade", "Upgrade": "tcp"}
+    url = api._url("/containers/{0}/attach", container_id)
+    response = api.post(
+        url,
+        None,
+        params=api._attach_params(request_params),
+        stream=True,
+        headers=headers,
+    )
+    return api._get_raw_response_socket(response), response
+
+
 def _is_latest_tag(image: str) -> bool:
     """Return True when *image* uses the ``latest`` tag (explicitly or by omission)."""
     name = image.split("/")[-1]
@@ -66,13 +156,41 @@ class DockerManager:
             raise DockerClientError("Docker SDK not installed")
         try:
             self.client = docker.from_env()
+            self._client_finalizer = weakref.finalize(
+                self,
+                _close_docker_client,
+                self.client,
+            )
             self.client.ping()
         except DockerException as exc:
+            self.close()
             raise DockerClientError(f"Docker is not available: {exc}") from exc
+
+    def __enter__(self) -> DockerManager:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc, traceback
+        self.close()
+
+    def close(self) -> None:
+        finalizer = getattr(self, "_client_finalizer", None)
+        if finalizer is not None:
+            try:
+                finalizer()
+            except Exception:
+                pass
+            return
+        _close_docker_client(getattr(self, "client", None))
 
     def pull_image(self, image: str) -> None:
         try:
-            self.client.images.pull(image)
+            _consume_docker_stream(self.client.api.pull(image, stream=True))
         except APIError as exc:
             raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
 
@@ -90,7 +208,7 @@ class DockerManager:
             except NotFound:
                 old_id = None
 
-            self.client.images.pull(image)
+            _consume_docker_stream(self.client.api.pull(image, stream=True))
 
             try:
                 new_id = self.client.images.get(image).id
@@ -394,9 +512,10 @@ class DockerManager:
                 pass
 
         try:
-            sock_wrapper = self.client.api.attach_socket(
+            sock_wrapper, response = _attach_socket_with_response(
+                self.client.api,
                 container.id,
-                params={
+                {
                     "stdin": 1,
                     "stdout": 1,
                     "stderr": 1,
@@ -448,10 +567,7 @@ class DockerManager:
                         logger.log_input(user_data)
                     sock.sendall(user_data)
         finally:
-            try:
-                sock_wrapper.close()
-            except Exception:
-                pass
+            _close_attach_resources(sock_wrapper, response)
             if old_winch_handler is not None:
                 signal.signal(signal.SIGWINCH, old_winch_handler)
             if stdin_fd is not None and old_tty is not None:
