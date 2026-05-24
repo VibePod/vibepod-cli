@@ -69,6 +69,57 @@ For concrete examples, see the
 [`VibePod/vibepod-skills`](https://github.com/VibePod/vibepod-skills)
 repository.
 
+## Example skill repositories
+
+These repositories are useful places to browse existing skills and authoring
+patterns. Third-party skills can contain instructions and executable helper
+scripts, so review the source and license before installing them.
+
+- [`VibePod/vibepod-skills`][vibepod-skills] — VibePod examples and
+  future VibePod-specific skills.
+- [`anthropics/skills`][anthropic-skills] — Anthropic's public Agent Skills
+  examples and templates.
+- [`anthropics/claude-plugins-official`][anthropic-plugins] — official
+  Claude Code plugins that include nested skills.
+- [`openai/skills`][openai-skills] — Codex skills catalog using the same
+  `SKILL.md` pattern.
+- [`microsoft/skills`][microsoft-skills] — Microsoft and Azure SDK skills for
+  coding agents.
+- [`addyosmani/agent-skills`][addy-agent-skills] — production engineering
+  workflow skills.
+- [`obra/superpowers`][obra-superpowers] — agentic software development
+  methodology skills.
+- [`alirezarezvani/claude-skills`][alireza-claude-skills] — large multi-domain
+  Claude/agent skills catalog.
+- [`jezweb/claude-skills`][jezweb-claude-skills] — Claude Code plugin skills
+  for web/product workflows.
+- [`ericgandrade/claude-superskills`][claude-superskills] — universal AI
+  skills for planning, research, and content.
+
+Example installs from external repositories:
+
+```bash
+vp skills add github:anthropics/skills//skills/claude-api --scope user
+vp skills add github:addyosmani/agent-skills//skills/code-review-and-quality --scope user
+vp skills add \
+  https://github.com/obra/superpowers/tree/main/skills/systematic-debugging \
+  --scope user
+vp skills add \
+  https://github.com/alirezarezvani/claude-skills/tree/main/product-team/skills/spec-to-repo \
+  --scope user
+```
+
+[vibepod-skills]: https://github.com/VibePod/vibepod-skills
+[anthropic-skills]: https://github.com/anthropics/skills
+[anthropic-plugins]: https://github.com/anthropics/claude-plugins-official
+[openai-skills]: https://github.com/openai/skills
+[microsoft-skills]: https://github.com/microsoft/skills
+[addy-agent-skills]: https://github.com/addyosmani/agent-skills
+[obra-superpowers]: https://github.com/obra/superpowers
+[alireza-claude-skills]: https://github.com/alirezarezvani/claude-skills
+[jezweb-claude-skills]: https://github.com/jezweb/claude-skills
+[claude-superskills]: https://github.com/ericgandrade/claude-superskills
+
 ## How agents see skills
 
 When you run a supported agent, VibePod reads the local and user skill lockfiles,
