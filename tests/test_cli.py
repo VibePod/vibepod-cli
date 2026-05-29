@@ -26,11 +26,8 @@ def test_full_agent_name_alias_runs_agent(monkeypatch) -> None:
     called: dict[str, object] = {"agent": None, "passthrough": None}
 
     def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
-        import click
-
-        ctx = click.get_current_context(silent=True)
         called["agent"] = agent
-        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
 
     monkeypatch.setattr(run_cmd, "run", _fake_run)
 
@@ -44,11 +41,8 @@ def test_pi_alias_runs_agent(monkeypatch) -> None:
     called: dict[str, object] = {"agent": None, "passthrough": None}
 
     def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
-        import click
-
-        ctx = click.get_current_context(silent=True)
         called["agent"] = agent
-        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
 
     monkeypatch.setattr(run_cmd, "run", _fake_run)
 
@@ -62,11 +56,8 @@ def test_copilot_shortcut_still_runs_copilot(monkeypatch) -> None:
     called: dict[str, object] = {"agent": None, "passthrough": None}
 
     def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
-        import click
-
-        ctx = click.get_current_context(silent=True)
         called["agent"] = agent
-        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
 
     monkeypatch.setattr(run_cmd, "run", _fake_run)
 
@@ -80,11 +71,8 @@ def test_alias_forwards_extra_args(monkeypatch) -> None:
     called: dict[str, object] = {"agent": None, "passthrough": None}
 
     def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
-        import click
-
-        ctx = click.get_current_context(silent=True)
         called["agent"] = agent
-        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
 
     monkeypatch.setattr(run_cmd, "run", _fake_run)
 
@@ -98,11 +86,8 @@ def test_alias_forwards_extra_option_args_after_delimiter(monkeypatch) -> None:
     called: dict[str, object] = {"agent": None, "passthrough": None}
 
     def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
-        import click
-
-        ctx = click.get_current_context(silent=True)
         called["agent"] = agent
-        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
 
     monkeypatch.setattr(run_cmd, "run", _fake_run)
 

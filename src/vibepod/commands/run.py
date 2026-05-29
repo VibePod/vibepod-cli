@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
-import click
 import typer
 from rich.prompt import Confirm, Prompt
 
@@ -376,6 +375,7 @@ def run(
             help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
         ),
     ] = False,
+    passthrough_args: list[str] | None = None,
 ) -> None:
     """Start an agent container.
 
@@ -383,10 +383,7 @@ def run(
     command inside the container. Use `--` before agent flags when they could
     be parsed as VibePod flags.
     """
-    click_ctx = click.get_current_context(silent=True)
-    passthrough_args: list[str] = (
-        list(click_ctx.args) if click_ctx is not None and click_ctx.args else []
-    )
+    passthrough_args = passthrough_args or []
     config = get_config()
     selected_agent_input = agent or str(config.get("default_agent", "claude"))
     selected_agent = resolve_agent_name(selected_agent_input)
