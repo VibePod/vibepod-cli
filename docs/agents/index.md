@@ -13,6 +13,7 @@ VibePod manages each agent as a Docker container. Credentials and config are per
 | `auggie` | Augment Code | `vp a` | `vibepod/auggie:latest` |
 | `copilot` | GitHub | `vp p` | `vibepod/copilot:latest` |
 | `codex` | OpenAI | `vp x` | `vibepod/codex:latest` |
+| `pi` | Earendil | `vp pi` | `vibepod/pi:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`.
 
@@ -73,7 +74,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -197,6 +198,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `opencode` | Not supported |
 | `auggie` | Not supported |
+| `pi` | Not supported |
 
 Example:
 

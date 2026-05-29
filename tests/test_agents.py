@@ -39,6 +39,17 @@ def test_devstral_spec_matches_container_contract() -> None:
     assert spec.run_as_host_user is True
 
 
+def test_pi_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("pi")
+    assert spec.id == "pi"
+    assert spec.provider == "earendil"
+    assert spec.image == "vibepod/pi:latest"
+    assert spec.config_subdir == "pi"
+    assert spec.command == ["pi"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env["HOME"] == "/config"
+
+
 def test_get_agent_spec_unknown() -> None:
     with pytest.raises(ValueError):
         get_agent_spec("unknown")
@@ -87,17 +98,19 @@ def test_gemini_spec_runs_via_node_wrapper() -> None:
 
 
 def test_unsupported_agents_have_no_ikwid_args() -> None:
-    for agent in ("opencode", "auggie"):
+    for agent in ("opencode", "auggie", "pi"):
         spec = get_agent_spec(agent)
         assert spec.ikwid_args is None, f"{agent} should not have ikwid_args"
 
 
 def test_get_agent_shortcut_known_agent() -> None:
     expected_by_agent = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
-    assert set(expected_by_agent.keys()) == set(SUPPORTED_AGENTS)
-    for agent in SUPPORTED_AGENTS:
-        assert get_agent_shortcut(agent) == expected_by_agent[agent]
-        assert get_agent_shortcut(f" {agent.upper()} ") == expected_by_agent[agent]
+    assert set(expected_by_agent.keys()) == set(SUPPORTED_AGENTS) - {"pi"}
+    for agent, shortcut in expected_by_agent.items():
+        assert get_agent_shortcut(agent) == shortcut
+        assert get_agent_shortcut(f" {agent.upper()} ") == shortcut
+    assert get_agent_shortcut("pi") is None
+    assert get_agent_shortcut(" PI ") is None
     assert get_agent_shortcut("unknown") is None
 
 
@@ -125,6 +138,6 @@ def test_codex_spec_has_llm_env_map() -> None:
 
 
 def test_agents_without_llm_env_map() -> None:
-    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot"):
+    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot", "pi"):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"

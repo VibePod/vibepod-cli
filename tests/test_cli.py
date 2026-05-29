@@ -40,6 +40,42 @@ def test_full_agent_name_alias_runs_agent(monkeypatch) -> None:
     assert called["passthrough"] == []
 
 
+def test_pi_alias_runs_agent(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        import click
+
+        ctx = click.get_current_context(silent=True)
+        called["agent"] = agent
+        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["pi"])
+    assert result.exit_code == 0
+    assert called["agent"] == "pi"
+    assert called["passthrough"] == []
+
+
+def test_copilot_shortcut_still_runs_copilot(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        import click
+
+        ctx = click.get_current_context(silent=True)
+        called["agent"] = agent
+        called["passthrough"] = list(ctx.args) if ctx and ctx.args else []
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["p"])
+    assert result.exit_code == 0
+    assert called["agent"] == "copilot"
+    assert called["passthrough"] == []
+
+
 def test_alias_forwards_extra_args(monkeypatch) -> None:
     called: dict[str, object] = {"agent": None, "passthrough": None}
 

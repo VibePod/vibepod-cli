@@ -22,6 +22,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 | `auggie` | Augment Code | `vp a` |
 | `copilot` | GitHub | `vp p` |
 | `codex` | OpenAI | `vp x` |
+| `pi` | Earendil | `vp pi` |
 
 ## Next Steps
 

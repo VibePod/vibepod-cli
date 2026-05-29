@@ -178,10 +178,11 @@ def _agent_skill_paths(agent: str) -> list[str]:
     All paths assume the in-container HOME or CONFIG_DIR conventions wired by
     vibepod-agents entrypoints. The SKILL.md format (Anthropic spec — frontmatter
     `name` + `description` + markdown body) is shared verbatim across claude,
-    codex, opencode, and auggie. They differ only in which directory they scan.
+    codex, pi, opencode, and auggie. They differ only in which directory they scan.
 
       - claude   reads $CLAUDE_CONFIG_DIR/skills/   → /claude/skills/
       - codex    reads ~/.agents/skills/            → /config/.agents/skills/
+      - pi       reads ~/.agents/skills/            → /config/.agents/skills/
       - opencode reads ~/.agents/skills/ (also ~/.claude/skills/, ~/.config/opencode/skills/)
       - auggie   reads ~/.agents/skills/ (also ~/.augment/skills/, ~/.claude/skills/)
 
@@ -191,7 +192,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
     """
     if agent == "claude":
         return ["/claude/skills"]
-    if agent in ("codex", "opencode", "auggie"):
+    if agent in ("codex", "opencode", "auggie", "pi"):
         return ["/config/.agents/skills"]
     return []
 
