@@ -487,3 +487,11 @@ vp run copilot   # or: vp p
 ```bash
 vp run codex   # or: vp x
 ```
+
+### Pi (Earendil)
+
+```bash
+vp run pi   # or: vp pi
+```
+
+Pi runs the Pi coding agent from Earendil in the same isolated VibePod container workflow. Credentials and configuration are persisted under `~/.config/vibepod/agents/pi/`.
