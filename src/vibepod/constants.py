@@ -26,6 +26,7 @@ SUPPORTED_AGENTS = (
     "auggie",
     "copilot",
     "codex",
+    "pi",
 )
 
 AGENT_SHORTCUTS: dict[str, str] = {
@@ -51,6 +52,7 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_AUGGIE",
     "VP_IMAGE_COPILOT",
     "VP_IMAGE_CODEX",
+    "VP_IMAGE_PI",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
     "VP_SKILLS_ENGINE_IMAGE",
@@ -100,6 +102,9 @@ def get_default_images() -> dict[str, str]:
         ),
         "codex": os.environ.get(
             "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/codex:latest"
+        ),
+        "pi": os.environ.get(
+            "VP_IMAGE_PI", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/pi:latest"
         ),
         "datasette": os.environ.get(
             "VP_DATASETTE_IMAGE",

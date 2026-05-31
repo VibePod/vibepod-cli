@@ -40,7 +40,8 @@ Press **Ctrl+C** to stop the container when you are done.
 
 ## Shortcuts
 
-You can start agents with either the full name or a single-letter shortcut:
+You can start agents with the full agent command. Most agents also have a single-letter
+shortcut; Pi uses `vp pi` because `vp p` is assigned to Copilot.
 
 ```bash
 vp claude   # full name

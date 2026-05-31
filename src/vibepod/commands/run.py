@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
-import click
 import typer
 from rich.prompt import Confirm, Prompt
 
@@ -178,10 +177,11 @@ def _agent_skill_paths(agent: str) -> list[str]:
     All paths assume the in-container HOME or CONFIG_DIR conventions wired by
     vibepod-agents entrypoints. The SKILL.md format (Anthropic spec — frontmatter
     `name` + `description` + markdown body) is shared verbatim across claude,
-    codex, opencode, and auggie. They differ only in which directory they scan.
+    codex, pi, opencode, and auggie. They differ only in which directory they scan.
 
       - claude   reads $CLAUDE_CONFIG_DIR/skills/   → /claude/skills/
       - codex    reads ~/.agents/skills/            → /config/.agents/skills/
+      - pi       reads ~/.pi/agent/skills/          → /config/.pi/agent/skills/
       - opencode reads ~/.agents/skills/ (also ~/.claude/skills/, ~/.config/opencode/skills/)
       - auggie   reads ~/.agents/skills/ (also ~/.augment/skills/, ~/.claude/skills/)
 
@@ -191,6 +191,8 @@ def _agent_skill_paths(agent: str) -> list[str]:
     """
     if agent == "claude":
         return ["/claude/skills"]
+    if agent == "pi":
+        return ["/config/.pi/agent/skills"]
     if agent in ("codex", "opencode", "auggie"):
         return ["/config/.agents/skills"]
     return []
@@ -375,6 +377,7 @@ def run(
             help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
         ),
     ] = False,
+    passthrough_args: list[str] | None = None,
 ) -> None:
     """Start an agent container.
 
@@ -382,10 +385,7 @@ def run(
     command inside the container. Use `--` before agent flags when they could
     be parsed as VibePod flags.
     """
-    click_ctx = click.get_current_context(silent=True)
-    passthrough_args: list[str] = (
-        list(click_ctx.args) if click_ctx is not None and click_ctx.args else []
-    )
+    passthrough_args = passthrough_args or []
     config = get_config()
     selected_agent_input = agent or str(config.get("default_agent", "claude"))
     selected_agent = resolve_agent_name(selected_agent_input)

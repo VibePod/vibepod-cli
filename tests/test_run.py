@@ -114,6 +114,28 @@ def test_skills_mounts_for_agent_requires_skill_directories_under_scope_root(
     ]
 
 
+def test_skills_mounts_for_pi_use_agent_dir_skills_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    skill_dir = local_root / "installed" / "example"
+    skill_dir.mkdir(parents=True)
+    user_root.mkdir()
+    (local_root / "skills-lock.json").write_text(
+        json.dumps({"skills": {"example": {"path": "installed/example"}}}),
+        encoding="utf-8",
+    )
+    (user_root / "skills-lock.json").write_text(json.dumps({"skills": {}}), encoding="utf-8")
+
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+
+    assert run_cmd._skills_mounts_for_agent("pi", tmp_path) == [
+        (str(skill_dir.resolve()), "/config/.pi/agent/skills/example", "ro")
+    ]
+
+
 def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
     class _FakeContainers:
         def __init__(self) -> None:

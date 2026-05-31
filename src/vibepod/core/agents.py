@@ -114,6 +114,15 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         },
         llm_model_args=["--oss", "-m"],
     ),
+    "pi": AgentSpec(
+        "pi",
+        "earendil",
+        DEFAULT_IMAGES["pi"],
+        "pi",
+        ["pi"],
+        "/config",
+        {"HOME": "/config", "PI_CODING_AGENT_DIR": "/config/.pi/agent"},
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

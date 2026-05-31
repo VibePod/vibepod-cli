@@ -28,10 +28,64 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 
+
+def _context_args(ctx: typer.Context) -> list[str]:
+    return list(ctx.args) if ctx.args else []
+
+
+def run_command(
+    ctx: typer.Context,
+    agent: Annotated[str | None, typer.Argument(help="Agent to run")] = None,
+    workspace: Annotated[
+        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+    ] = Path("."),
+    pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    detach: Annotated[
+        bool, typer.Option("-d", "--detach", help="Run container in background")
+    ] = False,
+    env: Annotated[
+        list[str] | None,
+        typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
+    ] = None,
+    name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
+    network: Annotated[
+        str | None,
+        typer.Option("--network", help="Additional Docker network to connect the container to"),
+    ] = None,
+    paste_images: Annotated[
+        bool,
+        typer.Option(
+            "--paste-images",
+            help="Enable image pasting via X11 clipboard (requires DISPLAY to be set)",
+        ),
+    ] = False,
+    ikwid: Annotated[
+        bool,
+        typer.Option(
+            "--ikwid",
+            help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
+        ),
+    ] = False,
+) -> None:
+    """Start an agent container."""
+    run.run(
+        agent=agent,
+        workspace=workspace,
+        pull=pull,
+        detach=detach,
+        env=env,
+        name=name,
+        network=network,
+        paste_images=paste_images,
+        ikwid=ikwid,
+        passthrough_args=_context_args(ctx),
+    )
+
+
 app.command(
     name="run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)(run.run)
+)(run_command)
 app.command(name="stop")(stop.stop)
 app.command(name="attach")(attach.attach)
 app.command(name="list")(list_cmd.list_agents)
@@ -46,6 +100,7 @@ app.add_typer(skills.app, name="skills")
 
 def _register_run_alias(command_name: str, agent_name: str) -> None:
     def _alias(
+        ctx: typer.Context,
         workspace: Annotated[
             Path, typer.Option("-w", "--workspace", help="Workspace directory")
         ] = Path("."),
@@ -94,6 +149,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             network=network,
             paste_images=paste_images,
             ikwid=ikwid,
+            passthrough_args=_context_args(ctx),
         )
 
     _alias.__name__ = f"alias_{command_name}"

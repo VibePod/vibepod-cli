@@ -91,6 +91,14 @@ def _default_config() -> dict[str, Any]:
                 "volumes": [],
                 "init": [],
             },
+            "pi": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["pi"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,
