@@ -21,7 +21,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi & more
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
@@ -66,6 +66,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `opencode` | Not supported |
 | `auggie` | Not supported |
+| `pi` | Not supported |
 
 ![VibePod CLI preview](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/preview.png)
 
@@ -79,6 +80,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/opencode.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/opencode.png" alt="OpenCode" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/mistral%20vibe.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/mistral%20vibe.png" alt="Mistral Vibe" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/augment%20auggie.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/augment%20auggie.png" alt="Augment Auggie" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/pi-agent.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/pi-agent.png" alt="Pi Agent" width="180" /></a>
 </p>
 
 ## Current Status
@@ -123,6 +125,7 @@ Current defaults:
 - `auggie` -> `vibepod/auggie:latest`
 - `copilot` -> `vibepod/copilot:latest`
 - `codex` -> `vibepod/codex:latest`
+- `pi` -> `vibepod/pi:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
@@ -139,6 +142,7 @@ VP_IMAGE_DEVSTRAL=vibepod/devstral:latest vp run vibe   # same agent/image as de
 VP_IMAGE_AUGGIE=vibepod/auggie:latest vp run auggie
 VP_IMAGE_COPILOT=vibepod/copilot:latest vp run copilot
 VP_IMAGE_CODEX=vibepod/codex:latest vp run codex
+VP_IMAGE_PI=vibepod/pi:latest vp run pi
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list
 ```

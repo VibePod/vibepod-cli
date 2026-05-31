@@ -6,7 +6,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 
 ## Why VibePod?
 
-- **One tool, all agents** — switch between Claude, Gemini, Devstral, Codex, and more without juggling separate CLIs or global installs.
+- **One tool, all agents** — switch between Claude, Gemini, Devstral, Codex, Pi, and more without juggling separate CLIs or global installs.
 - **Isolated by default** — each agent runs in its own container. No global npm packages, no credential bleed between sessions.
 - **Workspace-aware** — mount any directory as the workspace at runtime. Works with monorepos, multiple projects, and Docker Compose setups.
 - **Built-in observability** — session logging and an HTTP proxy are included out of the box. Browse all agent traffic in Datasette at `localhost:8001`.
