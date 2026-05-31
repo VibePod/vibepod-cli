@@ -48,6 +48,7 @@ def test_pi_spec_matches_container_contract() -> None:
     assert spec.command == ["pi"]
     assert spec.config_mount_path == "/config"
     assert spec.extra_env["HOME"] == "/config"
+    assert spec.extra_env["PI_CODING_AGENT_DIR"] == "/config/.pi/agent"
 
 
 def test_get_agent_spec_unknown() -> None:

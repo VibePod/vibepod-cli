@@ -181,7 +181,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
 
       - claude   reads $CLAUDE_CONFIG_DIR/skills/   → /claude/skills/
       - codex    reads ~/.agents/skills/            → /config/.agents/skills/
-      - pi       reads ~/.agents/skills/            → /config/.agents/skills/
+      - pi       reads ~/.pi/agent/skills/          → /config/.pi/agent/skills/
       - opencode reads ~/.agents/skills/ (also ~/.claude/skills/, ~/.config/opencode/skills/)
       - auggie   reads ~/.agents/skills/ (also ~/.augment/skills/, ~/.claude/skills/)
 
@@ -191,7 +191,9 @@ def _agent_skill_paths(agent: str) -> list[str]:
     """
     if agent == "claude":
         return ["/claude/skills"]
-    if agent in ("codex", "opencode", "auggie", "pi"):
+    if agent == "pi":
+        return ["/config/.pi/agent/skills"]
+    if agent in ("codex", "opencode", "auggie"):
         return ["/config/.agents/skills"]
     return []
 

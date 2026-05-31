@@ -121,7 +121,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "pi",
         ["pi"],
         "/config",
-        {"HOME": "/config"},
+        {"HOME": "/config", "PI_CODING_AGENT_DIR": "/config/.pi/agent"},
     ),
 }
 

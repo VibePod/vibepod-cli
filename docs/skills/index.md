@@ -134,7 +134,7 @@ Current SKILL.md auto-discovery support:
 | `codex` | `/config/.agents/skills/<id>` |
 | `opencode` | `/config/.agents/skills/<id>` |
 | `auggie` | `/config/.agents/skills/<id>` |
-| `pi` | `/config/.agents/skills/<id>` |
+| `pi` | `/config/.pi/agent/skills/<id>` |
 
 Other agents can still run normally, but VibePod does not currently mount
 SKILL.md folders into an auto-discovery location for them.

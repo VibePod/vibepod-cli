@@ -114,7 +114,7 @@ def test_skills_mounts_for_agent_requires_skill_directories_under_scope_root(
     ]
 
 
-def test_skills_mounts_for_pi_use_shared_agents_path(
+def test_skills_mounts_for_pi_use_agent_dir_skills_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     local_root = tmp_path / "local-skills"
@@ -132,7 +132,7 @@ def test_skills_mounts_for_pi_use_shared_agents_path(
     monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
 
     assert run_cmd._skills_mounts_for_agent("pi", tmp_path) == [
-        (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro")
+        (str(skill_dir.resolve()), "/config/.pi/agent/skills/example", "ro")
     ]
 
 
