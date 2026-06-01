@@ -177,6 +177,7 @@ class DockerManager:
         name: str | None,
         version: str,
         network: str | None = None,
+        ports: dict[str, Any] | None = None,
         extra_volumes: list[tuple[str, str, str]] | None = None,
         platform: str | None = None,
         user: str | None = None,
@@ -215,6 +216,10 @@ class DockerManager:
                 "working_dir": "/workspace",
                 "network": network,
             }
+            if ports:
+                # Maps "<container_port>/tcp" -> host_port. Used to publish the
+                # Codex OAuth callback forwarder during `codex login`.
+                run_kwargs["ports"] = ports
             if platform:
                 run_kwargs["platform"] = platform
             if user:

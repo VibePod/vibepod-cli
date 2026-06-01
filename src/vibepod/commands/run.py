@@ -68,6 +68,33 @@ def _write_claude_stored_token(config_dir: Path, token: str) -> Path:
     return path
 
 
+# Codex's OAuth login server is hard-bound to 127.0.0.1:1455 (it can't be told
+# to bind elsewhere), and the browser callback goes to http://localhost:1455.
+# Docker publishes ports to the container's bridge interface, not its loopback,
+# so the codex image runs a socat forwarder on CODEX_OAUTH_FORWARD_PORT that
+# bridges bridge-interface -> 127.0.0.1:1455. We publish that forwarder port to
+# the host as CODEX_OAUTH_CALLBACK_PORT so the host browser reaches Codex.
+CODEX_OAUTH_CALLBACK_PORT = 1455
+CODEX_OAUTH_FORWARD_PORT = 1456
+
+
+def _is_codex_oauth_login(agent: str, passthrough_args: list[str]) -> bool:
+    """True when this is a `codex login` OAuth flow needing the localhost callback.
+
+    The device-code and API-key flows don't use the callback, so they skip the
+    port publishing and forwarder.
+    """
+    if agent != "codex" or "login" not in passthrough_args:
+        return False
+
+    non_oauth_flags = ("--device-auth", "--with-api-key")
+    return not any(
+        arg == flag or arg.startswith(f"{flag}=")
+        for arg in passthrough_args
+        for flag in non_oauth_flags
+    )
+
+
 def _parse_env_pairs(values: list[str]) -> dict[str, str]:
     parsed: dict[str, str] = {}
     for entry in values:
@@ -431,6 +458,7 @@ def run(
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
+    codex_oauth_login = _is_codex_oauth_login(selected_agent, passthrough_args)
     init_commands = _agent_init_commands(selected_agent, agent_cfg)
     merged_env = {
         "USER_UID": str(os.getuid()),
@@ -440,6 +468,17 @@ def run(
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
     }
+    agent_ports: dict[str, Any] | None = None
+    if codex_oauth_login:
+        # Tell the codex image to start the loopback forwarder, and publish it to
+        # the host on the port Codex's redirect URI expects.
+        merged_env["VIBEPOD_OAUTH_FORWARD_PORT"] = str(CODEX_OAUTH_FORWARD_PORT)
+        agent_ports = {f"{CODEX_OAUTH_FORWARD_PORT}/tcp": CODEX_OAUTH_CALLBACK_PORT}
+        info(
+            "codex login: publishing the OAuth callback on "
+            f"http://localhost:{CODEX_OAUTH_CALLBACK_PORT}/auth/callback "
+            "(open the URL Codex prints in your host browser)"
+        )
 
     if (
         selected_agent == "claude"
@@ -611,6 +650,7 @@ def run(
         name=name,
         version=__version__,
         network=network_name,
+        ports=agent_ports,
         extra_volumes=extra_volumes,
         platform=spec.platform,
         user=container_user,
