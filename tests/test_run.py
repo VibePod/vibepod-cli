@@ -269,6 +269,61 @@ def test_run_agent_forwards_entrypoint(tmp_path: Path) -> None:
     assert run_kwargs["entrypoint"] == ["/bin/sh", "-lc", 'echo "init"; exec "$@"', "--"]
 
 
+def test_run_agent_publishes_ports(tmp_path: Path) -> None:
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "agent"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "codex"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    manager.run_agent(
+        agent="codex",
+        image="vibepod/codex:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/config",
+        env={},
+        command=["codex", "login"],
+        auto_remove=True,
+        name=None,
+        version="0.2.1",
+        network="vibepod-network",
+        ports={"1456/tcp": 1455},
+    )
+
+    run_kwargs = manager.client.containers.run_kwargs  # type: ignore[union-attr]
+    assert run_kwargs is not None
+    # published callback forwarder, still on the user-defined network
+    assert run_kwargs["ports"] == {"1456/tcp": 1455}
+    assert run_kwargs["network"] == "vibepod-network"
+
+
+def test_is_codex_oauth_login_detection() -> None:
+    assert run_cmd._is_codex_oauth_login("codex", ["login"]) is True
+    # device-code and api-key flows don't use the localhost:1455 callback
+    assert run_cmd._is_codex_oauth_login("codex", ["login", "--device-auth"]) is False
+    assert run_cmd._is_codex_oauth_login("codex", ["login", "--device-auth=true"]) is False
+    assert run_cmd._is_codex_oauth_login("codex", ["login", "--with-api-key"]) is False
+    assert run_cmd._is_codex_oauth_login("codex", ["login", "--with-api-key=secret"]) is False
+    # non-login codex invocations and other agents stay on the normal path
+    assert run_cmd._is_codex_oauth_login("codex", []) is False
+    assert run_cmd._is_codex_oauth_login("claude", ["login"]) is False
+
+
 def test_x11_volumes_and_env_returns_socket_and_display() -> None:
     volumes, env = run_cmd._x11_volumes_and_env(":0")
     assert ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw") in volumes
