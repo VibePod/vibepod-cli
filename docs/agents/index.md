@@ -488,6 +488,25 @@ vp run copilot   # or: vp p
 vp run codex   # or: vp x
 ```
 
+For browser OAuth login, run:
+
+```bash
+vp run codex login
+```
+
+Codex binds its OAuth callback server to `127.0.0.1:1455` inside the container.
+During `codex login`, VibePod publishes the expected host callback port and enables
+a small container forwarder so the host browser can complete the redirect back to
+Codex.
+
+Device-code and API-key flows do not need the browser callback, so they skip the
+forwarder:
+
+```bash
+vp run codex login --device-auth
+vp run codex login --with-api-key
+```
+
 ### Pi (Earendil)
 
 ```bash
