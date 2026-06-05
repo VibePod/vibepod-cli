@@ -375,6 +375,13 @@ def run(
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
 
+    podman_probe = getattr(manager, "is_rootless_podman", None)
+    rootless_podman = bool(podman_probe()) if callable(podman_probe) else False
+    agent_userns_mode = "keep-id" if rootless_podman else None
+    if rootless_podman:
+        merged_env["USER_UID"] = "0"
+        merged_env["USER_GID"] = "0"
+
     network_name = str(config.get("network", "vibepod-network"))
     manager.ensure_network(network_name)
     extra_network = network or _maybe_select_network(workspace_path, manager, network_name)
@@ -495,7 +502,9 @@ def run(
             extra_volumes.append((str(proxy_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
 
     info(f"Starting {selected_agent} with image {image}")
-    container_user = _host_user() if spec.run_as_host_user else None
+    container_user = None
+    if not rootless_podman and spec.run_as_host_user:
+        container_user = _host_user()
     container = manager.run_agent(
         agent=selected_agent,
         image=image,
@@ -513,6 +522,7 @@ def run(
         platform=spec.platform,
         user=container_user,
         entrypoint=entrypoint,
+        userns_mode=agent_userns_mode,
     )
 
     container.reload()

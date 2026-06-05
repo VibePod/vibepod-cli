@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from vibepod.cli import app
 from vibepod.commands import run as run_cmd
-from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
+from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
 from vibepod.core import skills_engine
 from vibepod.core.docker import DockerClientError, DockerManager
 
@@ -781,10 +781,12 @@ def test_resolve_launch_command_requires_non_empty_process() -> None:
 
 
 class _StubDockerManager:
-    """Minimal DockerManager stub that records pull_image calls."""
+    """Minimal DockerManager stub that records pull_image and run_agent calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, rootless_podman: bool = False) -> None:
         self.pulled: list[str] = []
+        self.rootless_podman = rootless_podman
+        self.run_kwargs: dict | None = None
         self._container = type(
             "_Container",
             (),
@@ -802,6 +804,9 @@ class _StubDockerManager:
     def ensure_network(self, name: str) -> None:
         pass
 
+    def is_rootless_podman(self) -> bool:
+        return self.rootless_podman
+
     def pull_image(self, image: str) -> None:
         self.pulled.append(image)
 
@@ -809,6 +814,7 @@ class _StubDockerManager:
         pass
 
     def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+        self.run_kwargs = kwargs
         return self._container
 
     def networks_with_running_containers(self) -> list[str]:
@@ -831,6 +837,47 @@ def _make_config(
         "proxy": {"enabled": False},
         "logging": {"enabled": False},
     }
+
+
+@pytest.mark.parametrize("agent", SUPPORTED_AGENTS)
+def test_run_uses_keep_id_for_rootless_podman_agents(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent: str
+) -> None:
+    stub = _StubDockerManager(rootless_podman=True)
+    config = _make_config()
+    config["agents"][agent] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent=agent, workspace=tmp_path, detach=True)
+
+    assert stub.run_kwargs is not None
+    env = stub.run_kwargs["env"]
+    assert stub.run_kwargs["userns_mode"] == "keep-id"
+    assert stub.run_kwargs["user"] is None
+    assert env["USER_UID"] == "0"
+    assert env["USER_GID"] == "0"
+
+
+def test_run_preserves_host_user_for_non_podman_devstral(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub = _StubDockerManager(rootless_podman=False)
+    config = _make_config()
+    config["agents"]["devstral"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(run_cmd.os, "getuid", lambda: 1234)
+    monkeypatch.setattr(run_cmd.os, "getgid", lambda: 5678)
+
+    run_cmd.run(agent="devstral", workspace=tmp_path, detach=True)
+
+    assert stub.run_kwargs is not None
+    env = stub.run_kwargs["env"]
+    assert stub.run_kwargs["userns_mode"] is None
+    assert stub.run_kwargs["user"] == "1234:5678"
+    assert env["USER_UID"] == "1234"
+    assert env["USER_GID"] == "5678"
 
 
 def test_cli_run_forwards_extra_args_to_agent_command(monkeypatch, tmp_path: Path) -> None:
