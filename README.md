@@ -64,9 +64,9 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `devstral` (`vibe`) | `--auto-approve` |
 | `copilot` | `--yolo` |
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
+| `pi` | `--approve` |
 | `opencode` | Not supported |
 | `auggie` | Not supported |
-| `pi` | Not supported |
 
 ![VibePod CLI preview](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/preview.png)
 
