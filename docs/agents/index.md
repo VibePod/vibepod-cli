@@ -196,9 +196,9 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `devstral` | `--auto-approve` |
 | `copilot` | `--yolo` |
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
+| `pi` | `--approve` |
 | `opencode` | Not supported |
 | `auggie` | Not supported |
-| `pi` | Not supported |
 
 Example:
 
@@ -514,3 +514,9 @@ vp run pi   # or: vp pi
 ```
 
 Pi runs the Pi coding agent from Earendil in the same isolated VibePod container workflow. Credentials and configuration are persisted under `~/.config/vibepod/agents/pi/`.
+
+Pi has a per-project **trust/approval system**: before loading project-local extensions and settings, it asks you to trust the project once. Inside VibePod:
+
+- Interactive: run `/trust` to save the decision. It is written to `PI_CODING_AGENT_DIR` (`/config/.pi/agent/trust.json`), which lives inside the persisted config mount, so the trust survives container restarts.
+- `--ikwid`: appends `--approve`, trusting project-local files for that run (see [IKWID mode](#ikwid-mode---ikwid)).
+- Non-interactive modes (`-p`, `--mode json`, `--mode rpc`) show no prompt and fall back to `defaultProjectTrust` in `/config/.pi/agent/settings.json` (`ask` | `always` | `never`). Pre-seed this file if you need unattended runs to trust projects automatically.

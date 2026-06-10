@@ -93,13 +93,18 @@ def test_devstral_spec_has_ikwid_args() -> None:
     assert spec.ikwid_args == ["--auto-approve"]
 
 
+def test_pi_spec_has_ikwid_args() -> None:
+    spec = get_agent_spec("pi")
+    assert spec.ikwid_args == ["--approve"]
+
+
 def test_gemini_spec_runs_via_node_wrapper() -> None:
     spec = get_agent_spec("gemini")
     assert spec.command == ["env", "HOME=/config", "node", "/usr/local/bin/gemini"]
 
 
 def test_unsupported_agents_have_no_ikwid_args() -> None:
-    for agent in ("opencode", "auggie", "pi"):
+    for agent in ("opencode", "auggie"):
         spec = get_agent_spec(agent)
         assert spec.ikwid_args is None, f"{agent} should not have ikwid_args"
 

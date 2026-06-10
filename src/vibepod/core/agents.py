@@ -122,6 +122,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         ["pi"],
         "/config",
         {"HOME": "/config", "PI_CODING_AGENT_DIR": "/config/.pi/agent"},
+        ikwid_args=["--approve"],
     ),
 }
 
