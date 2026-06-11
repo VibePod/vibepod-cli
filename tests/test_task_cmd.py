@@ -19,6 +19,11 @@ from vibepod.core.tasks import TaskStore
 @pytest.fixture(autouse=True)
 def _allow_all_dirs(monkeypatch):
     monkeypatch.setattr(task_cmd, "is_dir_allowed", lambda p: True)
+    monkeypatch.setattr(
+        task_cmd,
+        "_start_timeout_watcher",
+        lambda task_id, timeout_seconds: None,
+    )
 
 
 @pytest.fixture
@@ -268,6 +273,107 @@ def test_task_create_records_task_in_store(monkeypatch, tmp_path, tmp_task_store
     assert rows[0].prompt == "do a thing"
     assert rows[0].container_id == "cid123456789012"
     assert rows[0].status == "running"
+
+
+def test_task_create_starts_default_timeout_watcher(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    launched: list[tuple[str, int]] = []
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(
+        task_cmd,
+        "_start_timeout_watcher",
+        lambda task_id, timeout_seconds: launched.append((task_id, timeout_seconds)),
+    )
+
+    task_cmd.task_create(agent="claude", prompt="do a thing", workspace=tmp_path)
+
+    rows = tmp_task_store.list()
+    assert launched == [(rows[0].id, 7200)]
+
+
+def test_task_create_accepts_timeout_override(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    launched: list[tuple[str, int]] = []
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(
+        task_cmd,
+        "_start_timeout_watcher",
+        lambda task_id, timeout_seconds: launched.append((task_id, timeout_seconds)),
+    )
+
+    task_cmd.task_create(
+        agent="claude",
+        prompt="do a thing",
+        workspace=tmp_path,
+        timeout="30m",
+    )
+
+    rows = tmp_task_store.list()
+    assert launched == [(rows[0].id, 1800)]
+
+
+def test_task_create_timeout_none_disables_watcher(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(
+        task_cmd,
+        "_start_timeout_watcher",
+        lambda task_id, timeout_seconds: pytest.fail("watcher should not start"),
+    )
+
+    task_cmd.task_create(
+        agent="claude",
+        prompt="do a thing",
+        workspace=tmp_path,
+        timeout="none",
+    )
+
+
+def test_timeout_watcher_stops_running_container_and_marks_failed(
+    monkeypatch, tmp_task_store
+) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="run forever",
+        workspace="/ws",
+        container_id="running",
+        container_name="vibepod-task-running",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+
+    class _RunningContainer:
+        status = "running"
+        attrs = {"State": {"Status": "running"}}
+
+        def __init__(self) -> None:
+            self.stop_timeout: int | None = None
+
+        def reload(self) -> None:
+            pass
+
+        def stop(self, timeout: int = 10) -> None:
+            self.stop_timeout = timeout
+
+    container = _RunningContainer()
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            assert name_or_id == "running"
+            return container
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    task_cmd._enforce_task_timeout(record.id, 30, sleep=lambda seconds: None)
+
+    updated = tmp_task_store.get(record.id)
+    assert container.stop_timeout == 10
+    assert updated is not None
+    assert updated.status == "failed"
+    assert updated.finished_at is not None
 
 
 # ---------------------------------------------------------------------------
