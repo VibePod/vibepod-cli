@@ -61,7 +61,7 @@ def test_update_transitions_lifecycle_state(tmp_path: Path) -> None:
     assert updated.exit_code == 0
     assert updated.started_at == "2026-06-11T14:00:00Z"
     assert updated.finished_at == "2026-06-11T14:05:00Z"
-    assert updated.updated_at >= updated.created_at
+    assert updated.updated_at > record.updated_at
     assert store.get(record.id) == updated
 
 

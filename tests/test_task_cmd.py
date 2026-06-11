@@ -113,39 +113,39 @@ def test_headless_prefix_none_for_unsupported_agents() -> None:
 
 
 # ---------------------------------------------------------------------------
-# task run — agent validation
+# task create — agent validation
 # ---------------------------------------------------------------------------
 
 
-def test_task_run_rejects_unknown_agent(monkeypatch, tmp_path, tmp_task_store) -> None:
+def test_task_create_rejects_unknown_agent(monkeypatch, tmp_path, tmp_task_store) -> None:
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
 
     with pytest.raises(typer.Exit) as exc:
-        task_cmd.task_run(agent="nosuchthing", prompt="hi", workspace=tmp_path)
+        task_cmd.task_create(agent="nosuchthing", prompt="hi", workspace=tmp_path)
     assert exc.value.exit_code == 1
 
 
-def test_task_run_rejects_agent_without_headless_prefix(
+def test_task_create_rejects_agent_without_headless_prefix(
     monkeypatch, tmp_path, tmp_task_store
 ) -> None:
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
 
     with pytest.raises(typer.Exit) as exc:
-        task_cmd.task_run(agent="gemini", prompt="hi", workspace=tmp_path)
+        task_cmd.task_create(agent="gemini", prompt="hi", workspace=tmp_path)
     assert exc.value.exit_code == 1
 
 
 # ---------------------------------------------------------------------------
-# task run — happy path, command shape
+# task create — happy path, command shape
 # ---------------------------------------------------------------------------
 
 
-def test_task_run_claude_builds_headless_command(monkeypatch, tmp_path, tmp_task_store) -> None:
+def test_task_create_claude_builds_headless_command(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
-    task_cmd.task_run(agent="claude", prompt="do the thing", workspace=tmp_path)
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
 
     assert stub.run_kwargs is not None
     assert stub.run_kwargs["command"] == ["claude", "-p", "do the thing"]
@@ -153,17 +153,17 @@ def test_task_run_claude_builds_headless_command(monkeypatch, tmp_path, tmp_task
     assert stub.run_kwargs["agent"] == "claude"
 
 
-def test_task_run_codex_uses_exec_subcommand(monkeypatch, tmp_path, tmp_task_store) -> None:
+def test_task_create_codex_uses_exec_subcommand(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
-    task_cmd.task_run(agent="codex", prompt="refactor auth", workspace=tmp_path)
+    task_cmd.task_create(agent="codex", prompt="refactor auth", workspace=tmp_path)
 
     assert stub.run_kwargs["command"] == ["codex", "exec", "refactor auth"]
 
 
-def test_task_run_codex_aliases_openai_api_key(monkeypatch, tmp_path, tmp_task_store) -> None:
+def test_task_create_codex_aliases_openai_api_key(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     cfg = _make_config()
     cfg["agents"]["codex"] = {
@@ -173,31 +173,31 @@ def test_task_run_codex_aliases_openai_api_key(monkeypatch, tmp_path, tmp_task_s
     monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
-    task_cmd.task_run(agent="codex", prompt="say ok", workspace=tmp_path)
+    task_cmd.task_create(agent="codex", prompt="say ok", workspace=tmp_path)
 
     env = stub.run_kwargs["env"]
     assert env["OPENAI_API_KEY"] == "sk-test-key"
     assert env["CODEX_API_KEY"] == "sk-test-key"
 
 
-def test_task_run_auggie_uses_print_flag(monkeypatch, tmp_path, tmp_task_store) -> None:
+def test_task_create_auggie_uses_print_flag(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
-    task_cmd.task_run(agent="auggie", prompt="run tests", workspace=tmp_path)
+    task_cmd.task_create(agent="auggie", prompt="run tests", workspace=tmp_path)
 
     assert stub.run_kwargs["command"] == ["auggie", "--print", "run tests"]
 
 
-def test_task_run_ikwid_appends_ikwid_args_before_headless_prefix(
+def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
     monkeypatch, tmp_path, tmp_task_store
 ) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
-    task_cmd.task_run(agent="claude", prompt="do it", workspace=tmp_path, ikwid=True)
+    task_cmd.task_create(agent="claude", prompt="do it", workspace=tmp_path, ikwid=True)
 
     assert stub.run_kwargs["command"] == [
         "claude",
@@ -207,7 +207,7 @@ def test_task_run_ikwid_appends_ikwid_args_before_headless_prefix(
     ]
 
 
-def test_task_run_passthrough_args_appended_after_prompt(
+def test_task_create_passthrough_args_appended_after_prompt(
     monkeypatch, tmp_path, tmp_task_store
 ) -> None:
     """Extra args after `--` are appended to the agent's command after the prompt."""
@@ -219,7 +219,7 @@ def test_task_run_passthrough_args_appended_after_prompt(
         app,
         [
             "task",
-            "run",
+            "create",
             "-w",
             str(tmp_path),
             "claude",
@@ -239,12 +239,28 @@ def test_task_run_passthrough_args_appended_after_prompt(
     ]
 
 
-def test_task_run_records_task_in_store(monkeypatch, tmp_path, tmp_task_store) -> None:
+def test_task_run_alias_still_starts_task(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
-    task_cmd.task_run(agent="claude", prompt="do a thing", workspace=tmp_path)
+    result = CliRunner().invoke(
+        app,
+        ["task", "run", "-w", str(tmp_path), "claude", "summarize"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "deprecated" in result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["command"] == ["claude", "-p", "summarize"]
+
+
+def test_task_create_records_task_in_store(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="do a thing", workspace=tmp_path)
 
     rows = tmp_task_store.list()
     assert len(rows) == 1

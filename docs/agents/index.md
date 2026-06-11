@@ -267,7 +267,7 @@ The argument is resolved as an agent name/shortcut first; anything else is looke
 Run an agent non-interactively as a background task. Claude calls this "headless mode"; codex and auggie expose equivalent flags. VibePod wraps them in a uniform `vp task` command.
 
 ```bash
-vp task run claude "Summarize the README"
+vp task create claude "Summarize the README"
 # ✓ Task started: 9f1e8a20b4c14e2f89d7f6a1c3e42b99
 #   container: vibepod-claude-abcdef12
 #   follow:    vp task logs 9f1e8a20b4c1 --follow
@@ -309,7 +309,7 @@ Task ids can be abbreviated to any unique prefix (e.g., the first 12 chars shown
 Anything after `--` is forwarded to the agent's command after the prompt, matching the CLI's documented form (`claude -p "..." --allowedTools ...`):
 
 ```bash
-vp task run claude "review staged changes" -- --output-format json
+vp task create claude "review staged changes" -- --output-format json
 ```
 
 ### Auto-approval for automation
@@ -317,7 +317,7 @@ vp task run claude "review staged changes" -- --output-format json
 Headless tasks typically need to run without permission prompts. Pass `--ikwid` to apply the agent's documented auto-approve flag (e.g., `--dangerously-skip-permissions` for Claude):
 
 ```bash
-vp task run claude "fix the failing test in auth.py" --ikwid
+vp task create claude "fix the failing test in auth.py" --ikwid
 ```
 
 ### Codex task authentication
@@ -325,7 +325,7 @@ vp task run claude "fix the failing test in auth.py" --ikwid
 `codex exec` reuses saved Codex login state from the mounted config directory when available. For automation and smoke tests, pass `CODEX_API_KEY` explicitly:
 
 ```bash
-vp task run -e CODEX_API_KEY="$OPENAI_API_KEY" --ikwid codex \
+vp task create -e CODEX_API_KEY="$OPENAI_API_KEY" --ikwid codex \
   "Print exactly TASK_OK_CODEX and exit."
 ```
 
