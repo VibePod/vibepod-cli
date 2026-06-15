@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from vibepod.constants import AGENT_SHORTCUTS, SUPPORTED_AGENTS
+from vibepod.constants import AGENT_SHORTCUTS, DEFAULT_IMAGES, SUPPORTED_AGENTS
 from vibepod.core.agents import (
     get_agent_shortcut,
     get_agent_spec,
@@ -49,6 +49,18 @@ def test_pi_spec_matches_container_contract() -> None:
     assert spec.config_mount_path == "/config"
     assert spec.extra_env["HOME"] == "/config"
     assert spec.extra_env["PI_CODING_AGENT_DIR"] == "/config/.pi/agent"
+
+
+def test_agy_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("agy")
+    assert spec.id == "agy"
+    assert spec.provider == "google"
+    assert spec.image == DEFAULT_IMAGES["agy"]
+    assert spec.config_subdir == "agy"
+    assert spec.command == ["agy"]
+    assert spec.config_mount_path == "/home/agy"
+    assert spec.extra_env["HOME"] == "/home/agy"
+    assert spec.platform == "linux/amd64"
 
 
 def test_get_agent_spec_unknown() -> None:
@@ -144,6 +156,6 @@ def test_codex_spec_has_llm_env_map() -> None:
 
 
 def test_agents_without_llm_env_map() -> None:
-    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot", "pi"):
+    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot", "pi", "agy"):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"

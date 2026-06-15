@@ -99,6 +99,14 @@ def _default_config() -> dict[str, Any]:
                 "volumes": [],
                 "init": [],
             },
+            "agy": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["agy"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,

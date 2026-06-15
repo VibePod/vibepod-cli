@@ -128,6 +128,17 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         {"HOME": "/config", "PI_CODING_AGENT_DIR": "/config/.pi/agent"},
         ikwid_args=["--approve"],
     ),
+    "agy": AgentSpec(
+        "agy",
+        "google",
+        DEFAULT_IMAGES["agy"],
+        "agy",
+        ["agy"],
+        "/home/agy",
+        {"HOME": "/home/agy"},
+        platform="linux/amd64",
+        ikwid_args=["--dangerously-skip-permissions"],
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
