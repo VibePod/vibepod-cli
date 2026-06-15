@@ -14,6 +14,7 @@ VibePod manages each agent as a Docker container. Credentials and config are per
 | `copilot` | GitHub | `vp p` | `vibepod/copilot:latest` |
 | `codex` | OpenAI | `vp x` | `vibepod/codex:latest` |
 | `pi` | Earendil | `vp pi` | `vibepod/pi:latest` |
+| `agy` (Antigravity) | Google | `vp n` | `vibepod/agy:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`.
 
@@ -74,7 +75,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -197,6 +198,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `copilot` | `--yolo` |
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `pi` | `--approve` |
+| `agy` | `--dangerously-skip-permissions` |
 | `opencode` | Not supported |
 | `auggie` | Not supported |
 
@@ -595,3 +597,19 @@ Pi has a per-project **trust/approval system**: before loading project-local ext
 - Interactive: run `/trust` to save the decision. It is written to `PI_CODING_AGENT_DIR` (`/config/.pi/agent/trust.json`), which lives inside the persisted config mount, so the trust survives container restarts.
 - `--ikwid`: appends `--approve`, trusting project-local files for that run (see [IKWID mode](#ikwid-mode---ikwid)).
 - Non-interactive modes (`-p`, `--mode json`, `--mode rpc`) show no prompt and fall back to `defaultProjectTrust` in `/config/.pi/agent/settings.json` (`ask` | `always` | `never`). Pre-seed this file if you need unattended runs to trust projects automatically.
+
+### Agy / Antigravity (Google)
+
+```bash
+vp run agy   # or: vp n
+```
+
+Agy runs Google's Antigravity CLI in the same isolated VibePod container
+workflow. Credentials and configuration are persisted under
+`~/.config/vibepod/agents/agy/` and mounted at `/home/agy` inside the container.
+
+Use `--ikwid` to append Agy's permission-skip flag:
+
+```bash
+vp run agy --ikwid
+```

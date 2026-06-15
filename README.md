@@ -21,7 +21,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy & more
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
@@ -65,6 +65,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `copilot` | `--yolo` |
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `pi` | `--approve` |
+| `agy` | `--dangerously-skip-permissions` |
 | `opencode` | Not supported |
 | `auggie` | Not supported |
 
@@ -126,6 +127,7 @@ Current defaults:
 - `copilot` -> `vibepod/copilot:latest`
 - `codex` -> `vibepod/codex:latest`
 - `pi` -> `vibepod/pi:latest`
+- `agy` -> `vibepod/agy:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
@@ -143,6 +145,7 @@ VP_IMAGE_AUGGIE=vibepod/auggie:latest vp run auggie
 VP_IMAGE_COPILOT=vibepod/copilot:latest vp run copilot
 VP_IMAGE_CODEX=vibepod/codex:latest vp run codex
 VP_IMAGE_PI=vibepod/pi:latest vp run pi
+VP_IMAGE_AGY=vibepod/agy:latest vp run agy
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list
 ```
