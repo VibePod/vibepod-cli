@@ -7,7 +7,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
 from rich.prompt import Confirm
@@ -35,7 +35,15 @@ from vibepod.core.launch import (
     terminal_env_defaults,
     update_container_mapping,
 )
-from vibepod.core.tasks import TaskRecord, TaskStore
+from vibepod.core.tasks import (
+    TASK_STATUS_COMPLETED,
+    TASK_STATUS_FAILED,
+    TASK_STATUS_RUNNING,
+    TASK_STATUS_STARTING,
+    TERMINAL_TASK_STATUSES,
+    TaskRecord,
+    TaskStore,
+)
 from vibepod.utils.console import console, error, info, success, warning
 
 app = typer.Typer(
@@ -43,6 +51,7 @@ app = typer.Typer(
     help="Run agents headlessly as background tasks",
     no_args_is_help=True,
 )
+_NO_CONTEXT = cast(typer.Context, None)
 
 
 def _task_store() -> TaskStore:
@@ -64,6 +73,78 @@ def _resolve_task(store: TaskStore, id_or_prefix: str) -> TaskRecord:
         error(f"Ambiguous task id '{id_or_prefix}' (matches: {joined}). Use a longer prefix.")
         raise typer.Exit(1)
     return matches[0]
+
+
+def _context_args(ctx: typer.Context | None) -> list[str]:
+    return list(ctx.args) if ctx is not None and ctx.args else []
+
+
+def _state_timestamp(state: dict[str, Any], key: str) -> str | None:
+    value = state.get(key)
+    if value is None:
+        return None
+    timestamp = str(value)
+    if not timestamp or timestamp.startswith("0001-01-01"):
+        return None
+    return timestamp
+
+
+def _task_state_from_docker(
+    state: dict[str, Any],
+) -> tuple[str, int | None, str | None, str | None]:
+    docker_status = str(state.get("Status") or "")
+    exit_code = state.get("ExitCode")
+    normalized_exit_code = exit_code if isinstance(exit_code, int) else None
+    started_at = _state_timestamp(state, "StartedAt")
+    finished_at = _state_timestamp(state, "FinishedAt")
+
+    if docker_status == "exited":
+        status = TASK_STATUS_COMPLETED if normalized_exit_code == 0 else TASK_STATUS_FAILED
+    elif docker_status in {"dead", "removing"}:
+        status = TASK_STATUS_FAILED
+    elif docker_status == "created":
+        status = TASK_STATUS_STARTING
+    elif docker_status:
+        status = TASK_STATUS_RUNNING
+    else:
+        status = TASK_STATUS_RUNNING
+
+    if status not in TERMINAL_TASK_STATUSES:
+        normalized_exit_code = None
+        finished_at = None
+
+    return status, normalized_exit_code, started_at, finished_at
+
+
+def _record_with_container_state(
+    store: TaskStore,
+    record: TaskRecord,
+    state: dict[str, Any],
+) -> TaskRecord:
+    status, exit_code, started_at, finished_at = _task_state_from_docker(state)
+    if (
+        record.status == status
+        and record.exit_code == exit_code
+        and record.started_at == started_at
+        and record.finished_at == finished_at
+    ):
+        return record
+    return (
+        store.update(
+            record.id,
+            status=status,
+            exit_code=exit_code,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        or record
+    )
+
+
+def _format_task_status(record: TaskRecord) -> str:
+    if record.status in TERMINAL_TASK_STATUSES and record.exit_code is not None:
+        return f"{record.status} ({record.exit_code})"
+    return record.status
 
 
 def task_run(
@@ -135,11 +216,7 @@ def task_run(
         **parse_env_pairs(env or []),
     }
 
-    if (
-        selected == "codex"
-        and "CODEX_API_KEY" not in merged_env
-        and "OPENAI_API_KEY" in merged_env
-    ):
+    if selected == "codex" and "CODEX_API_KEY" not in merged_env and "OPENAI_API_KEY" in merged_env:
         merged_env["CODEX_API_KEY"] = merged_env["OPENAI_API_KEY"]
 
     if (
@@ -313,6 +390,11 @@ def task_run(
                 mapping_path, container_ip, container.id, container.name, selected
             )
 
+    state = container.attrs.get("State", {}) or {}
+    if not isinstance(state, dict):
+        state = {}
+    initial_status = TASK_STATUS_RUNNING if container.status == "running" else TASK_STATUS_STARTING
+
     store = _task_store()
     try:
         record = store.create(
@@ -323,6 +405,8 @@ def task_run(
             container_name=container.name,
             image=image,
             vibepod_version=__version__,
+            status=initial_status,
+            started_at=_state_timestamp(state, "StartedAt"),
         )
     except Exception as exc:
         error(f"Failed to persist task record: {exc}. Stopping container {container.name}.")
@@ -380,7 +464,7 @@ def _task_run_cmd(
         network=network,
         pull=pull,
         ikwid=ikwid,
-        passthrough_args=list(ctx.args) if ctx.args else [],
+        passthrough_args=_context_args(ctx),
     )
 
 
@@ -388,9 +472,7 @@ def _task_run_cmd(
 def task_list(
     agent: Annotated[str | None, typer.Option("--agent", help="Filter by agent name")] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
-    limit: Annotated[
-        int | None, typer.Option("--limit", help="Max rows to show")
-    ] = 20,
+    limit: Annotated[int | None, typer.Option("--limit", help="Max rows to show")] = 20,
 ) -> None:
     """List recent tasks with container status."""
     filter_agent: str | None = None
@@ -402,10 +484,6 @@ def task_list(
     store = _task_store()
     tasks = store.list(agent=filter_agent, limit=limit)
 
-    if as_json:
-        print(_json.dumps([t.as_dict() for t in tasks], indent=2))
-        return
-
     if not tasks:
         console.print("No tasks recorded.")
         return
@@ -415,6 +493,34 @@ def task_list(
     except DockerClientError:
         manager = None
 
+    rows: list[tuple[TaskRecord, str]] = []
+    for task in tasks:
+        record = task
+        display_status = _format_task_status(record)
+        if manager is not None:
+            try:
+                container = manager.get_container(record.container_id)
+                container.reload()
+                state = container.attrs.get("State", {}) or {}
+                if not isinstance(state, dict):
+                    state = {}
+                record = _record_with_container_state(store, record, state)
+                display_status = _format_task_status(record)
+            except DockerClientError:
+                if record.status not in TERMINAL_TASK_STATUSES:
+                    display_status = "removed"
+        rows.append((record, display_status))
+    if as_json:
+        payloads = []
+        for record, display_status in rows:
+            payload = record.as_dict()
+            if display_status == "removed":
+                payload["status"] = "removed"
+                payload["exit_code"] = None
+            payloads.append(payload)
+        print(_json.dumps(payloads, indent=2))
+        return
+
     table = Table(title="Tasks", title_justify="left")
     table.add_column("ID", style="cyan")
     table.add_column("AGENT", style="magenta")
@@ -422,20 +528,7 @@ def task_list(
     table.add_column("CREATED")
     table.add_column("PROMPT")
 
-    for task in tasks:
-        status = "?"
-        if manager is not None:
-            try:
-                container = manager.get_container(task.container_id)
-                container.reload()
-                state = container.attrs.get("State", {}) or {}
-                status = state.get("Status", "?")
-                if status == "exited":
-                    code = state.get("ExitCode")
-                    if code is not None:
-                        status = f"exited ({code})"
-            except DockerClientError:
-                status = "removed"
+    for task, status in rows:
         first_line = next((ln for ln in task.prompt.splitlines() if ln.strip()), "")
         prompt_preview = first_line.strip()
         if len(prompt_preview) > 60:
@@ -502,18 +595,20 @@ def task_status(
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
 
-    payload: dict[str, Any] = record.as_dict()
+    payload: dict[str, Any]
     try:
         container = manager.get_container(record.container_id)
         container.reload()
         state = container.attrs.get("State", {}) or {}
-        payload["status"] = state.get("Status")
-        payload["exit_code"] = state.get("ExitCode")
-        payload["started_at"] = state.get("StartedAt")
-        payload["finished_at"] = state.get("FinishedAt")
+        if not isinstance(state, dict):
+            state = {}
+        record = _record_with_container_state(store, record, state)
+        payload = record.as_dict()
     except DockerClientError:
-        payload["status"] = "removed"
-        payload["exit_code"] = None
+        payload = record.as_dict()
+        if record.status not in TERMINAL_TASK_STATUSES:
+            payload["status"] = "removed"
+            payload["exit_code"] = None
 
     if as_json:
         print(_json.dumps(payload, indent=2))

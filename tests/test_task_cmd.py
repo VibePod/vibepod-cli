@@ -33,6 +33,7 @@ def tmp_task_store(tmp_path, monkeypatch):
 def fake_ctx():
     """Minimal ctx stand-in for direct task_run() calls (no passthrough args)."""
     import types
+
     return types.SimpleNamespace(args=[])
 
 
@@ -162,9 +163,7 @@ def test_task_run_codex_uses_exec_subcommand(monkeypatch, tmp_path, tmp_task_sto
     assert stub.run_kwargs["command"] == ["codex", "exec", "refactor auth"]
 
 
-def test_task_run_codex_aliases_openai_api_key(
-    monkeypatch, tmp_path, tmp_task_store
-) -> None:
+def test_task_run_codex_aliases_openai_api_key(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     cfg = _make_config()
     cfg["agents"]["codex"] = {
@@ -198,9 +197,7 @@ def test_task_run_ikwid_appends_ikwid_args_before_headless_prefix(
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
-    task_cmd.task_run(
-        agent="claude", prompt="do it", workspace=tmp_path, ikwid=True
-    )
+    task_cmd.task_run(agent="claude", prompt="do it", workspace=tmp_path, ikwid=True)
 
     assert stub.run_kwargs["command"] == [
         "claude",
@@ -254,6 +251,7 @@ def test_task_run_records_task_in_store(monkeypatch, tmp_path, tmp_task_store) -
     assert rows[0].agent == "claude"
     assert rows[0].prompt == "do a thing"
     assert rows[0].container_id == "cid123456789012"
+    assert rows[0].status == "running"
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +269,7 @@ def test_task_list_shows_recorded_tasks(monkeypatch, tmp_task_store) -> None:
         image="vibepod/claude:latest",
         vibepod_version="0.11.0",
     )
-    # Make DockerManager unavailable so list falls back to "?" status (no network calls).
+    # Make DockerManager unavailable so list uses persisted task state (no network calls).
     from vibepod.core.docker import DockerClientError
 
     class _Unavailable:
@@ -284,6 +282,143 @@ def test_task_list_shows_recorded_tasks(monkeypatch, tmp_task_store) -> None:
     assert result.exit_code == 0, result.output
     assert '"agent": "claude"' in result.output
     assert '"prompt": "do a"' in result.output
+
+
+def test_task_status_persists_terminal_container_state(monkeypatch, tmp_task_store) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="done",
+        workspace="/ws",
+        container_id="exited",
+        container_name="vibepod-task-exited",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+
+    class _ExitedContainer:
+        attrs = {
+            "State": {
+                "Status": "exited",
+                "ExitCode": 0,
+                "StartedAt": "2026-06-11T14:00:00Z",
+                "FinishedAt": "2026-06-11T14:05:00Z",
+            }
+        }
+
+        def reload(self) -> None:
+            pass
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            assert name_or_id == "exited"
+            return _ExitedContainer()
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    result = CliRunner().invoke(app, ["task", "status", record.id, "--json"])
+
+    assert result.exit_code == 0, result.output
+    updated = tmp_task_store.get(record.id)
+    assert updated is not None
+    assert updated.status == "completed"
+    assert updated.exit_code == 0
+    assert updated.started_at == "2026-06-11T14:00:00Z"
+    assert updated.finished_at == "2026-06-11T14:05:00Z"
+    assert '"status": "completed"' in result.output
+
+
+def test_task_status_uses_persisted_terminal_state_when_container_removed(
+    monkeypatch, tmp_task_store
+) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="done",
+        workspace="/ws",
+        container_id="gone",
+        container_name="vibepod-task-gone",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+    tmp_task_store.update(
+        record.id,
+        status="failed",
+        exit_code=2,
+        started_at="2026-06-11T14:00:00Z",
+        finished_at="2026-06-11T14:05:00Z",
+    )
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            from vibepod.core.docker import DockerClientError
+
+            raise DockerClientError("gone")
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    result = CliRunner().invoke(app, ["task", "status", record.id[:12], "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert '"status": "failed"' in result.output
+    assert '"exit_code": 2' in result.output
+
+
+def test_task_list_persists_terminal_container_state(monkeypatch, tmp_task_store) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="done",
+        workspace="/ws",
+        container_id="exited",
+        container_name="vibepod-task-exited",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+
+    class _ExitedContainer:
+        attrs = {"State": {"Status": "exited", "ExitCode": 1}}
+
+        def reload(self) -> None:
+            pass
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            assert name_or_id == "exited"
+            return _ExitedContainer()
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    result = CliRunner().invoke(app, ["task", "list", "--json"])
+
+    assert result.exit_code == 0, result.output
+    updated = tmp_task_store.get(record.id)
+    assert updated is not None
+    assert updated.status == "failed"
+    assert updated.exit_code == 1
+    assert '"status": "failed"' in result.output
+
+
+def test_task_list_uses_removed_status_when_container_removed(monkeypatch, tmp_task_store) -> None:
+    tmp_task_store.create(
+        agent="claude",
+        prompt="removed task",
+        workspace="/ws",
+        container_id="gone",
+        container_name="vibepod-task-gone",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            from vibepod.core.docker import DockerClientError
+
+            raise DockerClientError("gone")
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    result = CliRunner().invoke(app, ["task", "list", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert '"status": "removed"' in result.output
 
 
 def test_task_rm_deletes_store_row_when_container_gone(monkeypatch, tmp_task_store) -> None:
@@ -310,9 +445,7 @@ def test_task_rm_deletes_store_row_when_container_gone(monkeypatch, tmp_task_sto
     assert tmp_task_store.get(record.id) is None
 
 
-def test_task_rm_refuses_running_container_without_force(
-    monkeypatch, tmp_task_store
-) -> None:
+def test_task_rm_refuses_running_container_without_force(monkeypatch, tmp_task_store) -> None:
     record = tmp_task_store.create(
         agent="claude",
         prompt="still going",
@@ -355,9 +488,7 @@ def test_task_rm_all_rejects_task_id(tmp_task_store) -> None:
         task_cmd.task_rm(task_id="abc123", all_tasks=True, force=False)
 
 
-def test_task_rm_all_refuses_running_containers_without_force(
-    monkeypatch, tmp_task_store
-) -> None:
+def test_task_rm_all_refuses_running_containers_without_force(monkeypatch, tmp_task_store) -> None:
     running = tmp_task_store.create(
         agent="claude",
         prompt="still going",
@@ -409,9 +540,7 @@ def test_task_rm_all_refuses_running_containers_without_force(
     assert not containers["stopped"].removed
 
 
-def test_task_rm_all_force_removes_all_records_and_containers(
-    monkeypatch, tmp_task_store
-) -> None:
+def test_task_rm_all_force_removes_all_records_and_containers(monkeypatch, tmp_task_store) -> None:
     running = tmp_task_store.create(
         agent="claude",
         prompt="still going",
