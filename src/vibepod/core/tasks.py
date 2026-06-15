@@ -110,7 +110,7 @@ class TaskRecord:
 
 
 class TaskStore:
-    """Registry of agent tasks. One row per `vp task run` invocation."""
+    """Registry of agent tasks. One row per `vp task create` invocation."""
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path)

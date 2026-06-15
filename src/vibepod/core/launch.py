@@ -1,4 +1,4 @@
-"""Helpers shared by `vp run` and `vp task run` for launching agent containers."""
+"""Helpers shared by `vp run` and `vp task create` for launching agent containers."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Task command implementation — run agents headlessly in the background."""
+"""Task command implementation — create headless background agent tasks."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
 import typer
 from rich.prompt import Confirm
@@ -48,10 +48,9 @@ from vibepod.utils.console import console, error, info, success, warning
 
 app = typer.Typer(
     name="task",
-    help="Run agents headlessly as background tasks",
+    help="Create and manage headless background agent tasks",
     no_args_is_help=True,
 )
-_NO_CONTEXT = cast(typer.Context, None)
 
 
 def _task_store() -> TaskStore:
@@ -147,19 +146,131 @@ def _format_task_status(record: TaskRecord) -> str:
     return record.status
 
 
-def task_run(
-    agent: str,
-    prompt: str,
-    workspace: Path = Path("."),
-    env: list[str] | None = None,
-    name: str | None = None,
-    network: str | None = None,
-    pull: bool = False,
-    ikwid: bool = False,
-    passthrough_args: list[str] | None = None,
+_TASK_CREATE_CONTEXT = {"allow_extra_args": True, "ignore_unknown_options": True}
+
+
+@app.command(
+    "create",
+    context_settings=_TASK_CREATE_CONTEXT,
+)
+def task_create_command(
+    ctx: typer.Context,
+    agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
+    prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
+    workspace: Annotated[
+        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+    ] = Path("."),
+    env: Annotated[
+        list[str] | None,
+        typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
+    ] = None,
+    name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
+    network: Annotated[
+        str | None,
+        typer.Option("--network", help="Additional Docker network to connect the container to"),
+    ] = None,
+    pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    ikwid: Annotated[
+        bool,
+        typer.Option(
+            "--ikwid",
+            help="I Know What I'm Doing: enable auto-approval flags for supported agents",
+        ),
+    ] = False,
 ) -> None:
     """Start an agent task in the background and print its id."""
-    passthrough_args = list(passthrough_args) if passthrough_args else []
+    task_create(
+        agent=agent,
+        prompt=prompt,
+        workspace=workspace,
+        env=env,
+        name=name,
+        network=network,
+        pull=pull,
+        ikwid=ikwid,
+        passthrough_args=_context_args(ctx),
+    )
+
+
+@app.command(
+    "run",
+    context_settings=_TASK_CREATE_CONTEXT,
+    hidden=True,
+)
+def task_run_command(
+    ctx: typer.Context,
+    agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
+    prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
+    workspace: Annotated[
+        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+    ] = Path("."),
+    env: Annotated[
+        list[str] | None,
+        typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
+    ] = None,
+    name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
+    network: Annotated[
+        str | None,
+        typer.Option("--network", help="Additional Docker network to connect the container to"),
+    ] = None,
+    pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    ikwid: Annotated[
+        bool,
+        typer.Option(
+            "--ikwid",
+            help="I Know What I'm Doing: enable auto-approval flags for supported agents",
+        ),
+    ] = False,
+) -> None:
+    """Deprecated alias for `task create`."""
+    task_create(
+        agent=agent,
+        prompt=prompt,
+        workspace=workspace,
+        env=env,
+        name=name,
+        network=network,
+        pull=pull,
+        ikwid=ikwid,
+        passthrough_args=_context_args(ctx),
+        deprecated_alias=True,
+    )
+
+
+def task_create(
+    agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
+    prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
+    workspace: Annotated[
+        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+    ] = Path("."),
+    env: Annotated[
+        list[str] | None,
+        typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
+    ] = None,
+    name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
+    network: Annotated[
+        str | None,
+        typer.Option("--network", help="Additional Docker network to connect the container to"),
+    ] = None,
+    pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    ikwid: Annotated[
+        bool,
+        typer.Option(
+            "--ikwid",
+            help="I Know What I'm Doing: enable auto-approval flags for supported agents",
+        ),
+    ] = False,
+    passthrough_args: list[str] | None = None,
+    deprecated_alias: bool = False,
+) -> None:
+    """Start an agent task in the background and print its id.
+
+    Extra arguments after `--` are forwarded to the agent's command, after the
+    prompt (matches the documented invocation for `claude -p`, `codex exec`, etc).
+    """
+    passthrough_args = list(passthrough_args or [])
+    if deprecated_alias:
+        warning("`vp task run` is deprecated; use `vp task create`.")
 
     config = get_config()
     selected = resolve_agent_name(agent)
@@ -419,53 +530,6 @@ def task_run(
     success(f"Task started: {record.id}")
     info(f"  container: {container.name}")
     info(f"  follow:    vp task logs {record.id[:12]} --follow")
-
-
-@app.command(
-    "run",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def _task_run_cmd(
-    ctx: typer.Context,
-    agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
-    prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
-    workspace: Annotated[
-        Path, typer.Option("-w", "--workspace", help="Workspace directory")
-    ] = Path("."),
-    env: Annotated[
-        list[str] | None,
-        typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
-    ] = None,
-    name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
-    network: Annotated[
-        str | None,
-        typer.Option("--network", help="Additional Docker network to connect the container to"),
-    ] = None,
-    pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
-    ikwid: Annotated[
-        bool,
-        typer.Option(
-            "--ikwid",
-            help="I Know What I'm Doing: enable auto-approval flags for supported agents",
-        ),
-    ] = False,
-) -> None:
-    """Start an agent task in the background and print its id.
-
-    Extra arguments after `--` are forwarded to the agent's command, after the
-    prompt (matches the documented invocation for `claude -p`, `codex exec`, etc).
-    """
-    task_run(
-        agent=agent,
-        prompt=prompt,
-        workspace=workspace,
-        env=env,
-        name=name,
-        network=network,
-        pull=pull,
-        ikwid=ikwid,
-        passthrough_args=_context_args(ctx),
-    )
 
 
 @app.command("list")
