@@ -16,6 +16,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_COPILOT",
         "VP_IMAGE_CODEX",
         "VP_IMAGE_PI",
+        "VP_IMAGE_AGY",
         "VP_DATASETTE_IMAGE",
         "VP_PROXY_IMAGE",
     ):
@@ -31,6 +32,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["copilot"] == "vibepod/copilot:latest"
     assert images["codex"] == "vibepod/codex:latest"
     assert images["pi"] == "vibepod/pi:latest"
+    assert images["agy"] == "vibepod/agy:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -41,3 +43,11 @@ def test_pi_image_override(monkeypatch) -> None:
     images = get_default_images()
 
     assert images["pi"] == "example/pi:dev"
+
+
+def test_agy_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_AGY", "example/agy:dev")
+
+    images = get_default_images()
+
+    assert images["agy"] == "example/agy:dev"
