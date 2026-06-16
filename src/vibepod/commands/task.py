@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json as _json
 import os
+import subprocess
 import sys
 import time
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -147,6 +150,114 @@ def _format_task_status(record: TaskRecord) -> str:
 
 
 _TASK_CREATE_CONTEXT = {"allow_extra_args": True, "ignore_unknown_options": True}
+DEFAULT_TASK_TIMEOUT = "2h"
+DEFAULT_TASK_TIMEOUT_SECONDS = 2 * 60 * 60
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 60 * 60}
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_task_timeout(value: str) -> int | None:
+    raw = value.strip().lower()
+    if raw == "none":
+        return None
+    if not raw:
+        raise typer.BadParameter("Timeout must be a duration like 30m or 2h, or 'none'.")
+
+    unit = raw[-1]
+    multiplier = 1
+    number = raw
+    if unit.isalpha():
+        if unit not in _DURATION_UNITS:
+            raise typer.BadParameter("Timeout unit must be one of: s, m, h.")
+        multiplier = _DURATION_UNITS[unit]
+        number = raw[:-1]
+
+    try:
+        amount = int(number)
+    except ValueError as exc:
+        raise typer.BadParameter("Timeout must be a duration like 30m or 2h, or 'none'.") from exc
+    if amount <= 0:
+        raise typer.BadParameter("Timeout must be greater than zero, or 'none'.")
+    return amount * multiplier
+
+
+def _start_timeout_watcher(task_id: str, timeout_seconds: int) -> None:
+    subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "vibepod.cli",
+            "task",
+            "_watch-timeout",
+            task_id,
+            str(timeout_seconds),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
+def _enforce_task_timeout(
+    task_id: str,
+    timeout_seconds: int,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    sleep(timeout_seconds)
+
+    store = _task_store()
+    record = store.get(task_id)
+    if record is None or record.status in TERMINAL_TASK_STATUSES:
+        return
+
+    try:
+        manager = DockerManager()
+        container = manager.get_container(record.container_id)
+        container.reload()
+        state = container.attrs.get("State", {}) or {}
+        if not isinstance(state, dict):
+            state = {}
+        record = _record_with_container_state(store, record, state)
+    except DockerClientError:
+        if record.status not in TERMINAL_TASK_STATUSES:
+            store.update(
+                record.id,
+                status=TASK_STATUS_FAILED,
+                exit_code=record.exit_code,
+                started_at=record.started_at,
+                finished_at=_utcnow(),
+            )
+        return
+
+    if record.status in TERMINAL_TASK_STATUSES:
+        return
+
+    try:
+        container.stop(timeout=10)
+    except Exception as exc:  # docker SDK raises APIError / DockerException
+        warning(f"Failed to stop timed-out task {record.id[:12]}: {exc}")
+    store.update(
+        record.id,
+        status=TASK_STATUS_FAILED,
+        exit_code=record.exit_code,
+        started_at=record.started_at,
+        finished_at=_utcnow(),
+    )
+
+
+@app.command("_watch-timeout", hidden=True)
+def task_watch_timeout(
+    task_id: Annotated[str, typer.Argument(help="Task id to enforce")],
+    timeout_seconds: Annotated[int, typer.Argument(help="Timeout in seconds")],
+) -> None:
+    """Internal helper launched by `vp task create --timeout`."""
+    _enforce_task_timeout(task_id, timeout_seconds)
 
 
 @app.command(
@@ -169,6 +280,16 @@ def task_create_command(
         str | None,
         typer.Option("--network", help="Additional Docker network to connect the container to"),
     ] = None,
+    timeout: Annotated[
+        str,
+        typer.Option(
+            "--timeout",
+            help=(
+                "Maximum task runtime before graceful stop. "
+                "Use s/m/h suffixes, or 'none' to opt out."
+            ),
+        ),
+    ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     ikwid: Annotated[
         bool,
@@ -186,6 +307,7 @@ def task_create_command(
         env=env,
         name=name,
         network=network,
+        timeout=timeout,
         pull=pull,
         ikwid=ikwid,
         passthrough_args=_context_args(ctx),
@@ -213,6 +335,16 @@ def task_run_command(
         str | None,
         typer.Option("--network", help="Additional Docker network to connect the container to"),
     ] = None,
+    timeout: Annotated[
+        str,
+        typer.Option(
+            "--timeout",
+            help=(
+                "Maximum task runtime before graceful stop. "
+                "Use s/m/h suffixes, or 'none' to opt out."
+            ),
+        ),
+    ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     ikwid: Annotated[
         bool,
@@ -230,6 +362,7 @@ def task_run_command(
         env=env,
         name=name,
         network=network,
+        timeout=timeout,
         pull=pull,
         ikwid=ikwid,
         passthrough_args=_context_args(ctx),
@@ -252,6 +385,16 @@ def task_create(
         str | None,
         typer.Option("--network", help="Additional Docker network to connect the container to"),
     ] = None,
+    timeout: Annotated[
+        str,
+        typer.Option(
+            "--timeout",
+            help=(
+                "Maximum task runtime before graceful stop. "
+                "Use s/m/h suffixes, or 'none' to opt out."
+            ),
+        ),
+    ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     ikwid: Annotated[
         bool,
@@ -271,6 +414,7 @@ def task_create(
     passthrough_args = list(passthrough_args or [])
     if deprecated_alias:
         warning("`vp task run` is deprecated; use `vp task create`.")
+    timeout_seconds = _parse_task_timeout(timeout)
 
     config = get_config()
     selected = resolve_agent_name(agent)
@@ -529,6 +673,11 @@ def task_create(
         raise typer.Exit(1) from exc
     success(f"Task started: {record.id}")
     info(f"  container: {container.name}")
+    if timeout_seconds is None:
+        info("  timeout:   none")
+    else:
+        _start_timeout_watcher(record.id, timeout_seconds)
+        info(f"  timeout:   {timeout} ({timeout_seconds}s)")
     info(f"  follow:    vp task logs {record.id[:12]} --follow")
 
 

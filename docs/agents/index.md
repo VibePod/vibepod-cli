@@ -277,6 +277,8 @@ vp task create claude "Summarize the README"
 
 The command starts a detached container, writes a row to `~/.config/vibepod/tasks.db`, and returns a task id. The container is **not** auto-removed, so you can inspect logs and exit status after it finishes.
 
+Task mode applies a finite timeout by default: **2 hours**. Override it per task with `--timeout 30m`, `--timeout 4h`, or another `s`/`m`/`h` duration. Use `--timeout none` only when you explicitly want an unlimited background task.
+
 ### Supported agents (v1)
 
 | Agent | Invocation inside container |
@@ -312,6 +314,8 @@ Anything after `--` is forwarded to the agent's command after the prompt, matchi
 
 ```bash
 vp task create claude "review staged changes" -- --output-format json
+vp task create --timeout 30m claude "run the fast audit"
+vp task create --timeout none claude "wait for the external job"
 ```
 
 ### Auto-approval for automation
@@ -337,6 +341,7 @@ For compatibility, Codex task mode also maps an explicitly supplied `OPENAI_API_
 
 - **No `--resume` in v1.** Task mode starts a fresh session every time. Use the agent's own resume flag via passthrough (`-- --resume <session_id>` for Claude) if you need continuity.
 - **LLM config model flag is skipped in task mode.** `llm.base_url` / `llm.api_key` / `llm.model` are still injected as env vars, but the `--model`-style CLI flag is not appended — different agents place it differently relative to subcommands. Pass an explicit model via `--`.
+- **Default timeout: 2 hours.** On timeout, VibePod gracefully stops the container and records the task as failed. Pass `--timeout none` to opt out for one task.
 - **Task containers are not auto-removed.** Run `vp task rm <id>` when you're done inspecting one task, or `vp task rm --all -f` to clean up every recorded task and its container.
 
 ## Reattaching a terminal
