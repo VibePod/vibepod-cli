@@ -82,6 +82,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/mistral%20vibe.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/mistral%20vibe.png" alt="Mistral Vibe" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/augment%20auggie.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/augment%20auggie.png" alt="Augment Auggie" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/pi-agent.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/pi-agent.png" alt="Pi Agent" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/agy.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/agy.png" alt="Antigravity CLI" width="180" /></a>
 </p>
 
 ## Current Status
