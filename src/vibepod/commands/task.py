@@ -39,6 +39,7 @@ from vibepod.core.launch import (
     update_container_mapping,
 )
 from vibepod.core.tasks import (
+    TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
     TASK_STATUS_RUNNING,
@@ -123,6 +124,8 @@ def _record_with_container_state(
     record: TaskRecord,
     state: dict[str, Any],
 ) -> TaskRecord:
+    if record.status == TASK_STATUS_CANCELLED:
+        return record
     status, exit_code, started_at, finished_at = _task_state_from_docker(state)
     if (
         record.status == status
@@ -710,7 +713,7 @@ def task_list(
     for task in tasks:
         record = task
         display_status = _format_task_status(record)
-        if manager is not None:
+        if manager is not None and record.status != TASK_STATUS_CANCELLED:
             try:
                 container = manager.get_container(record.container_id)
                 container.reload()
@@ -809,19 +812,22 @@ def task_status(
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
 
     payload: dict[str, Any]
-    try:
-        container = manager.get_container(record.container_id)
-        container.reload()
-        state = container.attrs.get("State", {}) or {}
-        if not isinstance(state, dict):
-            state = {}
-        record = _record_with_container_state(store, record, state)
+    if record.status == TASK_STATUS_CANCELLED:
         payload = record.as_dict()
-    except DockerClientError:
-        payload = record.as_dict()
-        if record.status not in TERMINAL_TASK_STATUSES:
-            payload["status"] = "removed"
-            payload["exit_code"] = None
+    else:
+        try:
+            container = manager.get_container(record.container_id)
+            container.reload()
+            state = container.attrs.get("State", {}) or {}
+            if not isinstance(state, dict):
+                state = {}
+            record = _record_with_container_state(store, record, state)
+            payload = record.as_dict()
+        except DockerClientError:
+            payload = record.as_dict()
+            if record.status not in TERMINAL_TASK_STATUSES:
+                payload["status"] = "removed"
+                payload["exit_code"] = None
 
     if as_json:
         print(_json.dumps(payload, indent=2))
@@ -835,6 +841,90 @@ def task_status(
     if payload.get("exit_code") is not None:
         info(f"Exit code:  {payload['exit_code']}")
     info(f"Created:    {record.created_at}")
+
+
+@app.command("cancel")
+def task_cancel(
+    task_id: Annotated[str, typer.Argument(help="Task id (full or prefix)")],
+) -> None:
+    """Gracefully stop a running task while keeping its record and logs."""
+    store = _task_store()
+    record = _resolve_task(store, task_id)
+
+    if record.status in TERMINAL_TASK_STATUSES:
+        info(f"Task {record.id[:12]} already finished with status: {record.status}")
+        return
+
+    try:
+        manager = DockerManager()
+    except DockerClientError as exc:
+        error(str(exc))
+        raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
+
+    try:
+        container = manager.get_container(record.container_id)
+        container.reload()
+        state = container.attrs.get("State", {}) or {}
+        if not isinstance(state, dict):
+            state = {}
+        record = _record_with_container_state(store, record, state)
+    except DockerClientError:
+        store.update(
+            record.id,
+            status=TASK_STATUS_FAILED,
+            exit_code=record.exit_code,
+            started_at=record.started_at,
+            finished_at=_utcnow(),
+        )
+        error(
+            f"Container for this task is gone. "
+            f"Use `vp task rm {record.id[:12]}` to remove the stale registry entry."
+        )
+        raise typer.Exit(0) from None
+
+    if record.status in TERMINAL_TASK_STATUSES:
+        info(f"Task {record.id[:12]} already finished with status: {record.status}")
+        return
+
+    if getattr(container, "status", "") in {"running", "restarting", "paused"}:
+        try:
+            container.stop(timeout=10)
+        except Exception as exc:  # docker SDK raises APIError / DockerException
+            try:
+                container.reload()
+                status = getattr(container, "status", "")
+            except Exception:
+                status = ""
+            if status in {"exited", "dead"}:
+                state = container.attrs.get("State", {}) or {}
+                if not isinstance(state, dict):
+                    state = {}
+                record = _record_with_container_state(store, record, state)
+            else:
+                error(f"Failed to cancel task {record.id[:12]}: {exc}")
+                raise typer.Exit(1) from exc
+    elif getattr(container, "status", "") == "created":
+        try:
+            container.remove(force=True)
+        except Exception as exc:
+            error(f"Failed to remove created task container {record.id[:12]}: {exc}")
+            raise typer.Exit(1) from exc
+
+    updated: TaskRecord | None
+    if record.status in TERMINAL_TASK_STATUSES:
+        updated = record
+    else:
+        updated = store.update(
+            record.id,
+            status=TASK_STATUS_CANCELLED,
+            exit_code=record.exit_code,
+            started_at=record.started_at,
+            finished_at=_utcnow(),
+        )
+    if updated is None:
+        error(f"Task {record.id[:12]} disappeared before it could be cancelled.")
+        raise typer.Exit(1)
+    success(f"Cancelled task {updated.id[:12]}")
 
 
 @app.command("rm")

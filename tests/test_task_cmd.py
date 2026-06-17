@@ -543,7 +543,239 @@ def test_task_list_uses_removed_status_when_container_removed(monkeypatch, tmp_t
     assert '"status": "removed"' in result.output
 
 
+def test_task_cancel_stops_running_container_and_keeps_record(monkeypatch, tmp_task_store) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="stop me",
+        workspace="/ws",
+        container_id="running",
+        container_name="vibepod-task-running",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+
+    class _RunningContainer:
+        status = "running"
+        attrs = {"State": {"Status": "running"}}
+
+        def __init__(self) -> None:
+            self.stop_timeout: int | None = None
+            self.remove_called = False
+
+        def reload(self) -> None:
+            pass
+
+        def stop(self, timeout: int = 10) -> None:
+            self.stop_timeout = timeout
+
+        def remove(self, force: bool = False) -> None:  # pragma: no cover
+            self.remove_called = True
+
+    container = _RunningContainer()
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            assert name_or_id == "running"
+            return container
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    task_cmd.task_cancel(task_id=record.id[:12])
+
+    updated = tmp_task_store.get(record.id)
+    assert container.stop_timeout == 10
+    assert container.remove_called is False
+    assert updated is not None
+    assert updated.status == "cancelled"
+    assert updated.finished_at is not None
+
+
+def test_task_cancel_noops_for_already_finished_task(monkeypatch, tmp_task_store) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="done",
+        workspace="/ws",
+        container_id="done",
+        container_name="vibepod-task-done",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+    tmp_task_store.update(
+        record.id,
+        status="completed",
+        exit_code=0,
+        started_at="2026-06-11T14:00:00Z",
+        finished_at="2026-06-11T14:05:00Z",
+    )
+
+    class _Manager:
+        def get_container(self, name_or_id: str):  # pragma: no cover
+            raise AssertionError("finished tasks should not query Docker")
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    task_cmd.task_cancel(task_id=record.id[:12])
+
+    updated = tmp_task_store.get(record.id)
+    assert updated is not None
+    assert updated.status == "completed"
+    assert updated.exit_code == 0
+
+
+def test_task_list_and_status_preserve_cancelled_status(monkeypatch, tmp_task_store) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="cancelled task",
+        workspace="/ws",
+        container_id="cancelled-ctr",
+        container_name="vibepod-task-cancelled",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+    tmp_task_store.update(
+        record.id,
+        status="cancelled",
+        exit_code=None,
+        started_at="2026-06-11T14:00:00Z",
+        finished_at="2026-06-11T14:05:00Z",
+    )
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            raise AssertionError("cancelled tasks should not query Docker")
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    # 1. Test task list
+    result_list = CliRunner().invoke(app, ["task", "list", "--json"])
+    assert result_list.exit_code == 0, result_list.output
+    assert '"status": "cancelled"' in result_list.output
+
+    # 2. Test task status
+    result_status = CliRunner().invoke(app, ["task", "status", record.id[:12], "--json"])
+    assert result_status.exit_code == 0, result_status.output
+    assert '"status": "cancelled"' in result_status.output
+
+
+def test_task_cancel_handles_created_container_by_removing_it(monkeypatch, tmp_task_store) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="stuck created",
+        workspace="/ws",
+        container_id="created-ctr",
+        container_name="vibepod-task-created",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+
+    class _CreatedContainer:
+        status = "created"
+        attrs = {"State": {"Status": "created"}}
+
+        def __init__(self) -> None:
+            self.remove_called = False
+
+        def reload(self) -> None:
+            pass
+
+        def stop(self, timeout: int = 10) -> None:
+            raise AssertionError("should not stop a created container")
+
+        def remove(self, force: bool = False) -> None:
+            self.remove_called = True
+
+    container = _CreatedContainer()
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            assert name_or_id == "created-ctr"
+            return container
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    task_cmd.task_cancel(task_id=record.id[:12])
+
+    updated = tmp_task_store.get(record.id)
+    assert container.remove_called is True
+    assert updated is not None
+    assert updated.status == "cancelled"
+
+
+def test_task_cancel_handles_missing_container_gracefully(monkeypatch, tmp_task_store) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="missing container",
+        workspace="/ws",
+        container_id="missing-ctr",
+        container_name="vibepod-task-missing",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            from vibepod.core.docker import DockerClientError
+
+            raise DockerClientError("Container not found")
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    with pytest.raises(typer.Exit) as exc_info:
+        task_cmd.task_cancel(task_id=record.id[:12])
+
+    assert exc_info.value.exit_code == 0
+    updated = tmp_task_store.get(record.id)
+    assert updated is not None
+    assert updated.status == "failed"
+
+
+def test_task_cancel_ignores_stop_exception_if_container_reaches_terminal_state(
+    monkeypatch, tmp_task_store
+) -> None:
+    record = tmp_task_store.create(
+        agent="claude",
+        prompt="race condition",
+        workspace="/ws",
+        container_id="race-ctr",
+        container_name="vibepod-task-race",
+        image="vibepod/claude:latest",
+        vibepod_version="0.11.0",
+    )
+
+    class _RaceContainer:
+        status = "running"
+        attrs = {"State": {"Status": "running"}}
+
+        def __init__(self) -> None:
+            self.stop_called = False
+
+        def reload(self) -> None:
+            if self.stop_called:
+                self.status = "exited"
+                self.attrs = {"State": {"Status": "exited", "ExitCode": 1}}
+
+        def stop(self, timeout: int = 10) -> None:
+            self.stop_called = True
+            raise RuntimeError("Container is not running")
+
+    container = _RaceContainer()
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            assert name_or_id == "race-ctr"
+            return container
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+
+    task_cmd.task_cancel(task_id=record.id[:12])
+
+    updated = tmp_task_store.get(record.id)
+    assert updated is not None
+    assert updated.status == "failed"
+
+
 def test_task_rm_deletes_store_row_when_container_gone(monkeypatch, tmp_task_store) -> None:
+
     record = tmp_task_store.create(
         agent="claude",
         prompt="gone",

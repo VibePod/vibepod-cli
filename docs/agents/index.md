@@ -300,6 +300,7 @@ vp task logs <id>                # dump captured stdout/stderr
 vp task logs <id> --follow       # stream
 
 vp task status <id>              # state, exit code, timestamps
+vp task cancel <id>              # gracefully stop a running task, keeping logs
 vp task rm <id>                  # remove task + its (stopped) container
 vp task rm <id> -f               # kill running container before removing
 vp task rm --all                 # remove all stopped/finished tasks
