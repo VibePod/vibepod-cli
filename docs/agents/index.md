@@ -543,6 +543,8 @@ vp run gemini   # or: vp g
 vp run opencode   # or: vp o
 ```
 
+Credentials and settings are persisted to `~/.config/vibepod/agents/opencode/` on the host and mounted at `/config` inside the container. In addition, the XDG data and config directories (`/root/.local/share/opencode` and `/root/.config/opencode`) are bind-mounted from the host so that authentication state is preserved across container restarts.
+
 ### Devstral / Vibe (Mistral)
 
 ```bash

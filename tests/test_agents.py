@@ -159,3 +159,17 @@ def test_agents_without_llm_env_map() -> None:
     for agent in ("gemini", "opencode", "devstral", "auggie", "copilot", "pi", "agy"):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
+
+
+def test_opencode_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("opencode")
+    assert spec.id == "opencode"
+    assert spec.provider == "openai"
+    assert spec.image == "vibepod/opencode:latest"
+    assert spec.config_subdir == "opencode"
+    assert spec.command == ["opencode"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env["HOME"] == "/config"
+    assert spec.extra_env["OPENCODE_CONFIG_DIR"] == "/config"
+    assert spec.extra_env["XDG_CONFIG_HOME"] == "/config/.config"
+    assert spec.extra_env["XDG_DATA_HOME"] == "/config/.local/share"

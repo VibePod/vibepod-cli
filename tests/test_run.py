@@ -39,7 +39,9 @@ def test_agent_extra_volumes_for_auggie(tmp_path: Path) -> None:
 
 def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
     config_dir = tmp_path / "agents" / "claude"
-    assert run_cmd._agent_extra_volumes("claude", config_dir) == []
+    # Agents without explicit volume mappings return empty
+    for agent in ("claude", "gemini", "codex", "devstral", "pi", "agy"):
+        assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
 
 def test_agent_extra_volumes_for_copilot(tmp_path: Path) -> None:
@@ -50,6 +52,19 @@ def test_agent_extra_volumes_for_copilot(tmp_path: Path) -> None:
         (str(config_host), "/root/.copilot", "rw"),
         (str(config_host), "/home/node/.copilot", "rw"),
         (str(config_host), "/home/coder/.copilot", "rw"),
+    ]
+
+
+def test_agent_extra_volumes_for_opencode(tmp_path: Path) -> None:
+    config_dir = tmp_path / "agents" / "opencode"
+    data_dir = config_dir / ".local" / "share" / "opencode"
+    xdg_config_dir = config_dir / ".config" / "opencode"
+
+    assert run_cmd._agent_extra_volumes("opencode", config_dir) == [
+        (str(data_dir), "/root/.local/share/opencode", "rw"),
+        (str(xdg_config_dir), "/root/.config/opencode", "rw"),
+        (str(data_dir), "/home/node/.local/share/opencode", "rw"),
+        (str(xdg_config_dir), "/home/node/.config/opencode", "rw"),
     ]
 
 
