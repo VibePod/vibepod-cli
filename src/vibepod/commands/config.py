@@ -177,7 +177,7 @@ def allow_dir(
     except OSError as exc:
         error(f"Could not update allow list: {exc}")
         raise typer.Exit(1) from exc
-    success(f"Allowed: {target}")
+    print(f"Allowed: {target}")
 
 
 @app.command("remove-dir")
@@ -199,7 +199,7 @@ def remove_dir(
         error(f"Could not update allow list: {exc}")
         raise typer.Exit(1) from exc
     if removed:
-        success(f"Removed: {target}")
+        print(f"Removed: {target}")
     else:
         error(f"Directory not in allow list: {target}")
         raise typer.Exit(1)
@@ -213,4 +213,4 @@ def list_allowed_dirs() -> None:
         console.print("No directories in the allow list.")
         return
     for d in dirs:
-        console.print(d)
+        print(d)

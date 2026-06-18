@@ -36,8 +36,10 @@ def write_claude_stored_token(config_dir: Path, token: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        # fchmod overrides umask; os.open mode alone is umask-filtered
-        os.fchmod(fd, 0o600)
+        fchmod = getattr(os, "fchmod", None)
+        if callable(fchmod):
+            # fchmod overrides umask; os.open mode alone is umask-filtered
+            fchmod(fd, 0o600)
     except OSError:
         warning(f"Could not restrict permissions on {path}; token may be readable by other users")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -140,6 +142,18 @@ def host_user() -> str | None:
     if not callable(getuid) or not callable(getgid):
         return None
     return f"{getuid()}:{getgid()}"
+
+
+def host_identity_env() -> dict[str, str]:
+    """Return host uid/gid env vars when the platform exposes POSIX user ids."""
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if not callable(getuid) or not callable(getgid):
+        return {}
+    return {
+        "USER_UID": str(getuid()),
+        "USER_GID": str(getgid()),
+    }
 
 
 def terminal_env_defaults() -> dict[str, str]:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json as _json
-import os
 import subprocess
 import sys
 import time
@@ -31,6 +30,7 @@ from vibepod.core.launch import (
     agent_extra_volumes,
     agent_init_commands,
     get_container_ip,
+    host_identity_env,
     host_user,
     init_entrypoint,
     parse_env_pairs,
@@ -466,8 +466,7 @@ def task_create(
     agent_cfg = config.get("agents", {}).get(selected, {})
     init_commands = agent_init_commands(selected, agent_cfg)
     merged_env = {
-        "USER_UID": str(os.getuid()),
-        "USER_GID": str(os.getgid()),
+        **host_identity_env(),
         **terminal_env_defaults(),
         **spec.extra_env,
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
