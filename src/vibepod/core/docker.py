@@ -7,8 +7,7 @@ import select
 import shutil
 import signal
 import sys
-import termios
-import tty
+import threading
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,6 +18,26 @@ docker: Any | None
 APIError: type[Exception]
 DockerException: type[Exception]
 NotFound: type[Exception]
+termios: Any | None
+tty: Any | None
+msvcrt: Any | None
+
+try:
+    import termios as _termios
+    import tty as _tty
+except ImportError:  # pragma: no cover - exercised on Windows
+    termios = None
+    tty = None
+else:
+    termios = _termios
+    tty = _tty
+
+try:
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - exercised off Windows
+    msvcrt = None
+else:
+    msvcrt = _msvcrt
 
 try:
     import docker as _docker
@@ -39,6 +58,31 @@ else:
 
 class DockerClientError(RuntimeError):
     """Raised for Docker availability or lifecycle errors."""
+
+
+def _encode_console_character(ch: str) -> bytes:
+    encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
+    return ch.encode(encoding, errors="replace")
+
+
+def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading.Event) -> None:
+    if msvcrt is None:
+        return
+    while not stop_event.is_set():
+        try:
+            ch = msvcrt.getwch()
+            if ch in ("\x00", "\xe0"):
+                ch += msvcrt.getwch()
+        except (EOFError, KeyboardInterrupt, OSError):
+            return
+
+        data = _encode_console_character(ch)
+        if logger is not None:
+            logger.log_input(data)
+        try:
+            sock.sendall(data)
+        except OSError:
+            return
 
 
 def _is_latest_tag(image: str) -> bool:
@@ -418,18 +462,30 @@ class DockerManager:
         stdin_fd = None
         old_tty = None
         old_winch_handler = None
+        input_stop_event: threading.Event | None = None
+        input_thread: threading.Thread | None = None
+        sigwinch = getattr(signal, "SIGWINCH", None)
         try:
-            if sys.stdin.isatty():
+            if sys.stdin.isatty() and termios is not None and tty is not None:
                 stdin_fd = sys.stdin.fileno()
                 old_tty = termios.tcgetattr(stdin_fd)
                 tty.setraw(stdin_fd)
-                old_winch_handler = signal.getsignal(signal.SIGWINCH)
+                if sigwinch is not None:
+                    old_winch_handler = signal.getsignal(sigwinch)
 
-                def _on_winch(signum: int, frame: Any) -> None:
-                    del signum, frame
-                    resize_tty()
+                    def _on_winch(signum: int, frame: Any) -> None:
+                        del signum, frame
+                        resize_tty()
 
-                signal.signal(signal.SIGWINCH, _on_winch)
+                    signal.signal(sigwinch, _on_winch)
+            elif sys.stdin.isatty() and msvcrt is not None:
+                input_stop_event = threading.Event()
+                input_thread = threading.Thread(
+                    target=_forward_windows_console_input,
+                    args=(sock, logger, input_stop_event),
+                    daemon=True,
+                )
+                input_thread.start()
 
             while True:
                 readers = [sock]
@@ -457,7 +513,11 @@ class DockerManager:
                 sock_wrapper.close()
             except Exception:
                 pass
-            if old_winch_handler is not None:
-                signal.signal(signal.SIGWINCH, old_winch_handler)
-            if stdin_fd is not None and old_tty is not None:
+            if input_stop_event is not None:
+                input_stop_event.set()
+            if input_thread is not None:
+                input_thread.join(timeout=0.2)
+            if sigwinch is not None and old_winch_handler is not None:
+                signal.signal(sigwinch, old_winch_handler)
+            if stdin_fd is not None and old_tty is not None and termios is not None:
                 termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tty)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import builtins
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -25,6 +27,49 @@ from vibepod.core.docker import DockerClientError, DockerManager
 def _allow_all_dirs(monkeypatch):
     """Patch is_dir_allowed to return True so permission prompts don't break unrelated tests."""
     monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: True)
+
+
+def test_docker_module_imports_without_posix_tty_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native Windows lacks termios/tty, but the CLI must still import."""
+    import vibepod.core as core_pkg
+
+    original_attr = getattr(core_pkg, "docker", None)
+    original_module = sys.modules.pop("vibepod.core.docker", None)
+    original_import = builtins.__import__
+
+    def import_without_posix_tty(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name in {"termios", "tty"}:
+            raise ModuleNotFoundError(f"No module named '{name}'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_posix_tty)
+    try:
+        imported = importlib.import_module("vibepod.core.docker")
+    finally:
+        sys.modules.pop("vibepod.core.docker", None)
+        if original_module is not None:
+            sys.modules["vibepod.core.docker"] = original_module
+        if original_attr is not None:
+            core_pkg.docker = original_attr
+
+    assert imported.DockerManager is not None
+
+
+def test_host_identity_env_empty_without_posix_user_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(run_cmd.os, "getuid", raising=False)
+    monkeypatch.delattr(run_cmd.os, "getgid", raising=False)
+
+    assert run_cmd._host_identity_env() == {}
 
 
 def test_agent_extra_volumes_for_auggie(tmp_path: Path) -> None:

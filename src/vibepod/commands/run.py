@@ -35,6 +35,9 @@ from vibepod.core.launch import (
     get_container_ip as _get_container_ip,
 )
 from vibepod.core.launch import (
+    host_identity_env as _host_identity_env,
+)
+from vibepod.core.launch import (
     host_user as _host_user,
 )
 from vibepod.core.launch import (
@@ -317,8 +320,7 @@ def run(
     codex_oauth_login = _is_codex_oauth_login(selected_agent, passthrough_args)
     init_commands = _agent_init_commands(selected_agent, agent_cfg)
     merged_env = {
-        "USER_UID": str(os.getuid()),
-        "USER_GID": str(os.getgid()),
+        **_host_identity_env(),
         **_terminal_env_defaults(),
         **spec.extra_env,
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},

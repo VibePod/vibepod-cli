@@ -68,8 +68,8 @@ def test_ensure_proxy_runs_container_as_current_user(tmp_path: Path, monkeypatch
     manager.client = _FakeClient()  # type: ignore[assignment]
 
     monkeypatch.setattr(DockerManager, "find_proxy", lambda self: None)
-    monkeypatch.setattr(docker_mod.os, "getuid", lambda: 1234)
-    monkeypatch.setattr(docker_mod.os, "getgid", lambda: 2345)
+    monkeypatch.setattr(docker_mod.os, "getuid", lambda: 1234, raising=False)
+    monkeypatch.setattr(docker_mod.os, "getgid", lambda: 2345, raising=False)
 
     db_path = tmp_path / "proxy" / "proxy.db"
     ca_dir = tmp_path / "proxy" / "mitmproxy"
