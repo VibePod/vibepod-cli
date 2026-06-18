@@ -69,7 +69,14 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "opencode",
         ["opencode"],
         "/config",
-        {"HOME": "/config", "OPENCODE_CONFIG_DIR": "/config"},
+        {
+            "HOME": "/config",
+            "OPENCODE_CONFIG_DIR": "/config",
+            "XDG_CONFIG_HOME": "/config/.config",
+            "XDG_DATA_HOME": "/config/.local/share",
+            "XDG_STATE_HOME": "/config/.local/state",
+            "XDG_CACHE_HOME": "/config/.cache",
+        },
     ),
     "devstral": AgentSpec(
         "devstral",

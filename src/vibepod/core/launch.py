@@ -114,6 +114,15 @@ def agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, st
             (host, "/home/node/.copilot", "rw"),
             (host, "/home/coder/.copilot", "rw"),
         ]
+    if agent == "opencode":
+        xdg_config = config_dir / ".config" / "opencode"
+        xdg_data = config_dir / ".local" / "share" / "opencode"
+        return [
+            (str(xdg_data), "/root/.local/share/opencode", "rw"),
+            (str(xdg_config), "/root/.config/opencode", "rw"),
+            (str(xdg_data), "/home/node/.local/share/opencode", "rw"),
+            (str(xdg_config), "/home/node/.config/opencode", "rw"),
+        ]
     return []
 
 
