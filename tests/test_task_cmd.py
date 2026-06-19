@@ -1007,7 +1007,9 @@ def test_task_create_uses_keep_id_on_rootless_podman(monkeypatch, tmp_path, tmp_
     assert stub.run_kwargs["env"]["USER_GID"] == "0"
 
 
-def test_task_create_preserves_host_user_for_non_podman(monkeypatch, tmp_path, tmp_task_store) -> None:
+def test_task_create_preserves_host_user_for_non_podman(
+    monkeypatch, tmp_path, tmp_task_store
+) -> None:
     import os
     class _DockerDockerManager(_CapturingDockerManager):
         def is_rootless_podman(self) -> bool:
@@ -1017,8 +1019,17 @@ def test_task_create_preserves_host_user_for_non_podman(monkeypatch, tmp_path, t
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
-    spec = task_cmd.get_agent_spec("claude")
-    monkeypatch.setattr(spec, "run_as_host_user", True)
+    import dataclasses
+    original_get_agent_spec = task_cmd.get_agent_spec
+    spec = original_get_agent_spec("claude")
+    modified_spec = dataclasses.replace(spec, run_as_host_user=True)
+    monkeypatch.setattr(
+        task_cmd,
+        "get_agent_spec",
+        lambda agent: (
+            modified_spec if agent == "claude" else original_get_agent_spec(agent)
+        ),
+    )
     monkeypatch.setattr(os, "getuid", lambda: 1234, raising=False)
     monkeypatch.setattr(os, "getgid", lambda: 5678, raising=False)
 
