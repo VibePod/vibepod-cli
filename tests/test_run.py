@@ -867,8 +867,8 @@ def test_run_preserves_host_user_for_non_podman_devstral(
     config["agents"]["devstral"] = {"env": {}, "init": []}
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
-    monkeypatch.setattr(run_cmd.os, "getuid", lambda: 1234)
-    monkeypatch.setattr(run_cmd.os, "getgid", lambda: 5678)
+    monkeypatch.setattr(run_cmd.os, "getuid", lambda: 1234, raising=False)
+    monkeypatch.setattr(run_cmd.os, "getgid", lambda: 5678, raising=False)
 
     run_cmd.run(agent="devstral", workspace=tmp_path, detach=True)
 
