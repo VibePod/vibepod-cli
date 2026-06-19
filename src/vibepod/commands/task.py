@@ -510,6 +510,13 @@ def task_create(
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
 
+    podman_probe = getattr(manager, "is_rootless_podman", None)
+    rootless_podman = bool(podman_probe()) if callable(podman_probe) else False
+    agent_userns_mode = "keep-id" if rootless_podman else None
+    if rootless_podman:
+        merged_env["USER_UID"] = "0"
+        merged_env["USER_GID"] = "0"
+
     network_name = str(config.get("network", "vibepod-network"))
     manager.ensure_network(network_name)
 
@@ -605,7 +612,9 @@ def task_create(
         extra_volumes.append((str(actual_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
 
     info(f"Starting task on {selected} with image {image}")
-    container_user = host_user() if spec.run_as_host_user else None
+    container_user = None
+    if not rootless_podman and spec.run_as_host_user:
+        container_user = host_user()
     container = manager.run_agent(
         agent=selected,
         image=image,
@@ -622,6 +631,7 @@ def task_create(
         platform=spec.platform,
         user=container_user,
         entrypoint=entrypoint,
+        userns_mode=agent_userns_mode,
     )
 
     container.reload()

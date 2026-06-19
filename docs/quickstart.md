@@ -3,7 +3,64 @@
 ## Prerequisites
 
 - Python 3.10+
-- Docker (running)
+- Docker **or** Podman (running)
+
+### Using Podman instead of Docker
+
+VibePod auto-detects rootless Podman and applies the necessary user-namespace
+settings (`keep-id`) so workspace file permissions work correctly.
+
+Point VibePod at the Podman socket by setting `DOCKER_HOST`:
+
+```bash
+export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
+```
+
+!!! warning "Container DNS required"
+    VibePod routes agent traffic through a `vibepod-proxy` container. The agent
+    resolves the proxy by container name over the `vibepod-network` network,
+    which requires **DNS** to be enabled.
+
+    If your Podman installation uses the **CNI** network backend, you must
+    install the `dnsname` plugin — otherwise DNS is disabled and the proxy
+    will be unreachable.
+
+    === "Fedora / RHEL"
+
+        ```bash
+        sudo dnf install podman-plugins
+        ```
+
+    === "Ubuntu / Debian"
+
+        ```bash
+        sudo apt install golang-github-containernetworking-plugin-dnsname
+        ```
+
+    === "Arch"
+
+        ```bash
+        sudo pacman -S podman-dnsname
+        ```
+
+    After installing, recreate the network so DNS takes effect:
+
+    ```bash
+    podman network rm vibepod-network 2>/dev/null
+    podman network create vibepod-network
+    ```
+
+    Verify with:
+
+    ```bash
+    podman network inspect vibepod-network --format '{{.DNSEnabled}}'
+    # Should print: true
+    ```
+
+    **Alternatively**, switch to the [Netavark](https://github.com/containers/netavark)
+    network backend (Podman 4.0+), which includes DNS out of the box. See
+    `podman info --format '{{.Host.NetworkBackend}}'` to check your current
+    backend.
 
 ## Install
 

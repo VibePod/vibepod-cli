@@ -511,10 +511,11 @@ class DockerManager:
             "extra_hosts": {"host.docker.internal": "host-gateway"},
         }
 
-        getuid = getattr(os, "getuid", None)
-        getgid = getattr(os, "getgid", None)
-        if callable(getuid) and callable(getgid):
-            run_kwargs["user"] = f"{getuid()}:{getgid()}"
+        if not self.is_rootless_podman():
+            getuid = getattr(os, "getuid", None)
+            getgid = getattr(os, "getgid", None)
+            if callable(getuid) and callable(getgid):
+                run_kwargs["user"] = f"{getuid()}:{getgid()}"
 
         return self.client.containers.run(**run_kwargs)
 
