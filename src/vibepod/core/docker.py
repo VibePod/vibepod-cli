@@ -102,6 +102,27 @@ def _normalize_command(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _version_is_podman(version: Any) -> bool:
+    """Return True when Docker-compatible API version metadata belongs to Podman."""
+    if not isinstance(version, dict):
+        return False
+
+    components = version.get("Components", [])
+    if isinstance(components, list):
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            name = str(component.get("Name", "")).lower()
+            if "podman" in name:
+                return True
+
+    platform = version.get("Platform")
+    if isinstance(platform, dict) and "podman" in str(platform.get("Name", "")).lower():
+        return True
+
+    return "podman" in str(version.get("Name", "")).lower()
+
+
 class DockerManager:
     """Manager for all Docker operations."""
 
@@ -113,6 +134,33 @@ class DockerManager:
             self.client.ping()
         except DockerException as exc:
             raise DockerClientError(f"Docker is not available: {exc}") from exc
+
+        self._rootless_podman: bool | None = None
+
+    def is_rootless_podman(self) -> bool:
+        """Return True for a rootless Podman engine exposed through the Docker API."""
+        cached = getattr(self, "_rootless_podman", None)
+        if isinstance(cached, bool):
+            return cached
+
+        try:
+            info = self.client.info()
+            version = self.client.version()
+        except (APIError, DockerException, AttributeError):
+            self._rootless_podman = False
+            return False
+
+        if not isinstance(info, dict):
+            self._rootless_podman = False
+            return False
+
+        security_options = info.get("SecurityOptions", [])
+        rootless = bool(info.get("Rootless")) or (
+            isinstance(security_options, list)
+            and any(str(option).lower() == "name=rootless" for option in security_options)
+        )
+        self._rootless_podman = rootless and _version_is_podman(version)
+        return self._rootless_podman
 
     def pull_image(self, image: str) -> None:
         try:
@@ -226,6 +274,7 @@ class DockerManager:
         platform: str | None = None,
         user: str | None = None,
         entrypoint: list[str] | None = None,
+        userns_mode: str | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -246,6 +295,43 @@ class DockerManager:
             volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
 
         try:
+            if userns_mode is not None:
+                host_config = self.client.api.create_host_config(
+                    binds=volumes,
+                    auto_remove=auto_remove,
+                    network_mode=network,
+                    port_bindings=ports,
+                )
+                # docker-py validates userns_mode against Docker's enum and rejects
+                # Podman's `keep-id`, so set the Docker-compatible HostConfig field
+                # directly for Podman engines.
+                host_config["UsernsMode"] = userns_mode
+
+                create_kwargs: dict[str, Any] = {
+                    "image": image,
+                    "name": container_name,
+                    "command": command,
+                    "tty": True,
+                    "stdin_open": True,
+                    "labels": labels,
+                    "environment": environment,
+                    "working_dir": "/workspace",
+                    "host_config": host_config,
+                }
+                if ports:
+                    create_kwargs["ports"] = list(ports.keys())
+                if platform:
+                    create_kwargs["platform"] = platform
+                if user:
+                    create_kwargs["user"] = user
+                if entrypoint:
+                    create_kwargs["entrypoint"] = entrypoint
+
+                created = self.client.api.create_container(**create_kwargs)
+                container_id = created["Id"]
+                self.client.api.start(container_id)
+                return self.client.containers.get(container_id)
+
             run_kwargs: dict[str, Any] = {
                 "image": image,
                 "name": container_name,

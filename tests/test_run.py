@@ -372,6 +372,167 @@ def test_run_agent_publishes_ports(tmp_path: Path) -> None:
     assert run_kwargs["network"] == "vibepod-network"
 
 
+class _KeepIdApi:
+    def __init__(self) -> None:
+        self.host_config_kwargs: dict | None = None
+        self.host_config: dict | None = None
+        self.create_kwargs: dict | None = None
+        self.started: str | None = None
+
+    def create_host_config(self, **kwargs):
+        self.host_config_kwargs = kwargs
+        self.host_config = {"Binds": kwargs["binds"], "AutoRemove": kwargs["auto_remove"]}
+        return self.host_config
+
+    def create_container(self, **kwargs):
+        self.create_kwargs = kwargs
+        return {"Id": "agent123"}
+
+    def start(self, container_id: str) -> None:
+        self.started = container_id
+
+
+class _KeepIdContainers:
+    def __init__(self) -> None:
+        self.run_called = False
+
+    def run(self, **kwargs):
+        del kwargs
+        self.run_called = True
+        return {"id": "agent"}
+
+    def get(self, container_id: str):
+        return {"id": container_id}
+
+
+class _KeepIdClient:
+    def __init__(self) -> None:
+        self.api = _KeepIdApi()
+        self.containers = _KeepIdContainers()
+
+
+class _EngineClient:
+    def __init__(self, info: dict, version: dict) -> None:
+        self.info_calls = 0
+        self.version_calls = 0
+        self._info = info
+        self._version = version
+
+    def info(self) -> dict:
+        self.info_calls += 1
+        return self._info
+
+    def version(self) -> dict:
+        self.version_calls += 1
+        return self._version
+
+
+def test_run_agent_uses_low_level_api_for_podman_keep_id(tmp_path: Path) -> None:
+    client = _KeepIdClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    workspace = tmp_path / "workspace"
+    config_dir = tmp_path / "agents" / "pi"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    container = manager.run_agent(
+        agent="pi",
+        image="vibepod/pi:latest",
+        workspace=workspace,
+        config_dir=config_dir,
+        config_mount_path="/config",
+        env={"USER_UID": "0"},
+        command=["pi"],
+        auto_remove=True,
+        name="vibepod-pi-test",
+        version="0.14.0",
+        network="vibepod-network",
+        ports={"1456/tcp": 1455},
+        extra_volumes=[(str(config_dir / "extra"), "/extra", "ro")],
+        platform="linux/amd64",
+        user="1000:1000",
+        entrypoint=["/entrypoint.sh"],
+        userns_mode="keep-id",
+    )
+
+    assert container == {"id": "agent123"}
+    assert client.containers.run_called is False
+    assert client.api.started == "agent123"
+    assert client.api.host_config_kwargs == {
+        "binds": [
+            f"{workspace}:/workspace:rw",
+            f"{config_dir}:/config:rw",
+            f"{config_dir / 'extra'}:/extra:ro",
+        ],
+        "auto_remove": True,
+        "network_mode": "vibepod-network",
+        "port_bindings": {"1456/tcp": 1455},
+    }
+    assert client.api.host_config is not None
+    assert client.api.host_config["UsernsMode"] == "keep-id"
+    assert client.api.create_kwargs is not None
+    assert client.api.create_kwargs["image"] == "vibepod/pi:latest"
+    assert client.api.create_kwargs["name"] == "vibepod-pi-test"
+    assert client.api.create_kwargs["command"] == ["pi"]
+    assert client.api.create_kwargs["labels"]["vibepod.agent"] == "pi"
+    assert client.api.create_kwargs["environment"] == {"USER_UID": "0"}
+    assert client.api.create_kwargs["working_dir"] == "/workspace"
+    assert client.api.create_kwargs["ports"] == ["1456/tcp"]
+    assert client.api.create_kwargs["platform"] == "linux/amd64"
+    assert client.api.create_kwargs["user"] == "1000:1000"
+    assert client.api.create_kwargs["entrypoint"] == ["/entrypoint.sh"]
+
+
+def test_run_agent_is_rootless_podman_detects_podman_engine() -> None:
+    client = _EngineClient(
+        {"Rootless": True, "SecurityOptions": ["name=rootless"]},
+        {"Components": [{"Name": "Podman Engine", "Version": "5.7.0"}]},
+    )
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    assert manager.is_rootless_podman() is True
+    assert manager.is_rootless_podman() is True
+    assert client.info_calls == 1
+    assert client.version_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("info", "version"),
+    [
+        (
+            {"Rootless": True, "SecurityOptions": ["name=rootless"]},
+            {"Components": [{"Name": "Docker Engine"}]},
+        ),
+        (
+            {"Rootless": False, "SecurityOptions": []},
+            {"Components": [{"Name": "Podman Engine"}]},
+        ),
+    ],
+)
+def test_run_agent_is_rootless_podman_requires_rootless_podman_evidence(
+    info: dict, version: dict
+) -> None:
+    client = _EngineClient(info, version)
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    assert manager.is_rootless_podman() is False
+
+
+def test_run_agent_is_rootless_podman_treats_sdk_failures_as_false() -> None:
+    class _MissingVersionClient:
+        def info(self) -> dict:
+            return {"Rootless": True, "SecurityOptions": ["name=rootless"]}
+
+    manager = object.__new__(DockerManager)
+    manager.client = _MissingVersionClient()  # type: ignore[assignment]
+
+    assert manager.is_rootless_podman() is False
+
+
 def test_is_codex_oauth_login_detection() -> None:
     assert run_cmd._is_codex_oauth_login("codex", ["login"]) is True
     # device-code and api-key flows don't use the localhost:1455 callback
