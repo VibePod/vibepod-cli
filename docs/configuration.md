@@ -227,3 +227,10 @@ Or at runtime:
 ```bash
 VP_PROXY_ENABLED=false vp run claude
 ```
+
+!!! note "Podman users"
+    The proxy relies on container-name DNS resolution over the `vibepod-network`
+    network. If you use Podman with the CNI backend, install the `dnsname`
+    plugin (e.g. `podman-plugins` on Fedora, `golang-github-containernetworking-plugin-dnsname`
+    on Debian/Ubuntu) and recreate the network. See [Quickstart — Using Podman](quickstart.md#using-podman-instead-of-docker) for full instructions.
+
