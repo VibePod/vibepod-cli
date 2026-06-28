@@ -123,6 +123,18 @@ def _version_is_podman(version: Any) -> bool:
     return "podman" in str(version.get("Name", "")).lower()
 
 
+def _parse_image_name(image: str) -> tuple[str, str | None]:
+    """Parse a full image string into repository and tag/digest."""
+    if "@" in image:
+        repository, tag = image.split("@", 1)
+        return repository, tag
+    elif ":" in image:
+        parts = image.rsplit(":", 1)
+        if "/" not in parts[1]:
+            return parts[0], parts[1]
+    return image, None
+
+
 class DockerManager:
     """Manager for all Docker operations."""
 
@@ -162,11 +174,94 @@ class DockerManager:
         self._rootless_podman = rootless and _version_is_podman(version)
         return self._rootless_podman
 
-    def pull_image(self, image: str) -> None:
+    def _pull_image_with_progress(self, image: str) -> None:
+        from rich.progress import (
+            BarColumn,
+            DownloadColumn,
+            Progress,
+            TextColumn,
+            TimeRemainingColumn,
+            TransferSpeedColumn,
+        )
+
+        from vibepod.utils.console import console
+
+        repository, tag = _parse_image_name(image)
         try:
-            self.client.images.pull(image)
+            response = self.client.api.pull(repository, tag=tag, stream=True, decode=True)
         except APIError as exc:
             raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
+
+        tasks: dict[str, Any] = {}
+        try:
+            with Progress(
+                TextColumn("{task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                console=console,
+                disable=not console.is_terminal,
+            ) as progress:
+                for chunk in response:
+                    if not isinstance(chunk, dict):
+                        continue
+                    if "error" in chunk:
+                        raise DockerClientError(f"Failed to pull image {image}: {chunk['error']}")
+
+                    status = chunk.get("status", "")
+                    layer_id = chunk.get("id")
+                    progress_detail = chunk.get("progressDetail") or {}
+
+                    if not layer_id:
+                        if status and status not in (
+                            "Downloading",
+                            "Extracting",
+                            "Waiting",
+                            "Download complete",
+                            "Pull complete",
+                            "Already exists",
+                            "Pulling fs layer",
+                        ):
+                            progress.console.print(f"[dim]{status}[/dim]")
+                        continue
+
+                    status_color = "cyan"
+                    if status in ("Download complete", "Pull complete", "Already exists"):
+                        status_color = "green"
+                    elif status == "Waiting":
+                        status_color = "yellow"
+                    elif "error" in status.lower() or "fail" in status.lower():
+                        status_color = "red"
+
+                    description = f"[{status_color}][{layer_id}][/{status_color}] {status}"
+
+                    if layer_id not in tasks:
+                        tasks[layer_id] = progress.add_task(description, total=None)
+
+                    task_id = tasks[layer_id]
+                    progress.update(task_id, description=description)
+
+                    total = progress_detail.get("total", 0)
+                    current = progress_detail.get("current", 0)
+
+                    if total:
+                        progress.update(task_id, total=total, completed=current)
+
+                    if status in ("Download complete", "Pull complete", "Already exists"):
+                        if total:
+                            progress.update(task_id, completed=total, total=total)
+                        else:
+                            progress.update(task_id, completed=1, total=1)
+        except Exception as exc:
+            if isinstance(exc, DockerClientError):
+                raise
+            if isinstance(exc, APIError):
+                raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
+            raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
+
+    def pull_image(self, image: str) -> None:
+        self._pull_image_with_progress(image)
 
     def pull_if_newer(self, image: str) -> bool:
         """Pull *image* and return True if the local image was updated.
@@ -182,7 +277,7 @@ class DockerManager:
             except NotFound:
                 old_id = None
 
-            self.client.images.pull(image)
+            self.pull_image(image)
 
             try:
                 new_id = self.client.images.get(image).id
@@ -190,7 +285,7 @@ class DockerManager:
                 return False
 
             return bool(old_id != new_id)
-        except APIError:
+        except (APIError, DockerClientError):
             return False
 
     def ensure_network(self, name: str) -> None:
@@ -443,6 +538,12 @@ class DockerManager:
                 return existing
             existing.remove(force=True)
 
+        if hasattr(self.client, "images"):
+            try:
+                self.client.images.get(image)
+            except NotFound:
+                self.pull_image(image)
+
         logs_db_path.parent.mkdir(parents=True, exist_ok=True)
         if not logs_db_path.exists():
             logs_db_path.touch()
@@ -488,6 +589,12 @@ class DockerManager:
             if existing.status == "running":
                 return existing
             existing.remove(force=True)
+
+        if hasattr(self.client, "images"):
+            try:
+                self.client.images.get(image)
+            except NotFound:
+                self.pull_image(image)
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         ca_dir.mkdir(parents=True, exist_ok=True)
