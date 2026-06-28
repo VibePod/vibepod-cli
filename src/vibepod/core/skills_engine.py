@@ -16,8 +16,12 @@ from vibepod.constants import (
     SKILLS_ENGINE_IMAGE,
     USER_SKILLS_DIR,
 )
+from vibepod.core.config import get_config
+from vibepod.core.docker import DockerClientError, DockerManager, NotFound
 
 Scope = Literal["local", "user"]
+
+_skills_engine_checked = False
 
 
 class SkillsEngineError(RuntimeError):
@@ -115,6 +119,39 @@ def run_engine(
     Returns the parsed JSON payload if ``json_output`` is True. Stderr from the
     engine (human-readable progress) is always captured but never parsed.
     """
+    global _skills_engine_checked
+    if not _skills_engine_checked:
+        try:
+            manager = DockerManager()
+            image_exists = False
+            try:
+                manager.client.images.get(SKILLS_ENGINE_IMAGE)
+                image_exists = True
+            except NotFound:
+                pass
+
+            config = get_config()
+            auto_pull_enabled = bool(config.get("auto_pull", True))
+            is_latest = (
+                ":" not in SKILLS_ENGINE_IMAGE.split("/")[-1]
+                or SKILLS_ENGINE_IMAGE.endswith(":latest")
+            )
+
+            if not image_exists:
+                manager.pull_image(SKILLS_ENGINE_IMAGE)
+            elif auto_pull_enabled and is_latest:
+                try:
+                    from vibepod.utils.console import info
+                    info("Checking for skills-engine image updates…")
+                    manager.pull_if_newer(SKILLS_ENGINE_IMAGE)
+                except Exception:
+                    pass
+            _skills_engine_checked = True
+        except DockerClientError as exc:
+            raise SkillsEngineError(str(exc)) from exc
+        except Exception as exc:
+            raise SkillsEngineError(f"Docker initialization failed: {exc}") from exc
+
     local, user, cache = _ensure_dirs(cwd, local_required=local_required)
 
     cmd: list[str] = [

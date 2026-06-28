@@ -7,10 +7,26 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from vibepod.core import skills_engine
+
+
+@pytest.fixture(autouse=True)
+def mock_docker_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeDockerManager:
+        def __init__(self) -> None:
+            self.client = MagicMock()
+        def pull_image(self, image: str) -> None:
+            pass
+        def pull_if_newer(self, image: str) -> bool:
+            return False
+
+    monkeypatch.setattr(skills_engine, "DockerManager", FakeDockerManager)
+    monkeypatch.setattr(skills_engine, "_skills_engine_checked", False)
+    monkeypatch.setattr(skills_engine, "get_config", lambda: {})
 
 
 def _fake_run_factory(stdout: str = "", exit_code: int = 0) -> Any:
@@ -148,3 +164,71 @@ def test_add_accepts_github_tree_url(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 def test_add_rejects_missing_local_locator(tmp_path: Path) -> None:
     with pytest.raises(skills_engine.SkillsEngineError, match="Local skill locator not found"):
         skills_engine.add("./missing", scope="user", cwd=tmp_path)
+
+
+def test_run_engine_pulls_image_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.chdir(tmp_path)
+
+    pulled_images = []
+    checked_images = []
+
+    from vibepod.core.docker import NotFound
+
+    class FakeDockerManager:
+        def __init__(self) -> None:
+            self.client = MagicMock()
+            self.client.images.get.side_effect = NotFound("not found")
+        def pull_image(self, image: str) -> None:
+            pulled_images.append(image)
+        def pull_if_newer(self, image: str) -> bool:
+            checked_images.append(image)
+            return False
+
+    monkeypatch.setattr(skills_engine, "DockerManager", FakeDockerManager)
+    monkeypatch.setattr(skills_engine, "_skills_engine_checked", False)
+
+    fake_run, _ = _fake_run_factory(stdout=json.dumps([]))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    skills_engine.list_skills()
+
+    assert skills_engine.SKILLS_ENGINE_IMAGE in pulled_images
+    assert not checked_images
+
+
+def test_run_engine_checks_updates_when_latest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(skills_engine, "SKILLS_ENGINE_IMAGE", "vibepod/skills-engine:latest")
+    monkeypatch.chdir(tmp_path)
+
+    pulled_images = []
+    checked_images = []
+
+    class FakeDockerManager:
+        def __init__(self) -> None:
+            self.client = MagicMock()
+            self.client.images.get.return_value = MagicMock()
+        def pull_image(self, image: str) -> None:
+            pulled_images.append(image)
+        def pull_if_newer(self, image: str) -> bool:
+            checked_images.append(image)
+            return False
+
+    monkeypatch.setattr(skills_engine, "DockerManager", FakeDockerManager)
+    monkeypatch.setattr(skills_engine, "_skills_engine_checked", False)
+    monkeypatch.setattr(skills_engine, "get_config", lambda: {"auto_pull": True})
+
+    fake_run, _ = _fake_run_factory(stdout=json.dumps([]))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    skills_engine.list_skills()
+
+    assert not pulled_images
+    assert "vibepod/skills-engine:latest" in checked_images
