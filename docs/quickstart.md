@@ -7,12 +7,14 @@
 
 ### Using Podman instead of Docker
 
-VibePod auto-detects rootless Podman and applies the necessary user-namespace
-settings (`keep-id`) so workspace file permissions work correctly.
+VibePod can use Podman's Docker-compatible API socket and applies the
+necessary rootless user-namespace settings (`keep-id`) so workspace file
+permissions work correctly.
 
-Point VibePod at the Podman socket by setting `DOCKER_HOST`:
+Start Podman's user socket and point VibePod at it with `DOCKER_HOST`:
 
 ```bash
+systemctl --user enable --now podman.socket
 export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
 ```
 
