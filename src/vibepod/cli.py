@@ -20,7 +20,10 @@ from vibepod.commands import (
     task,
     update,
 )
+from vibepod.compat import install_python314_http_client_flush_patch
 from vibepod.constants import AGENT_SHORTCUTS, SUPPORTED_AGENTS
+
+install_python314_http_client_flush_patch()
 
 app = typer.Typer(
     name="vp",
