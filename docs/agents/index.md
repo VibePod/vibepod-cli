@@ -1,6 +1,6 @@
 # Agents
 
-VibePod manages each agent as a Docker container. Credentials and config are persisted to `~/.config/vibepod/agents/<agent>/` on your host and mounted into the container on every run, so you only need to authenticate once.
+VibePod manages each agent as a Docker or Podman container. Credentials and config are persisted to `~/.config/vibepod/agents/<agent>/` on your host and mounted into the container on every run, so you only need to authenticate once.
 
 ## Supported Agents
 
@@ -24,7 +24,7 @@ Start any agent for the first time with `vp run <agent>`. The container will pro
 
 ## Auto-pulling the latest image
 
-VibePod automatically pulls the latest image for an agent before every run. This ensures you always start with the most up-to-date container without manual intervention.
+VibePod automatically pulls the latest image for an agent before every run and shows pull progress while layers download. This ensures you always start with the most up-to-date container without manual intervention.
 
 To disable auto-pull globally:
 

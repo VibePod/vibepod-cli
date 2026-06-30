@@ -88,7 +88,7 @@ vp run claude
 VibePod will:
 
 1. Pull the agent image if not already present.
-2. Create a dedicated Docker network (`vibepod-network`).
+2. Create a dedicated Docker or Podman network (`vibepod-network`).
 3. Mount your current directory as the workspace inside the container.
 4. Start the agent container and attach your terminal to it.
 
