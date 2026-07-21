@@ -11,14 +11,15 @@ VibePod can use Podman's Docker-compatible API socket and applies the
 necessary rootless user-namespace settings (`keep-id`) so workspace file
 permissions work correctly.
 
-Start Podman's Docker-compatible socket and point VibePod at it with
-`DOCKER_HOST`:
+If `DOCKER_HOST` is not set, VibePod asks Podman for its socket location and
+uses it automatically — on macOS this matters because the machine socket path
+changes with `$TMPDIR` at machine-start time. You only need to make sure the
+socket exists:
 
 === "Linux"
 
     ```bash
     systemctl --user enable --now podman.socket
-    export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
     ```
 
 === "macOS"
@@ -26,14 +27,22 @@ Start Podman's Docker-compatible socket and point VibePod at it with
     ```bash
     podman machine init   # first time only
     podman machine start
-    export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
     ```
 
-    !!! note "The socket path is dynamic"
-        The Podman machine socket lives under `$TMPDIR`, which changes between
-        machine starts — a hardcoded `DOCKER_HOST` will break after a reboot.
-        Always compute it via `podman machine inspect` as above, and add the
-        `export` line to your `~/.zshrc` so every shell picks it up.
+Setting `DOCKER_HOST` explicitly still works and takes precedence:
+
+```bash
+# Linux
+export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
+# macOS
+export DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')
+```
+
+!!! note "The socket path is dynamic on macOS"
+    The Podman machine socket lives under `$TMPDIR`, which changes between
+    machine starts — a hardcoded `DOCKER_HOST` will break after a reboot. If
+    you set it manually, always compute it via `podman machine inspect` as
+    above (e.g. in your `~/.zshrc`).
 
 !!! warning "Container DNS required"
     VibePod routes agent traffic through a `vibepod-proxy` container. The agent

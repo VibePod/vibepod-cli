@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import socket
+import subprocess
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,10 +14,33 @@ import pytest
 from vibepod.core.docker import (
     APIError,
     DockerClientError,
+    DockerException,
     DockerManager,
     NotFound,
+    _discover_podman_socket,
     _parse_image_name,
 )
+
+requires_af_unix = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"), reason="AF_UNIX sockets are not available on this platform"
+)
+
+
+@pytest.fixture()
+def socket_dir() -> Iterator[Path]:
+    """Short-path directory for binding AF_UNIX sockets.
+
+    sun_path is limited to ~104 chars on macOS and pytest's tmp_path on CI
+    runners can exceed it, so keep bound sockets out of tmp_path.
+    """
+    with tempfile.TemporaryDirectory(prefix="vp-sock-") as tmp:
+        yield Path(tmp)
+
+
+def _bind_unix_socket(path: Path) -> socket.socket:
+    sock = socket.socket(socket.AF_UNIX)
+    sock.bind(str(path))
+    return sock
 
 
 def test_parse_image_name() -> None:
@@ -170,3 +197,227 @@ def test_ensure_proxy_pulls_image_when_missing(mock_docker, tmp_path: Path) -> N
         "vibepod/proxy", tag="latest", stream=True, decode=True
     )
     mock_client.containers.run.assert_called_once()
+
+
+def test_discover_podman_socket_skipped_when_docker_host_set(monkeypatch) -> None:
+    monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
+    assert _discover_podman_socket() is None
+
+
+@requires_af_unix
+def test_discover_podman_socket_uses_machine_inspect(monkeypatch, socket_dir: Path) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    socket_path = socket_dir / "podman.sock"
+    sock = _bind_unix_socket(socket_path)
+    try:
+        with (
+            patch("vibepod.core.docker.shutil.which", return_value="/usr/bin/podman"),
+            patch("vibepod.core.docker.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"{socket_path}\n")
+            assert _discover_podman_socket() == f"unix://{socket_path}"
+    finally:
+        sock.close()
+
+
+@requires_af_unix
+def test_discover_podman_socket_strips_unix_prefix(monkeypatch, socket_dir: Path) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    socket_path = socket_dir / "podman.sock"
+    sock = _bind_unix_socket(socket_path)
+    try:
+        with (
+            patch("vibepod.core.docker.shutil.which", return_value="/usr/bin/podman"),
+            patch("vibepod.core.docker.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"unix://{socket_path}\n")
+            assert _discover_podman_socket() == f"unix://{socket_path}"
+    finally:
+        sock.close()
+
+
+def test_discover_podman_socket_ignores_stale_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    with (
+        patch("vibepod.core.docker.shutil.which", return_value="/usr/bin/podman"),
+        patch("vibepod.core.docker.subprocess.run") as mock_run,
+    ):
+        mock_run.return_value = MagicMock(returncode=0, stdout=f"{tmp_path}/gone.sock\n")
+        assert _discover_podman_socket() is None
+
+
+@requires_af_unix
+def test_discover_podman_socket_xdg_runtime_dir(monkeypatch, socket_dir: Path) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(socket_dir))
+    (socket_dir / "podman").mkdir()
+    socket_path = socket_dir / "podman" / "podman.sock"
+    sock = _bind_unix_socket(socket_path)
+    try:
+        with patch("vibepod.core.docker.shutil.which", return_value=None):
+            assert _discover_podman_socket() == f"unix://{socket_path}"
+    finally:
+        sock.close()
+
+
+def test_discover_podman_socket_none_without_podman(monkeypatch) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    with patch("vibepod.core.docker.shutil.which", return_value=None):
+        assert _discover_podman_socket() is None
+
+
+@requires_af_unix
+def test_discover_podman_socket_falls_back_to_podman_info(monkeypatch, socket_dir: Path) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    socket_path = socket_dir / "podman.sock"
+    sock = _bind_unix_socket(socket_path)
+    try:
+        with (
+            patch("vibepod.core.docker.shutil.which", return_value="/usr/bin/podman"),
+            patch("vibepod.core.docker.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=125, stdout=""),
+                MagicMock(returncode=0, stdout=f"{socket_path}\n"),
+            ]
+            assert _discover_podman_socket() == f"unix://{socket_path}"
+        assert mock_run.call_count == 2
+    finally:
+        sock.close()
+
+
+@requires_af_unix
+def test_discover_podman_socket_enumerates_non_default_machines(
+    monkeypatch, socket_dir: Path
+) -> None:
+    """A running non-default machine is found even when the default one is dead."""
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    live_path = socket_dir / "dev.sock"
+    sock = _bind_unix_socket(live_path)
+    stale_path = socket_dir / "gone.sock"
+    try:
+        with (
+            patch("vibepod.core.docker.shutil.which", return_value="/usr/bin/podman"),
+            patch("vibepod.core.docker.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = [
+                # `machine list` marks the default machine with a trailing "*".
+                MagicMock(returncode=0, stdout="podman-machine-default*\ndev\n"),
+                MagicMock(returncode=0, stdout=f"{stale_path}\n{live_path}\n"),
+            ]
+            assert _discover_podman_socket() == f"unix://{live_path}"
+        listed = mock_run.call_args_list[1].args[0]
+        assert listed[1:4] == ["machine", "inspect", "podman-machine-default"]
+        assert "dev" in listed
+    finally:
+        sock.close()
+
+
+def test_discover_podman_socket_skips_podman_info_when_machines_exist(monkeypatch) -> None:
+    """`podman info` reports the VM-internal path, so never trust it alongside a machine."""
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    with (
+        patch("vibepod.core.docker.shutil.which", return_value="/usr/bin/podman"),
+        patch("vibepod.core.docker.subprocess.run") as mock_run,
+    ):
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="podman-machine-default*\n"),
+            MagicMock(returncode=0, stdout="/var/folders/xx/gone/podman.sock\n"),
+        ]
+        assert _discover_podman_socket() is None
+    assert mock_run.call_count == 2
+    assert all("info" not in call.args[0] for call in mock_run.call_args_list)
+
+
+@requires_af_unix
+def test_discover_podman_socket_survives_subprocess_errors(monkeypatch, socket_dir: Path) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(socket_dir))
+    (socket_dir / "podman").mkdir()
+    socket_path = socket_dir / "podman" / "podman.sock"
+    sock = _bind_unix_socket(socket_path)
+    try:
+        with (
+            patch("vibepod.core.docker.shutil.which", return_value="/usr/bin/podman"),
+            patch("vibepod.core.docker.subprocess.run") as mock_run,
+        ):
+            mock_run.side_effect = [
+                subprocess.TimeoutExpired(cmd="podman", timeout=10),
+                OSError("podman exploded"),
+            ]
+            assert _discover_podman_socket() == f"unix://{socket_path}"
+    finally:
+        sock.close()
+
+
+@requires_af_unix
+def test_discover_podman_socket_prefers_podman_over_xdg(monkeypatch, socket_dir: Path) -> None:
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(socket_dir))
+    (socket_dir / "podman").mkdir()
+    xdg_socket = socket_dir / "podman" / "podman.sock"
+    machine_socket = socket_dir / "machine.sock"
+    sock_machine = _bind_unix_socket(machine_socket)
+    sock_xdg = _bind_unix_socket(xdg_socket)
+    try:
+        with (
+            patch("vibepod.core.docker.shutil.which", return_value="/usr/bin/podman"),
+            patch("vibepod.core.docker.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout=f"{machine_socket}\n")
+            assert _discover_podman_socket() == f"unix://{machine_socket}"
+    finally:
+        sock_machine.close()
+        sock_xdg.close()
+
+
+@patch("vibepod.core.docker.docker")
+def test_init_falls_back_to_podman_socket(mock_docker) -> None:
+    mock_docker.from_env.side_effect = DockerException("no socket")
+    mock_client = MagicMock()
+    mock_docker.DockerClient.return_value = mock_client
+
+    with patch(
+        "vibepod.core.docker._discover_podman_socket",
+        return_value="unix:///tmp/podman.sock",
+    ):
+        manager = DockerManager()
+
+    mock_docker.DockerClient.assert_called_once_with(base_url="unix:///tmp/podman.sock")
+    assert manager.client is mock_client
+    mock_client.ping.assert_called_once()
+
+
+@patch("vibepod.core.docker.docker")
+def test_init_error_includes_podman_hint(mock_docker) -> None:
+    mock_docker.from_env.side_effect = DockerException("no socket")
+
+    with patch("vibepod.core.docker._discover_podman_socket", return_value=None):
+        with pytest.raises(DockerClientError) as exc_info:
+            DockerManager()
+
+    message = str(exc_info.value)
+    assert "podman machine start" in message
+    assert "DOCKER_HOST" in message
+
+
+@patch("vibepod.core.docker.docker")
+def test_init_fallback_failure_raises(mock_docker) -> None:
+    mock_docker.from_env.side_effect = DockerException("no socket")
+    mock_docker.DockerClient.side_effect = DockerException("still broken")
+
+    with patch(
+        "vibepod.core.docker._discover_podman_socket",
+        return_value="unix:///tmp/podman.sock",
+    ):
+        with pytest.raises(DockerClientError) as exc_info:
+            DockerManager()
+
+    assert "Docker is not available" in str(exc_info.value)
