@@ -66,6 +66,9 @@ _PODMAN_HINT = (
     "or point DOCKER_HOST at the Podman socket."
 )
 
+#: Image namespace owned by vibepod; the only one auto_clean ever sweeps.
+IMAGE_NAMESPACE = "vibepod"
+
 
 def _run_podman(podman: str, args: list[str]) -> str | None:
     """Run a Podman subcommand, returning its trimmed stdout on success."""
@@ -192,6 +195,24 @@ def _version_is_podman(version: Any) -> bool:
         return True
 
     return "podman" in str(version.get("Name", "")).lower()
+
+
+def _reference_namespace(reference: str) -> str | None:
+    """Return the namespace of an image *reference*, ignoring registry and digest.
+
+    ``vibepod/claude@sha256:…`` and ``ghcr.io/vibepod/claude@sha256:…`` both
+    yield ``vibepod``. A bare ``python@sha256:…`` has no namespace, and neither
+    has a deeper path such as ``ghcr.io/acme/vibepod/tool`` — that repository
+    belongs to ``acme``, not to us.
+    """
+    repository = reference.split("@", 1)[0]
+    parts = repository.split("/")
+    if len(parts) > 2 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
+        # Drop the registry host; what remains must be exactly <namespace>/<image>.
+        parts = parts[1:]
+    if len(parts) != 2:
+        return None
+    return parts[0]
 
 
 def _parse_image_name(image: str) -> tuple[str, str | None]:
@@ -341,33 +362,75 @@ class DockerManager:
                 raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
             raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
 
-    def pull_image(self, image: str) -> None:
+    def pull_image(self, image: str, auto_clean: bool = False) -> None:
         self._pull_image_with_progress(image)
+        if auto_clean:
+            self.clean_untagged_images()
 
-    def pull_if_newer(self, image: str) -> bool:
+    def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
         """Pull *image* and return True if the local image was updated.
 
         Returns False when the image is already up to date, when the pull
         fails (e.g. no network / private registry), or when the image only
         exists locally and cannot be found on a registry.
+
+        With *auto_clean*, untagged images left behind by this and earlier
+        pulls are swept afterwards (see :meth:`clean_untagged_images`).
         """
         try:
-            old_id: str | None
-            try:
-                old_id = self.client.images.get(image).id
-            except NotFound:
-                old_id = None
-
+            old_id = self.image_id(image)
             self.pull_image(image)
-
-            try:
-                new_id = self.client.images.get(image).id
-            except NotFound:
+            new_id = self.image_id(image)
+            if new_id is None:
                 return False
 
+            if auto_clean:
+                self.clean_untagged_images()
             return bool(old_id != new_id)
         except (APIError, DockerClientError):
             return False
+
+    def image_id(self, image: str) -> str | None:
+        """Return the local id of *image*, or None when it cannot be determined."""
+        try:
+            return str(self.client.images.get(image).id)
+        except DockerException:
+            # Covers NotFound and any transient daemon error: callers treat a
+            # missing id as "no confirmed image", never as a failure to report.
+            return None
+
+    def clean_untagged_images(self, namespace: str = IMAGE_NAMESPACE) -> int:
+        """Remove untagged *namespace* images and return how many were removed.
+
+        A pull that moves the ``latest`` tag leaves the previous image behind
+        with no tag but with its repository digest intact, so it still shows up
+        as ``vibepod/claude <none>``. Sweeping the whole namespace — rather
+        than only the image just replaced — also clears leftovers from earlier
+        pulls whose removal failed because a container still held them.
+
+        Images that are still tagged, that belong to another namespace, or that
+        cannot be attributed to one are never touched. Docker refuses to remove
+        images used by a container (running or stopped); those stay and are
+        retried by the next sweep.
+        """
+        try:
+            images = self.client.images.list()
+        except DockerException:
+            return 0
+
+        removed = 0
+        for image in images:
+            if image.tags:
+                continue
+            digests = image.attrs.get("RepoDigests") or []
+            if not any(_reference_namespace(str(digest)) == namespace for digest in digests):
+                continue
+            try:
+                self.client.images.remove(str(image.id))
+            except DockerException:
+                continue
+            removed += 1
+        return removed
 
     def ensure_network(self, name: str) -> None:
         try:

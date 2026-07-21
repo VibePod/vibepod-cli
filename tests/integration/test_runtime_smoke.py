@@ -19,12 +19,13 @@ from unittest.mock import patch
 
 import pytest
 
-from vibepod.core.docker import DockerClientError, DockerException, DockerManager
+from vibepod.core.docker import DockerClientError, DockerException, DockerManager, NotFound
 
 pytestmark = pytest.mark.integration
 
 SMOKE_IMAGE = "alpine:3.20"
 SMOKE_AGENT = "integration-smoke"
+_CLEANUP_ATTEMPTS = 3
 
 
 @pytest.fixture()
@@ -54,13 +55,32 @@ def mountable_tmp_path() -> Iterator[Path]:
 @pytest.fixture()
 def cleanup_smoke_containers(manager: DockerManager) -> Iterator[None]:
     yield
+    failures: list[str] = []
     for container in manager.list_managed(all_containers=True):
         if container.labels.get("vibepod.agent") != SMOKE_AGENT:
             continue
-        try:
-            container.remove(force=True)
-        except Exception:
-            pass
+        last_error: Exception | None = None
+        for attempt in range(1, _CLEANUP_ATTEMPTS + 1):
+            try:
+                container.remove(force=True)
+                last_error = None
+                break
+            except NotFound:
+                last_error = None
+                break
+            except DockerException as exc:
+                # A removal can lose a race with the runtime's own reaper; log
+                # every attempt so a persistent failure is diagnosable.
+                last_error = exc
+                print(
+                    f"cleanup: removing {container.name} failed "
+                    f"(attempt {attempt}/{_CLEANUP_ATTEMPTS}): {exc}"
+                )
+                time.sleep(0.5)
+        if last_error is not None:
+            failures.append(f"{container.name}: {last_error}")
+    if failures:
+        pytest.fail("Smoke containers could not be removed: " + "; ".join(failures))
 
 
 def _wait_for_log(container: Any, needle: bytes, timeout: float = 30.0) -> bytes:

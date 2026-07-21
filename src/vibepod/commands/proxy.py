@@ -42,9 +42,16 @@ def proxy_start() -> None:
 
     manager.ensure_network(network_name)
 
+    auto_clean = bool(config.get("auto_clean", True))
+    updated = False
     if _is_latest_tag(proxy_image):
         info("Checking for proxy image updates…")
-        manager.pull_if_newer(proxy_image)
+        updated = manager.pull_if_newer(proxy_image)
+        if updated:
+            info("New image available — restarting proxy")
+            existing = manager.find_proxy()
+            if existing:
+                existing.remove(force=True)
 
     info("Starting proxy")
     manager.ensure_proxy(
@@ -53,6 +60,10 @@ def proxy_start() -> None:
         ca_dir=ca_dir,
         network=network_name,
     )
+    if auto_clean:
+        # Swept last: the replaced image is only removable once the proxy
+        # container that held it has been recreated on the new one.
+        manager.clean_untagged_images()
     success("Proxy is running")
 
 

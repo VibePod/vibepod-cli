@@ -19,9 +19,9 @@ def mock_docker_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeDockerManager:
         def __init__(self) -> None:
             self.client = MagicMock()
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
-        def pull_if_newer(self, image: str) -> bool:
+        def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
             return False
 
     monkeypatch.setattr(skills_engine, "DockerManager", FakeDockerManager)
@@ -182,9 +182,9 @@ def test_run_engine_pulls_image_when_missing(
         def __init__(self) -> None:
             self.client = MagicMock()
             self.client.images.get.side_effect = NotFound("not found")
-        def pull_image(self, image: str) -> None:
-            pulled_images.append(image)
-        def pull_if_newer(self, image: str) -> bool:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
+            pulled_images.append((image, auto_clean))
+        def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
             checked_images.append(image)
             return False
 
@@ -196,7 +196,7 @@ def test_run_engine_pulls_image_when_missing(
 
     skills_engine.list_skills()
 
-    assert skills_engine.SKILLS_ENGINE_IMAGE in pulled_images
+    assert (skills_engine.SKILLS_ENGINE_IMAGE, True) in pulled_images
     assert not checked_images
 
 
@@ -215,15 +215,17 @@ def test_run_engine_checks_updates_when_latest(
         def __init__(self) -> None:
             self.client = MagicMock()
             self.client.images.get.return_value = MagicMock()
-        def pull_image(self, image: str) -> None:
-            pulled_images.append(image)
-        def pull_if_newer(self, image: str) -> bool:
-            checked_images.append(image)
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
+            pulled_images.append((image, auto_clean))
+        def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
+            checked_images.append((image, auto_clean))
             return False
 
     monkeypatch.setattr(skills_engine, "DockerManager", FakeDockerManager)
     monkeypatch.setattr(skills_engine, "_skills_engine_checked", False)
-    monkeypatch.setattr(skills_engine, "get_config", lambda: {"auto_pull": True})
+    monkeypatch.setattr(
+        skills_engine, "get_config", lambda: {"auto_pull": True, "auto_clean": True}
+    )
 
     fake_run, _ = _fake_run_factory(stdout=json.dumps([]))
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -231,4 +233,4 @@ def test_run_engine_checks_updates_when_latest(
     skills_engine.list_skills()
 
     assert not pulled_images
-    assert "vibepod/skills-engine:latest" in checked_images
+    assert ("vibepod/skills-engine:latest", True) in checked_images
