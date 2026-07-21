@@ -11,12 +11,29 @@ VibePod can use Podman's Docker-compatible API socket and applies the
 necessary rootless user-namespace settings (`keep-id`) so workspace file
 permissions work correctly.
 
-Start Podman's user socket and point VibePod at it with `DOCKER_HOST`:
+Start Podman's Docker-compatible socket and point VibePod at it with
+`DOCKER_HOST`:
 
-```bash
-systemctl --user enable --now podman.socket
-export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
-```
+=== "Linux"
+
+    ```bash
+    systemctl --user enable --now podman.socket
+    export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
+    ```
+
+=== "macOS"
+
+    ```bash
+    podman machine init   # first time only
+    podman machine start
+    export DOCKER_HOST="unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
+    ```
+
+    !!! note "The socket path is dynamic"
+        The Podman machine socket lives under `$TMPDIR`, which changes between
+        machine starts — a hardcoded `DOCKER_HOST` will break after a reboot.
+        Always compute it via `podman machine inspect` as above, and add the
+        `export` line to your `~/.zshrc` so every shell picks it up.
 
 !!! warning "Container DNS required"
     VibePod routes agent traffic through a `vibepod-proxy` container. The agent
