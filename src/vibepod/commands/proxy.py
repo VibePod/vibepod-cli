@@ -44,7 +44,7 @@ def proxy_start() -> None:
 
     if _is_latest_tag(proxy_image):
         info("Checking for proxy image updates…")
-        manager.pull_if_newer(proxy_image)
+        manager.pull_if_newer(proxy_image, remove_previous=bool(config.get("auto_clean", True)))
 
     info("Starting proxy")
     manager.ensure_proxy(

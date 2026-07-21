@@ -260,33 +260,55 @@ class DockerManager:
                 raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
             raise DockerClientError(f"Failed to pull image {image}: {exc}") from exc
 
-    def pull_image(self, image: str) -> None:
+    def pull_image(self, image: str, remove_previous: bool = False) -> None:
+        old_id = self.image_id(image) if remove_previous else None
         self._pull_image_with_progress(image)
+        if remove_previous:
+            self.remove_replaced_image(old_id, self.image_id(image))
 
-    def pull_if_newer(self, image: str) -> bool:
+    def pull_if_newer(self, image: str, remove_previous: bool = False) -> bool:
         """Pull *image* and return True if the local image was updated.
 
         Returns False when the image is already up to date, when the pull
         fails (e.g. no network / private registry), or when the image only
         exists locally and cannot be found on a registry.
+
+        With *remove_previous*, the replaced (now dangling) image is removed
+        after a successful update; removal is skipped when the old image is
+        still tagged elsewhere or used by a container.
         """
         try:
-            old_id: str | None
-            try:
-                old_id = self.client.images.get(image).id
-            except NotFound:
-                old_id = None
-
+            old_id = self.image_id(image)
             self.pull_image(image)
-
-            try:
-                new_id = self.client.images.get(image).id
-            except NotFound:
+            new_id = self.image_id(image)
+            if new_id is None:
                 return False
 
+            if remove_previous:
+                self.remove_replaced_image(old_id, new_id)
             return bool(old_id != new_id)
         except (APIError, DockerClientError):
             return False
+
+    def image_id(self, image: str) -> str | None:
+        try:
+            return str(self.client.images.get(image).id)
+        except NotFound:
+            return None
+
+    def remove_replaced_image(self, old_id: str | None, new_id: str | None) -> None:
+        """Remove the image *old_id* left dangling by a pull that produced *new_id*.
+
+        Docker refuses to remove images that are still tagged or used by a
+        container (running or stopped); those failures are ignored on purpose.
+        Without *new_id* there is no confirmed replacement, so nothing is removed.
+        """
+        if not old_id or not new_id or old_id == new_id:
+            return
+        try:
+            self.client.images.remove(old_id)
+        except (APIError, NotFound):
+            pass
 
     def ensure_network(self, name: str) -> None:
         try:

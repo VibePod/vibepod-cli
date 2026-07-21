@@ -125,6 +125,113 @@ def test_pull_if_newer(mock_docker) -> None:
 
 
 @patch("vibepod.core.docker.docker")
+def test_pull_if_newer_removes_replaced_image(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_image_old = MagicMock()
+    mock_image_old.id = "sha256:old"
+    mock_image_new = MagicMock()
+    mock_image_new.id = "sha256:new"
+
+    mock_client.images.get.side_effect = [mock_image_old, mock_image_new]
+    mock_client.api.pull.return_value = [{"status": "Image is up to date"}]
+
+    manager = DockerManager()
+    updated = manager.pull_if_newer("vibepod/claude:latest", remove_previous=True)
+
+    assert updated is True
+    mock_client.images.remove.assert_called_once_with("sha256:old")
+
+
+@patch("vibepod.core.docker.docker")
+def test_pull_if_newer_keeps_replaced_image_by_default(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_image_old = MagicMock()
+    mock_image_old.id = "sha256:old"
+    mock_image_new = MagicMock()
+    mock_image_new.id = "sha256:new"
+
+    mock_client.images.get.side_effect = [mock_image_old, mock_image_new]
+    mock_client.api.pull.return_value = [{"status": "Image is up to date"}]
+
+    manager = DockerManager()
+    updated = manager.pull_if_newer("vibepod/claude:latest")
+
+    assert updated is True
+    mock_client.images.remove.assert_not_called()
+
+
+@patch("vibepod.core.docker.docker")
+def test_pull_if_newer_ignores_remove_failure(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_image_old = MagicMock()
+    mock_image_old.id = "sha256:old"
+    mock_image_new = MagicMock()
+    mock_image_new.id = "sha256:new"
+
+    mock_client.images.get.side_effect = [mock_image_old, mock_image_new]
+    mock_client.api.pull.return_value = [{"status": "Image is up to date"}]
+    mock_client.images.remove.side_effect = APIError("image is in use")
+
+    manager = DockerManager()
+    updated = manager.pull_if_newer("vibepod/claude:latest", remove_previous=True)
+
+    assert updated is True
+
+
+@patch("vibepod.core.docker.docker")
+def test_pull_image_removes_replaced_image(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_image_old = MagicMock()
+    mock_image_old.id = "sha256:old"
+    mock_image_new = MagicMock()
+    mock_image_new.id = "sha256:new"
+
+    mock_client.images.get.side_effect = [mock_image_old, mock_image_new]
+    mock_client.api.pull.return_value = [{"status": "Downloaded newer image"}]
+
+    manager = DockerManager()
+    manager.pull_image("vibepod/claude:latest", remove_previous=True)
+
+    mock_client.images.remove.assert_called_once_with("sha256:old")
+
+
+@patch("vibepod.core.docker.docker")
+def test_pull_image_no_remove_without_previous_image(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_image_new = MagicMock()
+    mock_image_new.id = "sha256:new"
+
+    mock_client.images.get.side_effect = [NotFound("not found"), mock_image_new]
+    mock_client.api.pull.return_value = [{"status": "Downloaded newer image"}]
+
+    manager = DockerManager()
+    manager.pull_image("vibepod/claude:latest", remove_previous=True)
+
+    mock_client.images.remove.assert_not_called()
+
+
+@patch("vibepod.core.docker.docker")
+def test_remove_replaced_image_requires_new_id(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    manager = DockerManager()
+    manager.remove_replaced_image("sha256:old", None)
+
+    mock_client.images.remove.assert_not_called()
+
+
+@patch("vibepod.core.docker.docker")
 def test_ensure_datasette_pulls_image_when_missing(mock_docker, tmp_path: Path) -> None:
     mock_client = MagicMock()
     mock_docker.from_env.return_value = mock_client

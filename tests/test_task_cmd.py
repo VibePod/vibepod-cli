@@ -71,7 +71,7 @@ class _CapturingDockerManager:
     def networks_with_running_containers(self) -> list[str]:
         return []
 
-    def pull_image(self, image: str) -> None:
+    def pull_image(self, image: str, remove_previous: bool = False) -> None:
         pass
 
     def ensure_proxy(self, **kwargs) -> None:

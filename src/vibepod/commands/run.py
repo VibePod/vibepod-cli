@@ -393,7 +393,7 @@ def run(
     should_pull = pull or (auto_pull_enabled and _is_latest_tag(image))
     if should_pull:
         info(f"Pulling image: {image}")
-        manager.pull_image(image)
+        manager.pull_image(image, remove_previous=bool(config.get("auto_clean", True)))
 
     command = spec.command
     entrypoint: list[str] | None = None
@@ -468,7 +468,7 @@ def run(
         )
 
         if _is_latest_tag(proxy_image):
-            manager.pull_if_newer(proxy_image)
+            manager.pull_if_newer(proxy_image, remove_previous=bool(config.get("auto_clean", True)))
 
         manager.ensure_proxy(
             image=proxy_image,
