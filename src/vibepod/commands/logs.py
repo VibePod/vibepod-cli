@@ -63,12 +63,16 @@ def logs_start(
 
     if _is_latest_tag(datasette_image):
         info("Checking for datasette image updates…")
+        old_image_id = manager.image_id(datasette_image)
         updated = manager.pull_if_newer(datasette_image)
         if updated:
             info("New image available — restarting datasette")
             existing = manager.find_datasette()
             if existing:
                 existing.remove(force=True)
+            if bool(config.get("auto_clean", True)):
+                # Only after the old container is gone can Docker drop its image.
+                manager.remove_replaced_image(old_image_id, manager.image_id(datasette_image))
 
     info(f"Starting Datasette on http://localhost:{datasette_port}")
     manager.ensure_datasette(

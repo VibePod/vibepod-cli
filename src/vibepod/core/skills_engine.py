@@ -143,7 +143,10 @@ def run_engine(
                 try:
                     from vibepod.utils.console import info
                     info("Checking for skills-engine image updates…")
-                    manager.pull_if_newer(SKILLS_ENGINE_IMAGE)
+                    manager.pull_if_newer(
+                        SKILLS_ENGINE_IMAGE,
+                        remove_previous=bool(config.get("auto_clean", True)),
+                    )
                 except Exception:
                     pass
             _skills_engine_checked = True

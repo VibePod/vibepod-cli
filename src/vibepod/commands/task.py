@@ -527,7 +527,7 @@ def task_create(
     should_pull = pull or (auto_pull_enabled and _is_latest_tag(image))
     if should_pull:
         info(f"Pulling image: {image}")
-        manager.pull_image(image)
+        manager.pull_image(image, remove_previous=bool(config.get("auto_clean", True)))
 
     base_command = spec.command
     entrypoint: list[str] | None = None
@@ -582,7 +582,7 @@ def task_create(
         )
 
         if _is_latest_tag(proxy_image):
-            manager.pull_if_newer(proxy_image)
+            manager.pull_if_newer(proxy_image, remove_previous=bool(config.get("auto_clean", True)))
 
         actual_ca_dir = proxy_ca_dir or proxy_db_path.parent / "mitmproxy"
         manager.ensure_proxy(
