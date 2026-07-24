@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -128,10 +130,63 @@ def agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, st
     return []
 
 
-def x11_volumes_and_env(display: str) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
+X11_CONTAINER_XAUTH_PATH = "/tmp/.vibepod-xauth"
+
+
+def prepare_x11_auth(display: str, config_dir: Path) -> Path | None:
+    """Write an Xauthority file whose cookies work from inside the container.
+
+    Host cookies are keyed to the host's hostname (FamilyLocal); the container
+    has a different hostname, so the X server rejects its connections with
+    "Authorization required, but no authorization protocol specified".
+    Rewriting the address family to FamilyWild (0xffff) makes the cookie match
+    regardless of hostname.
+    """
+    xauth = shutil.which("xauth")
+    if xauth is None:
+        return None
+    try:
+        nlist = subprocess.run(
+            [xauth, "nlist", display],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    entries = [line for line in nlist.stdout.splitlines() if line.strip()]
+    if nlist.returncode != 0 or not entries:
+        return None
+
+    wild = "".join(f"ffff{line[4:]}\n" for line in entries)
+    auth_file = config_dir / "Xauthority"
+    try:
+        fd = os.open(auth_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.close(fd)
+        os.chmod(auth_file, 0o600)
+        merge = subprocess.run(
+            [xauth, "-f", str(auth_file), "nmerge", "-"],
+            input=wild,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if merge.returncode != 0:
+        return None
+    return auth_file
+
+
+def x11_volumes_and_env(
+    display: str, xauth_file: Path | None = None
+) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
     """Return X11 socket volumes and DISPLAY env for paste-image support."""
     volumes: list[tuple[str, str, str]] = [("/tmp/.X11-unix", "/tmp/.X11-unix", "rw")]
     env: dict[str, str] = {"DISPLAY": display}
+    if xauth_file is not None:
+        volumes.append((str(xauth_file), X11_CONTAINER_XAUTH_PATH, "ro"))
+        env["XAUTHORITY"] = X11_CONTAINER_XAUTH_PATH
     return volumes, env
 
 

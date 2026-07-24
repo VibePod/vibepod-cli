@@ -5,6 +5,8 @@ from __future__ import annotations
 import builtins
 import importlib
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,7 +17,7 @@ from typer.testing import CliRunner
 from vibepod.cli import app
 from vibepod.commands import run as run_cmd
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
-from vibepod.core import skills_engine
+from vibepod.core import launch, skills_engine
 from vibepod.core.docker import DockerClientError, DockerManager
 
 # ---------------------------------------------------------------------------
@@ -551,6 +553,65 @@ def test_x11_volumes_and_env_returns_socket_and_display() -> None:
     assert env == {"DISPLAY": ":0"}
 
 
+def test_x11_volumes_and_env_mounts_xauth_file(tmp_path: Path) -> None:
+    """When an auth file is prepared, it is mounted read-only and XAUTHORITY is set."""
+    auth_file = tmp_path / "Xauthority"
+    auth_file.write_bytes(b"cookie")
+
+    volumes, env = run_cmd._x11_volumes_and_env(":0", auth_file)
+
+    assert (str(auth_file), launch.X11_CONTAINER_XAUTH_PATH, "ro") in volumes
+    assert env["XAUTHORITY"] == launch.X11_CONTAINER_XAUTH_PATH
+    assert env["DISPLAY"] == ":0"
+
+
+def test_prepare_x11_auth_writes_wildcard_cookie(monkeypatch, tmp_path: Path) -> None:
+    """Host cookies are rewritten to FamilyWild (ffff) so they match any hostname."""
+    nlist_line = (
+        "0100 0004 6d79686f7374 0001 30 0012 "
+        "4d49542d4d414749432d434f4f4b49452d31 0010 deadbeefdeadbeef"
+    )
+    merged: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        if "nlist" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=nlist_line + "\n", stderr="")
+        if "nmerge" in cmd:
+            merged["input"] = kwargs.get("input")
+            merged["file"] = cmd[cmd.index("-f") + 1]
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(launch.shutil, "which", lambda name: "/usr/bin/xauth")
+    monkeypatch.setattr(launch.subprocess, "run", fake_run)
+
+    result = launch.prepare_x11_auth(":0", tmp_path)
+
+    assert result == tmp_path / "Xauthority"
+    assert merged["file"] == str(result)
+    assert merged["input"].startswith("ffff ")
+    assert merged["input"].strip().endswith("deadbeefdeadbeef")
+    if os.name != "nt":  # POSIX file modes are not meaningful on Windows
+        assert (result.stat().st_mode & 0o777) == 0o600
+
+
+def test_prepare_x11_auth_returns_none_without_xauth_binary(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(launch.shutil, "which", lambda name: None)
+    assert launch.prepare_x11_auth(":0", tmp_path) is None
+
+
+def test_prepare_x11_auth_returns_none_on_empty_cookie_list(monkeypatch, tmp_path: Path) -> None:
+    """No cookies for the display (e.g. xhost-only setups) → no auth file."""
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(launch.shutil, "which", lambda name: "/usr/bin/xauth")
+    monkeypatch.setattr(launch.subprocess, "run", fake_run)
+
+    assert launch.prepare_x11_auth(":0", tmp_path) is None
+
+
 def test_x11_volumes_and_env_preserves_display_value() -> None:
     volumes, env = run_cmd._x11_volumes_and_env(":1")
     assert env["DISPLAY"] == ":1"
@@ -599,6 +660,56 @@ def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path)
     assert ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw") in captured.get(
         "extra_volumes", []
     ), f"X11 socket not found in extra_volumes: {captured.get('extra_volumes')}"
+
+
+def test_paste_images_flag_mounts_xauth_cookie(monkeypatch, tmp_path: Path) -> None:
+    """--paste-images prepares an auth cookie and passes XAUTHORITY to the container."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    auth_file = tmp_path / "Xauthority"
+    auth_file.write_bytes(b"cookie")
+
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(run_cmd, "_prepare_x11_auth", lambda display, config_dir: auth_file)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
+
+    assert (str(auth_file), launch.X11_CONTAINER_XAUTH_PATH, "ro") in captured.get(
+        "extra_volumes", []
+    ), f"Xauthority mount not found in extra_volumes: {captured.get('extra_volumes')}"
+    assert captured.get("env", {}).get("XAUTHORITY") == launch.X11_CONTAINER_XAUTH_PATH
 
 
 def test_paste_images_flag_warns_when_display_not_set(monkeypatch, tmp_path: Path) -> None:
