@@ -59,6 +59,8 @@ jobs:
       fail-fast: false
       matrix:
         runtime: [docker, podman]
+    env:
+      VIBEPOD_TEST_RUNTIME: ${{ matrix.runtime }}
 
     steps:
       - name: Check out repository
@@ -101,6 +103,8 @@ jobs:
       fail-fast: false
       matrix:
         runtime: [docker, podman]
+    env:
+      VIBEPOD_TEST_RUNTIME: ${{ matrix.runtime }}
 
     steps:
       - name: Check out repository

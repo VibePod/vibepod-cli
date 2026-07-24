@@ -7,6 +7,7 @@ socket works transparently with docker-py.
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import time
@@ -14,10 +15,11 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.docker import DockerClientError, DockerException, DockerManager
 
 pytestmark = pytest.mark.integration
 
@@ -82,6 +84,28 @@ def _wait_for_log(container: Any, needle: bytes, timeout: float = 30.0) -> bytes
             )
         time.sleep(0.5)
     raise AssertionError(f"Timed out waiting for {needle!r} in logs: {logs!r}")
+
+
+def test_docker_manager_discovers_podman_socket(monkeypatch) -> None:
+    """Auto-discovery must find the live Podman socket when DOCKER_HOST is unset.
+
+    CI runners keep a Docker daemon on the default socket, so force
+    ``docker.from_env`` to fail — otherwise the fallback never triggers and
+    this test would silently pass through the Docker daemon instead.
+    """
+    if os.environ.get("VIBEPOD_TEST_RUNTIME") != "podman":
+        pytest.skip("requires a live Podman socket (VIBEPOD_TEST_RUNTIME=podman)")
+
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    with patch(
+        "vibepod.core.docker.docker.from_env",
+        side_effect=DockerException("forced failure to exercise discovery"),
+    ):
+        manager = DockerManager()
+
+    # from_env is patched to fail, so a working client proves the discovered
+    # Podman socket was used.
+    manager.client.ping()
 
 
 def test_pull_run_mount_stop(

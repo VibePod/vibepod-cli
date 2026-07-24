@@ -6,6 +6,7 @@ import os
 import select
 import shutil
 import signal
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -58,6 +59,76 @@ else:
 
 class DockerClientError(RuntimeError):
     """Raised for Docker availability or lifecycle errors."""
+
+
+_PODMAN_HINT = (
+    "If you use Podman, make sure the machine is running (`podman machine start`) "
+    "or point DOCKER_HOST at the Podman socket."
+)
+
+
+def _run_podman(podman: str, args: list[str]) -> str | None:
+    """Run a Podman subcommand, returning its trimmed stdout on success."""
+    try:
+        result = subprocess.run([podman, *args], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _podman_machine_sockets(podman: str) -> list[str]:
+    """Socket paths of every configured Podman machine, not just the default one."""
+    listing = _run_podman(podman, ["machine", "list", "--format", "{{.Name}}"])
+    if listing is None:
+        return []
+    # `machine list` suffixes the default machine's name with "*".
+    names = [stripped.rstrip("*") for line in listing.splitlines() if (stripped := line.strip())]
+    if not names:
+        return []
+    inspected = _run_podman(
+        podman,
+        ["machine", "inspect", *names, "--format", "{{.ConnectionInfo.PodmanSocket.Path}}"],
+    )
+    if inspected is None:
+        return []
+    return [stripped for line in inspected.splitlines() if (stripped := line.strip())]
+
+
+def _discover_podman_socket() -> str | None:
+    """Locate a Podman socket to use when the default Docker socket is unavailable.
+
+    Podman machines on macOS expose the Docker-compatible API on a socket whose
+    path depends on $TMPDIR at machine-start time, so it cannot be hardcoded.
+    Ask Podman itself, then fall back to the rootless default on Linux.
+    """
+    if os.environ.get("DOCKER_HOST"):
+        return None
+
+    candidates: list[str] = []
+
+    podman = shutil.which("podman")
+    if podman is not None:
+        machine_sockets = _podman_machine_sockets(podman)
+        candidates.extend(machine_sockets)
+        if not machine_sockets:
+            # With a machine in play `podman info` reports the socket path as seen
+            # from inside the VM, which does not exist on the host — only trust it
+            # for native installs, where no machine is configured.
+            remote_socket = _run_podman(podman, ["info", "--format", "{{.Host.RemoteSocket.Path}}"])
+            if remote_socket is not None:
+                candidates.append(remote_socket)
+
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        candidates.append(os.path.join(runtime_dir, "podman", "podman.sock"))
+
+    for candidate in candidates:
+        path = candidate.removeprefix("unix://")
+        if Path(path).is_socket():
+            return f"unix://{path}"
+    return None
 
 
 def _encode_console_character(ch: str) -> bytes:
@@ -145,7 +216,17 @@ class DockerManager:
             self.client = docker.from_env()
             self.client.ping()
         except DockerException as exc:
-            raise DockerClientError(f"Docker is not available: {exc}") from exc
+            podman_socket = _discover_podman_socket()
+            if podman_socket is None:
+                raise DockerClientError(f"Docker is not available: {exc}. {_PODMAN_HINT}") from exc
+            try:
+                self.client = docker.DockerClient(base_url=podman_socket)
+                self.client.ping()
+            except DockerException as retry_exc:
+                raise DockerClientError(
+                    f"Docker is not available: {exc}. "
+                    f"Found Podman socket {podman_socket} but could not connect: {retry_exc}"
+                ) from retry_exc
 
         self._rootless_podman: bool | None = None
 
