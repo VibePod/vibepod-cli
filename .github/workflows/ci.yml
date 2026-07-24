@@ -120,7 +120,12 @@ jobs:
       - name: Set up Podman machine
         if: matrix.runtime == 'podman'
         run: |
-          brew install podman
+          # No Homebrew bottle for podman on Intel macOS (Tier 3); use official installer.
+          # Pinned: podman 6.x dropped the Intel macOS installer, 5.8 is the last branch shipping it.
+          curl -fsSL -o podman.pkg https://github.com/containers/podman/releases/download/v5.8.5/podman-installer-macos-amd64.pkg
+          sudo installer -pkg podman.pkg -target /
+          echo "/opt/podman/bin" >> "$GITHUB_PATH"
+          export PATH="/opt/podman/bin:$PATH"
           podman machine init --now
           echo "DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}')" >> "$GITHUB_ENV"
 
