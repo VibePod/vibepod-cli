@@ -47,6 +47,9 @@ from vibepod.core.launch import (
     parse_env_pairs as _parse_env_pairs,
 )
 from vibepod.core.launch import (
+    prepare_x11_auth as _prepare_x11_auth,
+)
+from vibepod.core.launch import (
     read_claude_stored_token as _read_claude_stored_token,
 )
 from vibepod.core.launch import (
@@ -455,7 +458,13 @@ def run(
         if not display:
             warning("--paste-images requires DISPLAY to be set; skipping X11 forwarding")
         else:
-            x11_vols, x11_env = _x11_volumes_and_env(display)
+            x11_auth = _prepare_x11_auth(display, config_dir)
+            if x11_auth is None:
+                warning(
+                    "Could not prepare an X11 auth cookie (is `xauth` installed?); "
+                    "clipboard access may be rejected by the X server"
+                )
+            x11_vols, x11_env = _x11_volumes_and_env(display, x11_auth)
             extra_volumes.extend(x11_vols)
             merged_env.update(x11_env)
 
