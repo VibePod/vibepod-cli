@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import importlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -590,7 +591,8 @@ def test_prepare_x11_auth_writes_wildcard_cookie(monkeypatch, tmp_path: Path) ->
     assert merged["file"] == str(result)
     assert merged["input"].startswith("ffff ")
     assert merged["input"].strip().endswith("deadbeefdeadbeef")
-    assert (result.stat().st_mode & 0o777) == 0o600
+    if os.name != "nt":  # POSIX file modes are not meaningful on Windows
+        assert (result.stat().st_mode & 0o777) == 0o600
 
 
 def test_prepare_x11_auth_returns_none_without_xauth_binary(monkeypatch, tmp_path: Path) -> None:
