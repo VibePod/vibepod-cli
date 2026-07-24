@@ -59,6 +59,10 @@ packages = ["src/vibepod"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: requires a real container runtime; run with `pytest -m integration`",
+]
+addopts = "-m 'not integration'"
 
 [tool.ruff]
 line-length = 100
