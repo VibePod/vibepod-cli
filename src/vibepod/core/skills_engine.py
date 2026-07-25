@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,14 @@ from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager, NotFound
 
 Scope = Literal["local", "user"]
+
+# Two or more characters before the colon: every locator scheme we support is
+# longer than one character, so a single letter is a Windows drive (``C:\...``).
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]+:")
+
+# scp-style git remote: user@host:path. A bare "git@something" with no remote
+# separator is a directory name, not a locator.
+_SCP_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:")
 
 _skills_engine_checked = False
 
@@ -82,11 +91,28 @@ def _ensure_dirs(
 
 
 def _is_local_locator(locator: str) -> bool:
-    return locator.startswith("./") or locator.startswith("../") or locator.startswith("/")
+    """Local when the locator carries no scheme.
+
+    Covers ``./skills/foo``, ``../foo``, ``/abs/path``, ``skills/foo``, ``.``,
+    ``..`` and ``~/skills/foo``. Anything scheme-like (``github:``, ``npm:``,
+    ``https://``, ``ftp://``) is left to the engine, which rejects the ones it
+    does not support. scp-style git remotes (``git@host:org/repo.git``) are the
+    one scheme-less exception; a directory named ``git@foo`` stays local.
+    """
+    if _SCP_RE.match(locator):
+        return False
+    return not _SCHEME_RE.match(locator)
 
 
 def _normalize_locator(locator: str) -> str:
-    """Accept common GitHub web URLs by converting them to skill locators."""
+    """Accept common GitHub web URLs by converting them to skill locators.
+
+    Also expands a leading ``~`` on the host: the engine container has a
+    different home directory, so ``~`` cannot survive the boundary.
+    """
+    if locator == "~" or locator.startswith("~/"):
+        return str(Path(locator).expanduser())
+
     parsed = urlparse(locator)
     if parsed.scheme not in {"http", "https"}:
         return locator

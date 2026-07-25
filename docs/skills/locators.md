@@ -58,15 +58,29 @@ The recommended naming convention for the curated channel is `vibepod-skill-<id>
 <relative-or-absolute-path>
 ```
 
-There is no `file:` scheme — bare paths only. Local locators are distinguished
-from other sources by a leading `.` or `/`.
+There is no `file:` scheme — bare paths only. Any locator that carries no scheme
+is treated as a filesystem path.
 
 Examples:
 
 ```text
+skills/researcher
 ./skills/researcher
+../shared/skills/researcher
 /abs/path/to/skill
+.
+~/skills/researcher
 ```
+
+A leading `~` is expanded on your machine before the engine container starts.
+Locators that look like a scheme but are not supported — `ftp://…`, `mailto:…` —
+are rejected with `Unrecognized locator`. A directory whose first path segment
+contains a colon must therefore be written with a leading `./`.
+
+The one scheme-less exception is an scp-style Git remote — `user@host:path`,
+such as `git@git.example.com:org/repo.git//skills/foo`. That shape needs both
+the `@` and the `:` separator, so a directory named `git@my-skill` is still
+treated as a path.
 
 Use `--link` for symlink installs while authoring a skill:
 

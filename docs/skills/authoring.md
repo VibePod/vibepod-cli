@@ -37,11 +37,11 @@ Free-form markdown instructions. Must not be empty.
 ## Authoring loop
 
 ```bash
-mkdir -p ./skills/my-skill
-$EDITOR ./skills/my-skill/SKILL.md
+mkdir -p skills/my-skill
+$EDITOR skills/my-skill/SKILL.md
 
 # install as a symlink so edits show up immediately
-vp skills add ./skills/my-skill --link --scope local
+vp skills add skills/my-skill --link --scope local
 
 # iterate, then validate:
 docker run --rm -v "$PWD/skills/my-skill:/in" \
