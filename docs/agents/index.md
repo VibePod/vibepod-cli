@@ -15,6 +15,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `codex` | OpenAI | `vp x` | `vibepod/codex:latest` |
 | `pi` | Earendil | `vp pi` | `vibepod/pi:latest` |
 | `agy` (Antigravity) | Google | `vp n` | `vibepod/agy:latest` |
+| `tau` | Hugging Face | `vp t` | `vibepod/tau:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`.
 
@@ -75,7 +76,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -201,6 +202,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `agy` | `--dangerously-skip-permissions` |
 | `opencode` | Not supported |
 | `auggie` | Not supported |
+| `tau` | Not supported |
 
 Example:
 
@@ -286,6 +288,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `claude` | `claude -p "<prompt>"` |
 | `codex` | `codex exec "<prompt>"` |
 | `auggie` | `auggie --print "<prompt>"` |
+| `tau` | `tau -p "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` on their `AgentSpec`.
 
@@ -621,3 +624,71 @@ Use `--ikwid` to append Agy's permission-skip flag:
 ```bash
 vp run agy --ikwid
 ```
+
+### Tau (Hugging Face)
+
+```bash
+vp run tau   # or: vp t
+```
+
+Tau is Hugging Face's minimalist, Pi-inspired terminal coding agent, written in
+Python. It is the first non-Node agent in the VibePod matrix. Credentials and
+configuration are persisted under `~/.config/vibepod/agents/tau/`, mounted at
+`/config` inside the container, where Tau finds them as `~/.tau/`:
+
+| Path in container | Contents |
+|---|---|
+| `/config/.tau/credentials.json` | Provider credentials written by `/login` (mode `0600`) |
+| `/config/.tau/providers.json` | Default provider, per-provider settings, scoped models |
+| `/config/.tau/catalog.toml` | Your own providers and models, overlaid on Tau's built-in catalog |
+| `/config/.tau/sessions/` | Durable JSONL session history (resume and branching) |
+
+**Authentication.** Start Tau and run the `/login` slash command:
+
+```text
+/login              # pick a provider interactively
+/login openai
+/login openai-codex # OpenAI Codex subscription auth
+/model              # choose a model
+```
+
+Tau supports OpenAI, Anthropic, the Codex subscription, OpenRouter, Hugging
+Face, and any custom OpenAI-compatible endpoint. Saved credentials take
+precedence over environment variables and survive container restarts because
+they live in the persisted mount.
+
+API keys can also be injected instead of using `/login`:
+
+```yaml
+agents:
+  tau:
+    env:
+      OPENAI_API_KEY: sk-...
+      HF_TOKEN: hf_...
+```
+
+Or per run: `vp run tau -e OPENAI_API_KEY=sk-...`.
+
+**Custom models.** Drop a `catalog.toml` into
+`~/.config/vibepod/agents/tau/.tau/catalog.toml` on the host to add providers
+and models; it is overlaid on Tau's bundled catalog (scalar fields replace,
+`models` merge with your entries first). Tau deliberately ignores project-level
+`.tau/catalog.toml`, so a repository cannot redirect your model traffic.
+
+**Proxy and TLS.** Tau uses `httpx`, not Node. VibePod's proxy env applies as
+usual: `HTTP_PROXY`/`HTTPS_PROXY` route traffic through `vibepod-proxy`, and
+`SSL_CERT_FILE` points at the mounted mitmproxy CA, which `httpx` honors for its
+verification context. Streaming responses pass through unchanged.
+
+**Non-interactive mode.** Tau's print mode works with both `vp run` and task
+mode:
+
+```bash
+vp run tau -p "explain this repo"
+vp task create tau "Summarize the README"
+```
+
+**Skills.** Tau scans `~/.agents/skills/`, so skills installed via `vp skills`
+are mounted at `/config/.agents/skills/<id>` and picked up automatically.
+
+Tau has no auto-approval flag, so `--ikwid` is not supported for it.
