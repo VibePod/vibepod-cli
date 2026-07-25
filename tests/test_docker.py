@@ -116,6 +116,174 @@ def test_pull_image_chunk_error(mock_docker) -> None:
     assert "Registry returned 404" in str(exc_info.value)
 
 
+def _fake_image(image_id: str, tags: list[str], digests: list[str]):
+    """Build a stand-in for a docker-py Image with the attributes the sweep reads."""
+    image = MagicMock()
+    image.id = image_id
+    image.tags = tags
+    image.attrs = {"RepoDigests": digests}
+    return image
+
+
+@patch("vibepod.core.docker.docker")
+def test_clean_untagged_images_removes_untagged_namespace_images(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.images.list.return_value = [
+        _fake_image("sha256:current", ["vibepod/claude:latest"], ["vibepod/claude@sha256:aaa"]),
+        _fake_image("sha256:old", [], ["vibepod/claude@sha256:bbb"]),
+        _fake_image("sha256:older", [], ["vibepod/codex@sha256:ccc"]),
+    ]
+
+    manager = DockerManager()
+    removed = manager.clean_untagged_images()
+
+    assert removed == 2
+    assert [call.args[0] for call in mock_client.images.remove.call_args_list] == [
+        "sha256:old",
+        "sha256:older",
+    ]
+
+
+@patch("vibepod.core.docker.docker")
+def test_clean_untagged_images_keeps_foreign_and_unattributable_images(mock_docker) -> None:
+    """Only images provably in the namespace are touched; anonymous layers stay."""
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.images.list.return_value = [
+        _fake_image("sha256:other", [], ["python@sha256:aaa"]),
+        _fake_image("sha256:anonymous", [], []),
+        _fake_image("sha256:library", [], ["docker.io/library/python@sha256:bbb"]),
+    ]
+
+    manager = DockerManager()
+    removed = manager.clean_untagged_images()
+
+    assert removed == 0
+    mock_client.images.remove.assert_not_called()
+
+
+@patch("vibepod.core.docker.docker")
+def test_clean_untagged_images_matches_registry_qualified_references(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.images.list.return_value = [
+        _fake_image("sha256:old", [], ["ghcr.io/vibepod/claude@sha256:aaa"]),
+    ]
+
+    manager = DockerManager()
+
+    assert manager.clean_untagged_images() == 1
+    mock_client.images.remove.assert_called_once_with("sha256:old")
+
+
+@patch("vibepod.core.docker.docker")
+def test_clean_untagged_images_keeps_foreign_nested_references(mock_docker) -> None:
+    """A third-party repository that merely contains a `vibepod` path segment is not ours."""
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.images.list.return_value = [
+        _fake_image("sha256:foreign", [], ["ghcr.io/acme/vibepod/tool@sha256:aaa"]),
+    ]
+
+    manager = DockerManager()
+
+    assert manager.clean_untagged_images() == 0
+    mock_client.images.remove.assert_not_called()
+
+
+@patch("vibepod.core.docker.docker")
+def test_clean_untagged_images_skips_images_still_in_use(mock_docker) -> None:
+    """A container holding one image must not stop the rest of the sweep."""
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.images.list.return_value = [
+        _fake_image("sha256:in-use", [], ["vibepod/claude@sha256:aaa"]),
+        _fake_image("sha256:free", [], ["vibepod/claude@sha256:bbb"]),
+    ]
+    mock_client.images.remove.side_effect = [
+        APIError("conflict: image is being used by stopped container"),
+        None,
+    ]
+
+    manager = DockerManager()
+    removed = manager.clean_untagged_images()
+
+    assert removed == 1
+    assert [call.args[0] for call in mock_client.images.remove.call_args_list] == [
+        "sha256:in-use",
+        "sha256:free",
+    ]
+
+
+@patch("vibepod.core.docker.docker")
+def test_clean_untagged_images_survives_list_failure(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.images.list.side_effect = DockerException("connection refused")
+
+    manager = DockerManager()
+
+    assert manager.clean_untagged_images() == 0
+
+
+@patch("vibepod.core.docker.docker")
+def test_pull_image_cleans_untagged_images(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.api.pull.return_value = [{"status": "Downloaded newer image"}]
+    mock_client.images.list.return_value = [
+        _fake_image("sha256:old", [], ["vibepod/claude@sha256:aaa"]),
+    ]
+
+    manager = DockerManager()
+    manager.pull_image("vibepod/claude:latest", auto_clean=True)
+
+    mock_client.images.remove.assert_called_once_with("sha256:old")
+
+
+@patch("vibepod.core.docker.docker")
+def test_pull_image_keeps_untagged_images_by_default(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.api.pull.return_value = [{"status": "Downloaded newer image"}]
+
+    manager = DockerManager()
+    manager.pull_image("vibepod/claude:latest")
+
+    mock_client.images.list.assert_not_called()
+    mock_client.images.remove.assert_not_called()
+
+
+@patch("vibepod.core.docker.docker")
+def test_pull_if_newer_cleans_untagged_images_even_when_up_to_date(mock_docker) -> None:
+    """The sweep also clears leftovers from earlier pulls whose removal failed."""
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_image = MagicMock()
+    mock_image.id = "sha256:same"
+    mock_client.images.get.side_effect = [mock_image, mock_image]
+    mock_client.api.pull.return_value = [{"status": "Image is up to date"}]
+    mock_client.images.list.return_value = [
+        _fake_image("sha256:leftover", [], ["vibepod/claude@sha256:aaa"]),
+    ]
+
+    manager = DockerManager()
+    updated = manager.pull_if_newer("vibepod/claude:latest", auto_clean=True)
+
+    assert updated is False
+    mock_client.images.remove.assert_called_once_with("sha256:leftover")
+
+
 @patch("vibepod.core.docker.docker")
 def test_pull_if_newer(mock_docker) -> None:
     mock_client = MagicMock()
@@ -149,6 +317,40 @@ def test_pull_if_newer(mock_docker) -> None:
     mock_client.api.pull.side_effect = APIError("Failed")
     updated = manager.pull_if_newer("vibepod/datasette:latest")
     assert updated is False
+
+
+@patch("vibepod.core.docker.docker")
+def test_pull_if_newer_keeps_untagged_images_by_default(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_image_old = MagicMock()
+    mock_image_old.id = "sha256:old"
+    mock_image_new = MagicMock()
+    mock_image_new.id = "sha256:new"
+
+    mock_client.images.get.side_effect = [mock_image_old, mock_image_new]
+    mock_client.api.pull.return_value = [{"status": "Downloaded newer image"}]
+
+    manager = DockerManager()
+    updated = manager.pull_if_newer("vibepod/claude:latest")
+
+    assert updated is True
+    mock_client.images.list.assert_not_called()
+    mock_client.images.remove.assert_not_called()
+
+
+@patch("vibepod.core.docker.docker")
+def test_image_id_returns_none_on_daemon_error(mock_docker) -> None:
+    """A daemon hiccup while reading an image id is reported as 'no image'."""
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+
+    mock_client.images.get.side_effect = APIError("daemon hiccup")
+
+    manager = DockerManager()
+
+    assert manager.image_id("vibepod/claude:latest") is None
 
 
 @patch("vibepod.core.docker.docker")

@@ -628,7 +628,7 @@ def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path)
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -723,7 +723,7 @@ def test_paste_images_flag_warns_when_display_not_set(monkeypatch, tmp_path: Pat
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -767,7 +767,7 @@ def test_paste_images_false_does_not_add_x11(monkeypatch, tmp_path: Path) -> Non
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -918,7 +918,7 @@ class _StubDockerManager:
     def is_rootless_podman(self) -> bool:
         return self.rootless_podman
 
-    def pull_image(self, image: str) -> None:
+    def pull_image(self, image: str, auto_clean: bool = False) -> None:
         self.pulled.append(image)
 
     def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1002,7 +1002,7 @@ def test_cli_run_forwards_extra_args_to_agent_command(monkeypatch, tmp_path: Pat
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1134,7 +1134,7 @@ def test_ikwid_appends_args_for_claude(monkeypatch, tmp_path: Path) -> None:
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1176,7 +1176,7 @@ def test_ikwid_appends_args_for_codex(monkeypatch, tmp_path: Path) -> None:
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1220,7 +1220,7 @@ def test_ikwid_appends_args_for_gemini(monkeypatch, tmp_path: Path) -> None:
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1270,7 +1270,7 @@ def test_ikwid_appends_args_for_copilot(monkeypatch, tmp_path: Path) -> None:
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1314,7 +1314,7 @@ def test_ikwid_appends_args_for_devstral(monkeypatch, tmp_path: Path) -> None:
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1363,7 +1363,7 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1408,7 +1408,7 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1450,7 +1450,7 @@ def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> Non
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1507,7 +1507,7 @@ def test_llm_enabled_injects_openai_env_vars_for_codex(monkeypatch, tmp_path: Pa
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1560,7 +1560,7 @@ def test_llm_disabled_does_not_inject_env_vars(monkeypatch, tmp_path: Path) -> N
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1616,7 +1616,7 @@ def test_llm_skipped_for_agent_without_mapping(monkeypatch, tmp_path: Path) -> N
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1668,7 +1668,7 @@ def test_llm_empty_model_not_injected(monkeypatch, tmp_path: Path) -> None:
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1722,7 +1722,7 @@ def test_llm_per_agent_env_overrides_llm(monkeypatch, tmp_path: Path) -> None:
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1790,7 +1790,7 @@ def test_run_forwards_host_terminal_env(monkeypatch, tmp_path: Path) -> None:
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1841,7 +1841,7 @@ def test_run_sets_default_term_when_host_term_missing(monkeypatch, tmp_path: Pat
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
@@ -1895,7 +1895,7 @@ def _make_capturing_docker_manager():
         def networks_with_running_containers(self) -> list[str]:
             return []
 
-        def pull_image(self, image: str) -> None:
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]

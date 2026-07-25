@@ -30,6 +30,7 @@ def _default_config() -> dict[str, Any]:
         "version": 1,
         "default_agent": "claude",
         "auto_pull": True,
+        "auto_clean": True,
         "auto_remove": True,
         "network": "vibepod-network",
         "log_level": "info",
@@ -164,6 +165,7 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
     mappings: dict[str, tuple[str, Any]] = {
         "VP_DEFAULT_AGENT": ("default_agent", str),
         "VP_AUTO_PULL": ("auto_pull", lambda x: x.lower() == "true"),
+        "VP_AUTO_CLEAN": ("auto_clean", lambda x: x.lower() == "true"),
         "VP_LOG_LEVEL": ("log_level", str),
         "VP_NO_COLOR": ("no_color", lambda x: x.lower() == "true"),
         "VP_DATASETTE_PORT": ("logging.ui_port", int),

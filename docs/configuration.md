@@ -23,6 +23,15 @@ default_agent: claude
 # Can be overridden per agent with agents.<agent>.auto_pull
 auto_pull: true
 
+# Remove untagged vibepod images after a pull (default: true)
+# When a pull retags `latest`, the previous image stays behind untagged
+# (`vibepod/claude   <none>`) and such images accumulate over time. With
+# auto_clean every pull sweeps the whole `vibepod/` namespace, so leftovers
+# from earlier pulls are cleared too. Tagged images, images of other
+# namespaces, and images still used by a container are never removed — an
+# image held by a container is picked up by a later sweep instead.
+auto_clean: true
+
 # Remove the container automatically when it stops (default: true)
 auto_remove: true
 
@@ -129,6 +138,7 @@ These variables override the corresponding config keys without editing any file:
 |---|---|---|
 | `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=vibe` |
 | `VP_AUTO_PULL` | `auto_pull` | `VP_AUTO_PULL=true` |
+| `VP_AUTO_CLEAN` | `auto_clean` | `VP_AUTO_CLEAN=false` |
 | `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
 | `VP_NO_COLOR` | `no_color` | `VP_NO_COLOR=true` |
 | `VP_DATASETTE_PORT` | `logging.ui_port` | `VP_DATASETTE_PORT=9001` |
