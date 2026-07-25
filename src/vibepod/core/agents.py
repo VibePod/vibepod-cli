@@ -146,6 +146,19 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         platform="linux/amd64",
         ikwid_args=["--dangerously-skip-permissions"],
     ),
+    "tau": AgentSpec(
+        "tau",
+        "huggingface",
+        DEFAULT_IMAGES["tau"],
+        "tau",
+        ["tau"],
+        "/config",
+        # Tau derives every user-level path from HOME (~/.tau for sessions,
+        # credentials, providers.json and catalog.toml), so the persisted config
+        # mount at /config is all it needs.
+        {"HOME": "/config", "TAU_NO_UPDATE_CHECK": "1"},
+        headless_prefix=["-p"],
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

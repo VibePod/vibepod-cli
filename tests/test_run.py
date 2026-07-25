@@ -87,7 +87,7 @@ def test_agent_extra_volumes_for_auggie(tmp_path: Path) -> None:
 def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
     config_dir = tmp_path / "agents" / "claude"
     # Agents without explicit volume mappings return empty
-    for agent in ("claude", "gemini", "codex", "devstral", "pi", "agy"):
+    for agent in ("claude", "gemini", "codex", "devstral", "pi", "agy", "tau"):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
 
@@ -195,6 +195,28 @@ def test_skills_mounts_for_pi_use_agent_dir_skills_path(
 
     assert run_cmd._skills_mounts_for_agent("pi", tmp_path) == [
         (str(skill_dir.resolve()), "/config/.pi/agent/skills/example", "ro")
+    ]
+
+
+def test_skills_mounts_for_tau_use_agents_skills_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    skill_dir = local_root / "installed" / "example"
+    skill_dir.mkdir(parents=True)
+    user_root.mkdir()
+    (local_root / "skills-lock.json").write_text(
+        json.dumps({"skills": {"example": {"path": "installed/example"}}}),
+        encoding="utf-8",
+    )
+    (user_root / "skills-lock.json").write_text(json.dumps({"skills": {}}), encoding="utf-8")
+
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+
+    assert run_cmd._skills_mounts_for_agent("tau", tmp_path) == [
+        (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro")
     ]
 
 

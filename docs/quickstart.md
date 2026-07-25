@@ -126,8 +126,8 @@ Press **Ctrl+C** to stop the container when you are done.
 ## Shortcuts
 
 You can start agents with the full agent command. Most agents also have a single-letter
-shortcut; Pi uses `vp pi` because `vp p` is assigned to Copilot, and Agy uses
-`vp n`.
+shortcut; Pi uses `vp pi` because `vp p` is assigned to Copilot, Agy uses
+`vp n`, and Tau uses `vp t`.
 
 ```bash
 vp claude   # full name

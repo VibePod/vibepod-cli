@@ -63,6 +63,19 @@ def test_agy_spec_matches_container_contract() -> None:
     assert spec.platform == "linux/amd64"
 
 
+def test_tau_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("tau")
+    assert spec.id == "tau"
+    assert spec.provider == "huggingface"
+    assert spec.image == DEFAULT_IMAGES["tau"]
+    assert spec.config_subdir == "tau"
+    assert spec.command == ["tau"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env["HOME"] == "/config"
+    assert spec.extra_env["TAU_NO_UPDATE_CHECK"] == "1"
+    assert spec.headless_prefix == ["-p"]
+
+
 def test_get_agent_spec_unknown() -> None:
     with pytest.raises(ValueError):
         get_agent_spec("unknown")
@@ -116,7 +129,7 @@ def test_gemini_spec_runs_via_node_wrapper() -> None:
 
 
 def test_unsupported_agents_have_no_ikwid_args() -> None:
-    for agent in ("opencode", "auggie"):
+    for agent in ("opencode", "auggie", "tau"):
         spec = get_agent_spec(agent)
         assert spec.ikwid_args is None, f"{agent} should not have ikwid_args"
 
@@ -156,7 +169,7 @@ def test_codex_spec_has_llm_env_map() -> None:
 
 
 def test_agents_without_llm_env_map() -> None:
-    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot", "pi", "agy"):
+    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot", "pi", "agy", "tau"):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
 

@@ -108,6 +108,14 @@ def _default_config() -> dict[str, Any]:
                 "volumes": [],
                 "init": [],
             },
+            "tau": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["tau"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,

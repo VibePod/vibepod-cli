@@ -120,6 +120,21 @@ def test_pi_alias_runs_agent(monkeypatch) -> None:
     assert called["passthrough"] == []
 
 
+def test_tau_shortcut_runs_tau(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["t"])
+    assert result.exit_code == 0
+    assert called["agent"] == "tau"
+    assert called["passthrough"] == []
+
+
 def test_copilot_shortcut_still_runs_copilot(monkeypatch) -> None:
     called: dict[str, object] = {"agent": None, "passthrough": None}
 
