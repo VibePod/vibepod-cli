@@ -166,6 +166,132 @@ def test_add_rejects_missing_local_locator(tmp_path: Path) -> None:
         skills_engine.add("./missing", scope="user", cwd=tmp_path)
 
 
+def test_add_mounts_bare_relative_local_locator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cwd = tmp_path / "project"
+    source = cwd / "skills" / "researcher"
+    source.mkdir(parents=True)
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+
+    fake_run, captured = _fake_run_factory(stdout=json.dumps([]))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    skills_engine.add("skills/researcher", scope="user", cwd=cwd)
+
+    cmd = captured["cmd"]
+    mount_args = [arg for i, arg in enumerate(cmd) if cmd[i - 1] == "-v"]
+    assert f"{source.resolve()}:{source.resolve()}:ro" in mount_args
+    assert "-w" in cmd
+    assert str(cwd.resolve()) in cmd
+    # locator string reaches the engine unmodified
+    assert "skills/researcher" in cmd
+
+
+def test_add_mounts_current_directory_locator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "skill"
+    source.mkdir()
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+
+    fake_run, captured = _fake_run_factory(stdout=json.dumps([]))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    skills_engine.add(".", scope="user", cwd=source)
+
+    cmd = captured["cmd"]
+    mount_args = [arg for i, arg in enumerate(cmd) if cmd[i - 1] == "-v"]
+    assert f"{source.resolve()}:{source.resolve()}:ro" in mount_args
+    assert "." in cmd
+
+
+def test_add_does_not_mount_remote_locators(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+
+    fake_run, captured = _fake_run_factory(stdout=json.dumps([]))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    remotes = (
+        "github:org/repo",
+        "npm:@acme/pkg",
+        "https://git.example.com/x.git",
+        "git@git.example.com:org/repo.git",
+        "ftp://x/y",
+    )
+    for locator in remotes:
+        skills_engine.add(locator, scope="user", cwd=tmp_path)
+        cmd = captured["cmd"]
+        mount_args = [arg for i, arg in enumerate(cmd) if cmd[i - 1] == "-v"]
+        assert not any(m.endswith(":ro") for m in mount_args), locator
+        assert "-w" not in cmd, locator
+
+
+def test_add_expands_tilde_local_locator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home"
+    source = home / "skills" / "foo"
+    source.mkdir(parents=True)
+    # POSIX expanduser reads HOME, ntpath.expanduser reads USERPROFILE.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+
+    fake_run, captured = _fake_run_factory(stdout=json.dumps([]))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    skills_engine.add("~/skills/foo", scope="user", cwd=tmp_path)
+
+    cmd = captured["cmd"]
+    mount_args = [arg for i, arg in enumerate(cmd) if cmd[i - 1] == "-v"]
+    assert f"{source.resolve()}:{source.resolve()}:ro" in mount_args
+    # the engine receives the expanded absolute path, never a bare "~"
+    assert str(home / "skills" / "foo") in cmd
+    assert not any(arg.startswith("~") for arg in cmd)
+
+
+def test_is_local_locator_classifies_paths_and_schemes() -> None:
+    """Platform-independent: a Windows drive letter is a path, not a scheme."""
+    for local in (
+        "skills/foo",
+        "./skills/foo",
+        "../shared/skills/foo",
+        "/abs/path",
+        ".",
+        "..",
+        "~/skills/foo",
+        r"C:\dev\skills\foo",
+        "C:/dev/skills/foo",
+        # a directory literally named "git@..." has no scp remote separator
+        "git@local-skill",
+        "./git@local-skill",
+    ):
+        assert skills_engine._is_local_locator(local), local
+
+    for remote in (
+        "github:org/repo",
+        "gitlab:group/repo",
+        "npm:@acme/pkg",
+        "https://git.example.com/x.git",
+        "http://git.example.com/x.git",
+        "ftp://x/y",
+        "git@git.example.com:org/repo.git",
+    ):
+        assert not skills_engine._is_local_locator(remote), remote
+
+
+def test_add_rejects_missing_bare_local_locator(tmp_path: Path) -> None:
+    with pytest.raises(skills_engine.SkillsEngineError, match="Local skill locator not found"):
+        skills_engine.add("skills/missing", scope="user", cwd=tmp_path)
+
+
 def test_run_engine_pulls_image_when_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
