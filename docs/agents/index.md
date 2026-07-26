@@ -210,6 +210,32 @@ Example:
 vp run codex --ikwid
 ```
 
+## Pasting images (`--paste-images`)
+
+Agents that accept pasted screenshots need access to your clipboard, which lives
+on the host X server. Use `--paste-images` to forward it:
+
+```bash
+vp run claude --paste-images
+```
+
+VibePod mounts the X11 socket (`/tmp/.X11-unix`), passes your `DISPLAY`, and
+prepares an X authority cookie for the container. Host cookies are bound to the
+host's hostname, which the container does not share, so VibePod rewrites the
+cookie to the wildcard address family and mounts it read-only at
+`/tmp/.vibepod-xauth`. Without that rewrite the X server answers with
+"Authorization required, but no authorization protocol specified".
+
+Requirements and caveats:
+
+- `DISPLAY` must be set; otherwise VibePod warns and starts without forwarding.
+- The `xauth` binary must be available on the host, otherwise the cookie cannot
+  be prepared and clipboard access may be rejected.
+- X11 only (including XWayland). There is no Wayland-native or macOS clipboard
+  forwarding.
+- Forwarding the X socket lets the container talk to your X server; only use it
+  with agents you trust.
+
 ## Detached mode
 
 Use `-d` / `--detach` to start an agent container in the background without attaching your terminal. The agent process starts immediately inside the container — `-d` only controls whether VibePod attaches your terminal to it.
