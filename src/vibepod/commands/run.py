@@ -349,7 +349,10 @@ def run(
         # the host on the port Codex's redirect URI expects.
         merged_env["VIBEPOD_OAUTH_FORWARD_PORT"] = str(CODEX_OAUTH_FORWARD_PORT)
         # Merged last so a configured binding for the same container port loses:
-        # during `codex login` the callback forwarder must own this port.
+        # during `codex login` the callback forwarder must own this port. A
+        # proto-less config key ("1456") survives this literal merge, but
+        # docker-py normalizes both keys to "1456/tcp" and insertion order
+        # still makes the OAuth binding win.
         agent_ports = {
             **(agent_ports or {}),
             f"{CODEX_OAUTH_FORWARD_PORT}/tcp": CODEX_OAUTH_CALLBACK_PORT,

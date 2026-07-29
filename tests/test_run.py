@@ -164,6 +164,27 @@ def test_agent_port_bindings_rejects_invalid_entries() -> None:
         launch.agent_port_bindings("claude", {"ports": {"8000": 8000}})
 
 
+def test_agent_port_bindings_rejects_out_of_range_ports() -> None:
+    # Container port out of range.
+    with pytest.raises(typer.BadParameter, match=r"out of range"):
+        launch.agent_port_bindings("claude", {"ports": ["8000:70000"]})
+
+    # Host port out of range.
+    with pytest.raises(typer.BadParameter, match=r"out of range"):
+        launch.agent_port_bindings("claude", {"ports": ["99999:8000"]})
+
+    # YAML 1.1 sexagesimal surprise: unquoted `3000:30` loads as the int
+    # 180030, which must not silently publish container port 180030.
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.ports\[1\].*out of range"):
+        launch.agent_port_bindings("claude", {"ports": [180030]})
+
+    # Port 0 stays valid on the host side (daemon assigns an ephemeral port)
+    # but not as a container port.
+    assert launch.agent_port_bindings("claude", {"ports": ["0:80"]}) == {"80": ["0"]}
+    with pytest.raises(typer.BadParameter, match=r"out of range"):
+        launch.agent_port_bindings("claude", {"ports": ["8000:0"]})
+
+
 def test_skills_mounts_for_agent_ignores_malformed_lockfiles(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

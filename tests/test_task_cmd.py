@@ -172,6 +172,22 @@ def test_task_create_publishes_configured_ports(monkeypatch, tmp_path, tmp_task_
     assert stub.run_kwargs["ports"] == {"8000": ["8000"], "6000/udp": ["6000"]}
 
 
+def test_task_create_rejects_invalid_ports_before_docker(
+    monkeypatch, tmp_path, tmp_task_store
+) -> None:
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["claude"]["ports"] = ["not-a-port"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.ports\[1\]"):
+        task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+
+
 def test_task_create_without_configured_ports_publishes_none(
     monkeypatch, tmp_path, tmp_task_store
 ) -> None:

@@ -253,6 +253,12 @@ agents:
       - "3000"                 # container port on a random host port
 ```
 
+!!! warning "Always quote port entries"
+    YAML 1.1 parses unquoted `host:container` pairs as base-60 numbers:
+    `- 22:22` loads as the integer `1342` and would publish the wrong port.
+    Out-of-range results (e.g. `3000:30` → `180030`) are rejected at startup,
+    but in-range ones are not detectable — quote every entry.
+
 Like other agent keys, a project-level `ports` list replaces the global one for that agent. The list applies to both `vp run` and `vp task` containers; note that two containers cannot publish the same host port at the same time, so a fixed host port limits you to one such container per agent.
 
 ## The built-in proxy
