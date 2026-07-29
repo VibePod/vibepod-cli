@@ -14,8 +14,10 @@ from vibepod.core.profiles import (
     create_profile,
     list_profiles,
     profile_agents_root,
+    profile_exists,
     remove_profile,
     resolve_profile,
+    validate_profile_name,
 )
 from vibepod.utils.console import console, error, success
 
@@ -71,6 +73,14 @@ def remove(
     """Remove a profile and its stored credentials."""
     if name == DEFAULT_PROFILE:
         error("Profile 'default' cannot be removed.")
+        raise typer.Exit(code=1)
+    try:
+        validate_profile_name(name)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from exc
+    if not profile_exists(name):
+        error(f"Profile '{name}' does not exist.")
         raise typer.Exit(code=1)
     if not yes:
         typer.confirm(

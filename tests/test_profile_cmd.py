@@ -79,6 +79,19 @@ def test_profile_remove_unknown(config_root: Path) -> None:
     assert result.exit_code != 0
 
 
+def test_profile_remove_validates_before_confirmation(config_root: Path) -> None:
+    # invalid/unknown names must error out without ever prompting
+    result = runner.invoke(app, ["profile", "remove", "missing"])
+    assert result.exit_code == 1
+    assert "does not exist" in result.output
+    assert "Remove profile" not in result.output
+
+    result = runner.invoke(app, ["profile", "remove", ".."])
+    assert result.exit_code == 1
+    assert "Invalid profile name" in result.output
+    assert "Remove profile" not in result.output
+
+
 def test_profile_remove_asks_for_confirmation(config_root: Path) -> None:
     runner.invoke(app, ["profile", "create", "work"])
     result = runner.invoke(app, ["profile", "remove", "work"], input="n\n")
