@@ -399,12 +399,15 @@ class DockerManager:
             # missing id as "no confirmed image", never as a failure to report.
             return None
 
-    def build_image(self, context_tar: Any, tag: str, labels: dict[str, str]) -> None:
+    def build_image(
+        self, context_tar: Any, tag: str, labels: dict[str, str], *, nocache: bool = False
+    ) -> None:
         """Build *tag* from an in-memory custom-context tar, streaming output.
 
         The tar must contain a complete Dockerfile (see
         :func:`vibepod.core.overlay.build_context_tar`); nothing is written to
-        the host filesystem.
+        the host filesystem. *nocache* disables docker's layer cache so a
+        forced rebuild re-runs every instruction.
         """
         try:
             chunks = self.client.api.build(
@@ -413,6 +416,7 @@ class DockerManager:
                 tag=tag,
                 labels=labels,
                 rm=True,
+                nocache=nocache,
                 decode=True,
             )
             for chunk in chunks:

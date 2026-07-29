@@ -208,6 +208,15 @@ def get_project_config_path(cwd: Path | None = None) -> Path:
     return base / PROJECT_CONFIG_FILE
 
 
+def load_project_config(workspace: Path) -> dict[str, Any]:
+    """Return the raw project config committed in *workspace*, without merging.
+
+    get_config merges the project file of the *current* directory; use this
+    when the relevant project lives elsewhere (e.g. ``vp run -w /other``).
+    """
+    return _load_yaml(workspace / PROJECT_CONFIG_FILE)
+
+
 def get_config() -> dict[str, Any]:
     """Return merged effective config."""
     ensure_config_dirs()

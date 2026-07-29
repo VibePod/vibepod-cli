@@ -49,58 +49,75 @@ def test_find_overlay_dockerfile_ignores_directory_named_dockerfile(tmp_path: Pa
     assert overlay.find_overlay_dockerfile(tmp_path, "claude") is None
 
 
+def _hash(base_ref: str, dockerfile: Path, base_image: str = "base:latest") -> str:
+    """Hash a context the way apply_overlay does: over the snapshot tar."""
+    return overlay.overlay_hash(
+        base_ref, overlay.build_context_tar(base_image, dockerfile).getvalue()
+    )
+
+
 def test_overlay_hash_is_stable(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    first = overlay.overlay_hash("sha256:abc", dockerfile)
-    second = overlay.overlay_hash("sha256:abc", dockerfile)
+    first = _hash("sha256:abc", dockerfile)
+    second = _hash("sha256:abc", dockerfile)
     assert first == second
     assert len(first) == 12
 
 
 def test_overlay_hash_changes_with_base_image(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    assert overlay.overlay_hash("sha256:abc", dockerfile) != overlay.overlay_hash(
-        "sha256:def", dockerfile
-    )
+    assert _hash("sha256:abc", dockerfile) != _hash("sha256:def", dockerfile)
 
 
 def test_overlay_hash_changes_with_fragment(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    before = _hash("sha256:abc", dockerfile)
     dockerfile.write_bytes(b"RUN apt-get update\n")
-    assert overlay.overlay_hash("sha256:abc", dockerfile) != before
+    assert _hash("sha256:abc", dockerfile) != before
 
 
 def test_overlay_hash_includes_context_files(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    before = _hash("sha256:abc", dockerfile)
     (dockerfile.parent / "requirements.txt").write_bytes(b"requests\n")
-    assert overlay.overlay_hash("sha256:abc", dockerfile) != before
+    assert _hash("sha256:abc", dockerfile) != before
 
 
 def test_overlay_hash_changes_when_context_file_renamed(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
     extra = dockerfile.parent / "a.txt"
     extra.write_bytes(b"data\n")
-    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    before = _hash("sha256:abc", dockerfile)
     extra.rename(dockerfile.parent / "b.txt")
-    assert overlay.overlay_hash("sha256:abc", dockerfile) != before
+    assert _hash("sha256:abc", dockerfile) != before
 
 
 def test_overlay_hash_walks_nested_context_dirs(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    before = _hash("sha256:abc", dockerfile)
     nested = dockerfile.parent / "scripts"
     nested.mkdir()
     (nested / "setup.sh").write_bytes(b"echo hi\n")
-    assert overlay.overlay_hash("sha256:abc", dockerfile) != before
+    assert _hash("sha256:abc", dockerfile) != before
 
 
 def test_shared_overlay_hash_excludes_agent_subdirs(tmp_path: Path) -> None:
     shared = _make_overlay(tmp_path)
-    before = overlay.overlay_hash("sha256:abc", shared)
+    before = _hash("sha256:abc", shared)
     _make_overlay(tmp_path, "gemini", content="RUN apt-get install -y jq\n")
-    assert overlay.overlay_hash("sha256:abc", shared) == before
+    assert _hash("sha256:abc", shared) == before
+
+
+def test_overlay_hash_distinguishes_file_boundaries(tmp_path: Path) -> None:
+    """Same concatenated bytes split differently across files must not collide."""
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    dockerfile_a = _make_overlay(ws_a)
+    dockerfile_b = _make_overlay(ws_b)
+    (dockerfile_a.parent / "f").write_bytes(b"hellog\n-world")
+    (dockerfile_b.parent / "f").write_bytes(b"hello")
+    (dockerfile_b.parent / "g").write_bytes(b"world")
+    assert _hash("sha256:abc", dockerfile_a) != _hash("sha256:abc", dockerfile_b)
 
 
 def test_overlay_image_tag_embeds_agent_and_hash() -> None:
@@ -157,9 +174,9 @@ def test_symlinks_excluded_from_hash_and_tar(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
     secret = tmp_path / "outside.txt"
     secret.write_bytes(b"secret\n")
-    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    before = _hash("sha256:abc", dockerfile)
     _symlink_or_skip(secret, dockerfile.parent / "link.txt")
-    assert overlay.overlay_hash("sha256:abc", dockerfile) == before
+    assert _hash("sha256:abc", dockerfile) == before
     entries = _read_tar(overlay.build_context_tar("base:latest", dockerfile))
     assert "link.txt" not in entries
 
@@ -169,11 +186,30 @@ def test_files_under_symlinked_dir_excluded(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "data.txt").write_bytes(b"data\n")
-    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    before = _hash("sha256:abc", dockerfile)
     _symlink_or_skip(outside, dockerfile.parent / "linked")
-    assert overlay.overlay_hash("sha256:abc", dockerfile) == before
+    assert _hash("sha256:abc", dockerfile) == before
     entries = _read_tar(overlay.build_context_tar("base:latest", dockerfile))
     assert "linked/data.txt" not in entries
+
+
+def test_find_overlay_dockerfile_rejects_symlinked_dockerfile(tmp_path: Path) -> None:
+    outside = tmp_path / "outside-dockerfile"
+    outside.write_bytes(b"RUN echo outside\n")
+    link = tmp_path / ".vibepod" / "overlay" / "Dockerfile"
+    link.parent.mkdir(parents=True)
+    _symlink_or_skip(outside, link)
+    assert overlay.find_overlay_dockerfile(tmp_path, "claude") is None
+
+
+def test_find_overlay_dockerfile_symlinked_agent_falls_back_to_shared(tmp_path: Path) -> None:
+    shared = _make_overlay(tmp_path)
+    outside = tmp_path / "outside-dockerfile"
+    outside.write_bytes(b"RUN echo outside\n")
+    agent_link = tmp_path / ".vibepod" / "overlay" / "claude" / "Dockerfile"
+    agent_link.parent.mkdir(parents=True)
+    _symlink_or_skip(outside, agent_link)
+    assert overlay.find_overlay_dockerfile(tmp_path, "claude") == shared
 
 
 class _FakeManager:
@@ -188,8 +224,8 @@ class _FakeManager:
             return self.ids[image]
         return "sha256:built" if image in self.existing else None
 
-    def build_image(self, context_tar, tag, labels):
-        self.built.append((tag, labels))
+    def build_image(self, context_tar, tag, labels, nocache=False):
+        self.built.append((tag, labels, context_tar, nocache))
         self.existing.add(tag)
 
     def remove_stale_overlays(self, overlay_key, keep_tag):
@@ -211,34 +247,45 @@ def test_apply_overlay_builds_and_returns_overlay_tag(tmp_path: Path) -> None:
     (built,) = manager.built
     assert built[0] == result
     assert built[1]["vibepod.managed"] == "true"
+    assert built[3] is False
     assert manager.swept == [(built[1]["vibepod.overlay.key"], result)]
+
+
+def test_apply_overlay_builds_the_snapshot_it_hashed(tmp_path: Path) -> None:
+    """The tar handed to docker must be the exact bytes the tag was derived from."""
+    _make_overlay(tmp_path)
+    manager = _FakeManager(image_ids={"base:latest": "sha256:base"})
+    result = overlay.apply_overlay(manager, tmp_path, "claude", "base:latest")
+    ((tag, _, context_tar, _),) = manager.built
+    digest = overlay.overlay_hash("sha256:base", context_tar.getvalue())
+    assert tag == overlay.overlay_image_tag("claude", digest) == result
 
 
 def test_apply_overlay_skips_build_when_image_exists(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    digest = overlay.overlay_hash("sha256:base", dockerfile)
+    digest = _hash("sha256:base", dockerfile)
     tag = overlay.overlay_image_tag("claude", digest)
     manager = _FakeManager(existing_images=[tag], image_ids={"base:latest": "sha256:base"})
     assert overlay.apply_overlay(manager, tmp_path, "claude", "base:latest") == tag
     assert manager.built == []
 
 
-def test_apply_overlay_rebuild_forces_build(tmp_path: Path) -> None:
+def test_apply_overlay_rebuild_forces_uncached_build(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    digest = overlay.overlay_hash("sha256:base", dockerfile)
+    digest = _hash("sha256:base", dockerfile)
     tag = overlay.overlay_image_tag("claude", digest)
     manager = _FakeManager(existing_images=[tag], image_ids={"base:latest": "sha256:base"})
     assert overlay.apply_overlay(manager, tmp_path, "claude", "base:latest", rebuild=True) == tag
-    assert [built_tag for built_tag, _ in manager.built] == [tag]
+    ((built_tag, _, _, nocache),) = manager.built
+    assert built_tag == tag
+    assert nocache is True
 
 
 def test_apply_overlay_hashes_tag_when_base_not_local(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
     manager = _FakeManager()
     result = overlay.apply_overlay(manager, tmp_path, "claude", "base:latest")
-    assert result == overlay.overlay_image_tag(
-        "claude", overlay.overlay_hash("base:latest", dockerfile)
-    )
+    assert result == overlay.overlay_image_tag("claude", _hash("base:latest", dockerfile))
 
 
 def test_apply_overlay_key_differs_per_workspace_and_agent(tmp_path: Path) -> None:
@@ -250,8 +297,8 @@ def test_apply_overlay_key_differs_per_workspace_and_agent(tmp_path: Path) -> No
     manager_b = _FakeManager()
     overlay.apply_overlay(manager_a, ws_a, "claude", "base:latest")
     overlay.apply_overlay(manager_b, ws_b, "claude", "base:latest")
-    ((_, labels_a),) = manager_a.built
-    ((_, labels_b),) = manager_b.built
+    ((_, labels_a, _, _),) = manager_a.built
+    ((_, labels_b, _, _),) = manager_b.built
     assert labels_a["vibepod.overlay.key"] != labels_b["vibepod.overlay.key"]
 
 
@@ -314,6 +361,52 @@ def test_apply_overlay_if_enabled_respects_agent_config(
     assert result == "base:latest"
 
 
+def _write_project_config(workspace: Path, content: str) -> None:
+    config_path = workspace / ".vibepod" / "config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(content, encoding="utf-8")
+
+
+def test_apply_overlay_if_enabled_respects_workspace_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """agents.<agent>.overlay: false in the *workspace* project config wins,
+    even when get_config() was resolved from a different current directory."""
+    monkeypatch.setattr(
+        launch.overlay, "apply_overlay", lambda *a, **k: pytest.fail("should not build")
+    )
+    _write_project_config(tmp_path, "agents:\n  claude:\n    overlay: false\n")
+    result = launch.apply_overlay_if_enabled(
+        manager="mgr",
+        workspace_path=tmp_path,
+        agent="claude",
+        image="base:latest",
+        agent_cfg={},
+        no_overlay=False,
+        rebuild_overlay=False,
+    )
+    assert result == "base:latest"
+
+
+def test_apply_overlay_if_enabled_workspace_config_overrides_cwd_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        launch.overlay, "apply_overlay", lambda *a, **k: "vibepod/overlay-claude:abc"
+    )
+    _write_project_config(tmp_path, "agents:\n  claude:\n    overlay: true\n")
+    result = launch.apply_overlay_if_enabled(
+        manager="mgr",
+        workspace_path=tmp_path,
+        agent="claude",
+        image="base:latest",
+        agent_cfg={"overlay": False},
+        no_overlay=False,
+        rebuild_overlay=False,
+    )
+    assert result == "vibepod/overlay-claude:abc"
+
+
 def test_apply_overlay_if_enabled_exits_on_build_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -339,11 +432,11 @@ def test_overlay_hash_changes_with_exec_bit(tmp_path: Path) -> None:
     script = dockerfile.parent / "setup.sh"
     script.write_bytes(b"#!/bin/sh\n")
     script.chmod(0o644)
-    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    before = _hash("sha256:abc", dockerfile)
 
     script.chmod(0o755)
 
-    assert overlay.overlay_hash("sha256:abc", dockerfile) != before
+    assert _hash("sha256:abc", dockerfile) != before
 
 
 @pytest.mark.skipif(os.name == "nt", reason="exec bits are POSIX-only")

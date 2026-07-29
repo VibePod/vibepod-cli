@@ -31,6 +31,9 @@ RUN pip install -r /tmp/requirements.txt
 ```
 
 Because the directory is committable, the whole team shares the environment.
+Symlinks anywhere in the overlay directory — including a symlinked
+`Dockerfile` — are ignored: their targets may not exist on a teammate's
+machine or may point outside the committed project.
 
 ## Compared to `init` and custom images
 
@@ -45,7 +48,8 @@ Because the directory is committable, the whole team shares the environment.
 ## Controls
 
 - `vp run <agent> --no-overlay` — skip the overlay for one run
-- `vp run <agent> --rebuild-overlay` — force a rebuild
+- `vp run <agent> --rebuild-overlay` — force a rebuild, bypassing docker's
+  layer cache so every instruction re-runs
 - `agents.<agent>.overlay: false` in `.vibepod/config.yaml` or the global
   config — disable overlays for that agent
 

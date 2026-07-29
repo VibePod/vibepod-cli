@@ -28,10 +28,14 @@ OVERLAY_KEY_LABEL = "vibepod.overlay.key"
 
 
 def find_overlay_dockerfile(workspace: Path, agent: str) -> Path | None:
-    """Return the overlay Dockerfile for *agent*, agent-specific one first."""
+    """Return the overlay Dockerfile for *agent*, agent-specific one first.
+
+    Symlinked Dockerfiles are ignored like every other symlink in the
+    context: the target may live outside the committed overlay directory.
+    """
     base = workspace / OVERLAY_DIR
     for candidate in (base / agent / "Dockerfile", base / "Dockerfile"):
-        if candidate.is_file():
+        if candidate.is_file() and not candidate.is_symlink():
             return candidate
     return None
 
@@ -74,23 +78,19 @@ def _context_files(dockerfile: Path) -> list[Path]:
     return sorted(files, key=lambda p: p.relative_to(context).as_posix())
 
 
-def overlay_hash(base_ref: str, dockerfile: Path) -> str:
-    """Content-address the build inputs: base image ref + fragment + context.
+def overlay_hash(base_ref: str, context_tar: bytes) -> str:
+    """Content-address the build inputs: base image ref + build context tar.
 
     *base_ref* should be the base image's local id when it exists (so a moved
-    ``latest`` tag re-hashes) and the tag string otherwise. Context files are
-    keyed by relative path as well as content, so renames re-hash too.
+    ``latest`` tag re-hashes) and the tag string otherwise. *context_tar* is
+    the byte-stable tar from :func:`build_context_tar`: its headers frame
+    every member's path, mode, and content length, so distinct contexts can
+    never collide, and hashing the same snapshot that gets built keeps the
+    tag and the image content in lockstep even when files change mid-launch.
     """
     digest = hashlib.sha256()
     digest.update(base_ref.encode() + b"\n")
-    digest.update(dockerfile.read_bytes())
-    context = dockerfile.parent
-    for path in _context_files(dockerfile):
-        digest.update(path.relative_to(context).as_posix().encode() + b"\n")
-        # The exec bit survives into the image via COPY, so a chmod must
-        # re-hash even when the content is unchanged.
-        digest.update(b"x" if path.stat().st_mode & 0o111 else b"-")
-        digest.update(path.read_bytes())
+    digest.update(context_tar)
     return digest.hexdigest()[:OVERLAY_HASH_LENGTH]
 
 
@@ -118,7 +118,8 @@ def build_context_tar(base_image: str, dockerfile: Path) -> io.BytesIO:
     Contains a synthesized ``Dockerfile`` (``FROM base_image`` prepended to
     the fragment, which therefore never needs a FROM line) plus the context
     files, so ``COPY`` works without ever writing into the user's overlay
-    directory.
+    directory. The tar doubles as the snapshot fed to overlay_hash, so the
+    context is read exactly once per launch.
     """
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
@@ -162,7 +163,8 @@ def apply_overlay(
         return base_image
 
     base_ref = manager.image_id(base_image) or base_image
-    tag = overlay_image_tag(agent, overlay_hash(base_ref, dockerfile))
+    context_tar = build_context_tar(base_image, dockerfile)
+    tag = overlay_image_tag(agent, overlay_hash(base_ref, context_tar.getvalue()))
 
     if rebuild or manager.image_id(tag) is None:
         info(f"Building overlay image {tag} from {base_image} ({dockerfile})")
@@ -172,7 +174,9 @@ def apply_overlay(
             OVERLAY_KEY_LABEL: overlay_key,
             "vibepod.overlay.agent": agent,
         }
-        manager.build_image(build_context_tar(base_image, dockerfile), tag=tag, labels=labels)
+        # A forced rebuild must also bypass docker's layer cache, or RUN
+        # commands like package updates would replay from cached layers.
+        manager.build_image(context_tar, tag=tag, labels=labels, nocache=rebuild)
         manager.remove_stale_overlays(overlay_key, keep_tag=tag)
     else:
         info(f"Using cached overlay image {tag}")

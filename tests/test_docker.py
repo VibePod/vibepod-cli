@@ -642,8 +642,21 @@ def test_build_image_streams_and_succeeds(mock_docker) -> None:
         tag="vibepod/overlay-claude:abc",
         labels={"a": "b"},
         rm=True,
+        nocache=False,
         decode=True,
     )
+
+
+@patch("vibepod.core.docker.docker")
+def test_build_image_forwards_nocache(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.api.build.return_value = iter([])
+
+    manager = DockerManager()
+    manager.build_image(io.BytesIO(b"tar"), tag="t:1", labels={}, nocache=True)
+
+    assert mock_client.api.build.call_args.kwargs["nocache"] is True
 
 
 @patch("vibepod.core.docker.docker")
