@@ -36,12 +36,25 @@ def find_overlay_dockerfile(workspace: Path, agent: str) -> Path | None:
     return None
 
 
+def _under_symlink(path: Path, context: Path) -> bool:
+    """True when any directory between *context* (exclusive) and *path* is a symlink."""
+    current = context
+    for part in path.relative_to(context).parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
 def _context_files(dockerfile: Path) -> list[Path]:
     """Context files hashed alongside the fragment, sorted by relative path.
 
     The Dockerfile itself is excluded (hashed separately as the fragment). For
     the shared overlay root, per-agent overlay roots are excluded too — they
-    are separate build contexts with their own hashes.
+    are separate build contexts with their own hashes. Symlinks (and anything
+    reached through one) are excluded outright: hashing would read the target
+    while the tar would ship the link, and a link can point outside the
+    committed overlay directory.
     """
     context = dockerfile.parent
     skipped_roots = []
@@ -51,9 +64,11 @@ def _context_files(dockerfile: Path) -> list[Path]:
             skipped_roots.append(agent_root)
     files = []
     for path in context.rglob("*"):
-        if not path.is_file() or path == dockerfile:
+        if path.is_symlink() or not path.is_file() or path == dockerfile:
             continue
         if any(root in path.parents for root in skipped_roots):
+            continue
+        if _under_symlink(path, context):
             continue
         files.append(path)
     return sorted(files, key=lambda p: p.relative_to(context).as_posix())

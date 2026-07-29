@@ -658,6 +658,16 @@ def test_build_image_raises_on_error_chunk(mock_docker) -> None:
 
 
 @patch("vibepod.core.docker.docker")
+def test_build_image_skips_non_dict_chunks(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.api.build.return_value = iter(["error: not a dict", {"stream": "Done\n"}])
+
+    manager = DockerManager()
+    manager.build_image(io.BytesIO(b"tar"), tag="t:1", labels={})
+
+
+@patch("vibepod.core.docker.docker")
 def test_build_image_wraps_api_error(mock_docker) -> None:
     mock_client = MagicMock()
     mock_docker.from_env.return_value = mock_client

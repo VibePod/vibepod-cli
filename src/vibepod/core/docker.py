@@ -416,6 +416,8 @@ class DockerManager:
                 decode=True,
             )
             for chunk in chunks:
+                if not isinstance(chunk, dict):
+                    continue
                 if "error" in chunk:
                     raise DockerClientError(f"Failed to build image {tag}: {chunk['error']}")
                 stream = chunk.get("stream")

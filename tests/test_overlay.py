@@ -145,6 +145,36 @@ def test_build_context_tar_excludes_agent_subdirs_for_shared_overlay(tmp_path: P
     assert "gemini/Dockerfile" not in entries
 
 
+def _symlink_or_skip(target: Path, link: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except (OSError, NotImplementedError):  # pragma: no cover - Windows without privilege
+        pytest.skip("platform does not allow creating symlinks")
+
+
+def test_symlinks_excluded_from_hash_and_tar(tmp_path: Path) -> None:
+    dockerfile = _make_overlay(tmp_path)
+    secret = tmp_path / "outside.txt"
+    secret.write_bytes(b"secret\n")
+    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    _symlink_or_skip(secret, dockerfile.parent / "link.txt")
+    assert overlay.overlay_hash("sha256:abc", dockerfile) == before
+    entries = _read_tar(overlay.build_context_tar("base:latest", dockerfile))
+    assert "link.txt" not in entries
+
+
+def test_files_under_symlinked_dir_excluded(tmp_path: Path) -> None:
+    dockerfile = _make_overlay(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "data.txt").write_bytes(b"data\n")
+    before = overlay.overlay_hash("sha256:abc", dockerfile)
+    _symlink_or_skip(outside, dockerfile.parent / "linked")
+    assert overlay.overlay_hash("sha256:abc", dockerfile) == before
+    entries = _read_tar(overlay.build_context_tar("base:latest", dockerfile))
+    assert "linked/data.txt" not in entries
+
+
 class _FakeManager:
     def __init__(self, existing_images=(), image_ids=None):
         self.existing = set(existing_images)
