@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import tarfile
 from pathlib import Path
 
@@ -330,3 +331,37 @@ def test_apply_overlay_if_enabled_exits_on_build_failure(
             no_overlay=False,
             rebuild_overlay=False,
         )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="exec bits are POSIX-only")
+def test_overlay_hash_changes_with_exec_bit(tmp_path: Path) -> None:
+    dockerfile = _make_overlay(tmp_path, content="COPY setup.sh /setup.sh\n")
+    script = dockerfile.parent / "setup.sh"
+    script.write_bytes(b"#!/bin/sh\n")
+    script.chmod(0o644)
+    before = overlay.overlay_hash("sha256:abc", dockerfile)
+
+    script.chmod(0o755)
+
+    assert overlay.overlay_hash("sha256:abc", dockerfile) != before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="exec bits are POSIX-only")
+def test_build_context_tar_normalizes_member_metadata(tmp_path: Path) -> None:
+    dockerfile = _make_overlay(tmp_path, content="COPY . /overlay\n")
+    script = dockerfile.parent / "setup.sh"
+    script.write_bytes(b"#!/bin/sh\n")
+    script.chmod(0o750)
+    data = dockerfile.parent / "config.txt"
+    data.write_bytes(b"x\n")
+    data.chmod(0o600)
+
+    buffer = overlay.build_context_tar("base:latest", dockerfile)
+
+    with tarfile.open(fileobj=buffer) as archive:
+        members = {member.name: member for member in archive.getmembers()}
+    assert members["setup.sh"].mode == 0o755
+    assert members["config.txt"].mode == 0o644
+    for member in members.values():
+        assert (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "")
+        assert member.mtime == 0

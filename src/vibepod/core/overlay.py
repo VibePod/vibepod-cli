@@ -87,12 +87,29 @@ def overlay_hash(base_ref: str, dockerfile: Path) -> str:
     context = dockerfile.parent
     for path in _context_files(dockerfile):
         digest.update(path.relative_to(context).as_posix().encode() + b"\n")
+        # The exec bit survives into the image via COPY, so a chmod must
+        # re-hash even when the content is unchanged.
+        digest.update(b"x" if path.stat().st_mode & 0o111 else b"-")
         digest.update(path.read_bytes())
     return digest.hexdigest()[:OVERLAY_HASH_LENGTH]
 
 
 def overlay_image_tag(agent: str, digest: str) -> str:
     return f"vibepod/overlay-{agent}:{digest}"
+
+
+def _normalize_member(member: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Keep the tar byte-stable across owners and checkouts.
+
+    Only the exec bit is build-relevant (and hashed by overlay_hash);
+    uid/gid/mtime would otherwise vary per machine while the cache key does
+    not, shipping contexts that differ from what was hashed.
+    """
+    member.mode = 0o755 if member.mode & 0o111 else 0o644
+    member.uid = member.gid = 0
+    member.uname = member.gname = ""
+    member.mtime = 0
+    return member
 
 
 def build_context_tar(base_image: str, dockerfile: Path) -> io.BytesIO:
@@ -111,7 +128,11 @@ def build_context_tar(base_image: str, dockerfile: Path) -> io.BytesIO:
         archive.addfile(info, io.BytesIO(synthesized))
         context = dockerfile.parent
         for path in _context_files(dockerfile):
-            archive.add(path, arcname=path.relative_to(context).as_posix())
+            archive.add(
+                path,
+                arcname=path.relative_to(context).as_posix(),
+                filter=_normalize_member,
+            )
     buffer.seek(0)
     return buffer
 
