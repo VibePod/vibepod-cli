@@ -18,7 +18,7 @@ def validate_profile_name(name: str) -> None:
     if not PROFILE_NAME_PATTERN.fullmatch(name):
         raise ValueError(
             f"Invalid profile name '{name}': use lowercase letters, digits, '-' and '_', "
-            "starting with a letter or digit."
+            "starting with a lowercase letter or digit."
         )
 
 
@@ -61,6 +61,7 @@ def create_profile(name: str) -> Path:
 def remove_profile(name: str) -> None:
     if name == DEFAULT_PROFILE:
         raise ValueError("Profile 'default' cannot be removed.")
+    validate_profile_name(name)
     if not profile_exists(name):
         raise ValueError(f"Profile '{name}' does not exist.")
     shutil.rmtree(profiles_root() / name)
@@ -75,6 +76,8 @@ def resolve_profile(cli_value: str | None, config: dict[str, Any]) -> str:
         or (configured if isinstance(configured, str) and configured else None)
         or DEFAULT_PROFILE
     )
+    if selected != DEFAULT_PROFILE:
+        validate_profile_name(selected)
     if not profile_exists(selected):
         raise ValueError(
             f"Profile '{selected}' does not exist. Create it with: vp profile create {selected}"

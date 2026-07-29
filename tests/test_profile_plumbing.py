@@ -30,6 +30,19 @@ def test_run_unknown_profile_fails_fast(config_root: Path) -> None:
     assert "vp profile create nope" in result.output
 
 
+def test_run_rejects_traversal_profile_name(config_root: Path) -> None:
+    result = runner.invoke(app, ["run", "claude", "--profile", ".."])
+    assert result.exit_code == 1
+    assert "Invalid profile name" in result.output
+
+
+def test_profile_remove_rejects_traversal_name(config_root: Path) -> None:
+    create_profile("work")  # ensure profiles/ exists so ".." would resolve
+    result = runner.invoke(app, ["profile", "remove", "..", "--yes"])
+    assert result.exit_code == 1
+    assert (config_root / "profiles" / "work").is_dir()
+
+
 def test_run_unknown_profile_via_vp_profile_env(
     config_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

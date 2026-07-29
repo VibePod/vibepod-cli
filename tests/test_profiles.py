@@ -103,3 +103,22 @@ def test_resolve_profile_precedence(
 def test_resolve_profile_unknown_raises(config_root: Path) -> None:
     with pytest.raises(ValueError, match="vp profile create"):
         resolve_profile("nope", {})
+
+
+def test_resolve_profile_rejects_traversal_names(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("..", "../../tmp", "a/b"):
+        with pytest.raises(ValueError, match="Invalid profile name"):
+            resolve_profile(name, {})
+    monkeypatch.setenv("VP_PROFILE", "..")
+    with pytest.raises(ValueError, match="Invalid profile name"):
+        resolve_profile(None, {})
+
+
+def test_remove_profile_rejects_traversal_names(config_root: Path) -> None:
+    (config_root / "profiles").mkdir()
+    for name in ("..", "../..", "a/b"):
+        with pytest.raises(ValueError, match="Invalid profile name"):
+            remove_profile(name)
+    assert config_root.is_dir()
