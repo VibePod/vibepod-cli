@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Final
 from uuid import uuid4
 
 _SCHEMA = """\
@@ -12,6 +13,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     id              TEXT PRIMARY KEY,
     agent           TEXT NOT NULL,
     image           TEXT NOT NULL,
+    image_tag       TEXT,
+    image_hash      TEXT,
+    agent_version   TEXT,
     workspace       TEXT NOT NULL,
     container_id    TEXT NOT NULL,
     container_name  TEXT NOT NULL,
@@ -33,6 +37,20 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent);
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 """
+
+_MIGRATION_COLUMNS: Final[dict[str, str]] = {
+    "profile": "TEXT NOT NULL DEFAULT 'default'",
+    "image_tag": "TEXT",
+    "image_hash": "TEXT",
+    "agent_version": "TEXT",
+}
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    for column, definition in _MIGRATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
 
 
 class SessionLogger:
@@ -70,6 +88,9 @@ class SessionLogger:
         container_name: str,
         profile: str,
         vibepod_version: str,
+        image_tag: str | None = None,
+        image_hash: str | None = None,
+        agent_version: str | None = None,
     ) -> str | None:
         """Create the session row.  Returns the session id, or ``None`` when disabled."""
         if not self._enabled:
@@ -80,23 +101,27 @@ class SessionLogger:
 
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        # Backfill columns first: databases from older versions may not have
-        # the profile column yet, and CREATE TABLE IF NOT EXISTS won't add it.
-        self._migrate_schema()
         self._conn.executescript(_SCHEMA)
+        # Backfill columns: databases from older versions lack the newer
+        # columns, and CREATE TABLE IF NOT EXISTS won't add them.
+        _migrate_schema(self._conn)
 
         self._session_id = uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
 
         self._conn.execute(
             "INSERT INTO sessions "
-            "(id, agent, image, workspace, container_id, container_name, profile, "
+            "(id, agent, image, image_tag, image_hash, agent_version, "
+            "workspace, container_id, container_name, profile, "
             "started_at, vibepod_version) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 self._session_id,
                 agent,
                 image,
+                image_tag,
+                image_hash,
+                agent_version,
                 workspace,
                 container_id,
                 container_name,
@@ -173,23 +198,6 @@ class SessionLogger:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
-
-    def _migrate_schema(self) -> None:
-        """Backfill columns on existing databases created by older versions."""
-        assert self._conn is not None
-        self._ensure_column("sessions", "profile", "TEXT NOT NULL DEFAULT 'default'")
-
-    def _ensure_column(self, table: str, column: str, definition: str) -> None:
-        assert self._conn is not None
-        rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
-        if not rows:
-            # Table does not exist yet; _SCHEMA will create it in full.
-            return
-        existing = {str(row[1]) for row in rows}
-        if column in existing:
-            return
-        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-        self._conn.commit()
 
     def _flush_message(self) -> None:
         """Write the current input buffer as a message row and clear it."""

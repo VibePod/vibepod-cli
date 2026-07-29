@@ -183,3 +183,84 @@ def test_store_creates_db_file_on_first_use(tmp_path: Path) -> None:
     store = TaskStore(db_path)
     store.create(**_new_kwargs())
     assert db_path.exists()
+
+
+def test_create_persists_image_metadata(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    record = store.create(
+        **_new_kwargs(),
+        image_tag="0.18.0",
+        image_hash="sha256:" + "a" * 64,
+        agent_version="2.1.0",
+    )
+
+    assert record.image_tag == "0.18.0"
+    assert record.image_hash == "sha256:" + "a" * 64
+    assert record.agent_version == "2.1.0"
+
+    retrieved = store.get(record.id)
+    assert retrieved is not None
+    assert retrieved.image_tag == "0.18.0"
+    assert retrieved.image_hash == "sha256:" + "a" * 64
+    assert retrieved.agent_version == "2.1.0"
+    assert retrieved.as_dict()["image_tag"] == "0.18.0"
+
+
+def test_create_defaults_image_metadata_to_none(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    record = store.create(**_new_kwargs())
+
+    assert record.image_tag is None
+    assert record.image_hash is None
+    assert record.agent_version is None
+    assert store.get(record.id) == record
+
+
+def test_existing_database_is_migrated_with_image_metadata_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "tasks.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE tasks ("
+        "id TEXT PRIMARY KEY, "
+        "agent TEXT NOT NULL, "
+        "prompt TEXT NOT NULL, "
+        "workspace TEXT NOT NULL, "
+        "container_id TEXT NOT NULL, "
+        "container_name TEXT NOT NULL, "
+        "image TEXT NOT NULL, "
+        "vibepod_version TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, "
+        "status TEXT NOT NULL DEFAULT 'running', "
+        "exit_code INTEGER, "
+        "started_at TEXT, "
+        "finished_at TEXT, "
+        "updated_at TEXT"
+        ")"
+    )
+    conn.execute(
+        "INSERT INTO tasks "
+        "(id, agent, prompt, workspace, container_id, container_name, image, "
+        "vibepod_version, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "abc123",
+            "claude",
+            "legacy task",
+            "/tmp/ws",
+            "legacy-container",
+            "vibepod-task-legacy",
+            "vibepod/claude:latest",
+            "0.11.0",
+            "2026-06-11T14:00:00+00:00",
+            "2026-06-11T14:00:00+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    record = TaskStore(db_path).get("abc123")
+
+    assert record is not None
+    assert record.image_tag is None
+    assert record.image_hash is None
+    assert record.agent_version is None
