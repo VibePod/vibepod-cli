@@ -3,7 +3,7 @@
 A project can extend the agent image it runs in — extra apt packages, language
 toolchains, CLIs — by committing a `FROM`-less Dockerfile fragment:
 
-```
+```text
 .vibepod/overlay/
 ├── Dockerfile          # shared: applies to every agent in this project
 └── claude/
