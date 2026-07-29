@@ -16,7 +16,9 @@ from vibepod.core.docker import DockerClientError
 def _make_overlay(root: Path, *parts: str, content: str = "RUN true\n") -> Path:
     dockerfile = root.joinpath(".vibepod", "overlay", *parts, "Dockerfile")
     dockerfile.parent.mkdir(parents=True, exist_ok=True)
-    dockerfile.write_text(content)
+    # write_bytes, not write_text: text mode would turn \n into \r\n on
+    # Windows and break the exact-byte assertions on the tar contents.
+    dockerfile.write_bytes(content.encode())
     return dockerfile
 
 
@@ -64,21 +66,21 @@ def test_overlay_hash_changes_with_base_image(tmp_path: Path) -> None:
 def test_overlay_hash_changes_with_fragment(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
     before = overlay.overlay_hash("sha256:abc", dockerfile)
-    dockerfile.write_text("RUN apt-get update\n")
+    dockerfile.write_bytes(b"RUN apt-get update\n")
     assert overlay.overlay_hash("sha256:abc", dockerfile) != before
 
 
 def test_overlay_hash_includes_context_files(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
     before = overlay.overlay_hash("sha256:abc", dockerfile)
-    (dockerfile.parent / "requirements.txt").write_text("requests\n")
+    (dockerfile.parent / "requirements.txt").write_bytes(b"requests\n")
     assert overlay.overlay_hash("sha256:abc", dockerfile) != before
 
 
 def test_overlay_hash_changes_when_context_file_renamed(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
     extra = dockerfile.parent / "a.txt"
-    extra.write_text("data\n")
+    extra.write_bytes(b"data\n")
     before = overlay.overlay_hash("sha256:abc", dockerfile)
     extra.rename(dockerfile.parent / "b.txt")
     assert overlay.overlay_hash("sha256:abc", dockerfile) != before
@@ -89,7 +91,7 @@ def test_overlay_hash_walks_nested_context_dirs(tmp_path: Path) -> None:
     before = overlay.overlay_hash("sha256:abc", dockerfile)
     nested = dockerfile.parent / "scripts"
     nested.mkdir()
-    (nested / "setup.sh").write_text("echo hi\n")
+    (nested / "setup.sh").write_bytes(b"echo hi\n")
     assert overlay.overlay_hash("sha256:abc", dockerfile) != before
 
 
@@ -127,10 +129,10 @@ def test_build_context_tar_synthesizes_dockerfile(tmp_path: Path) -> None:
 
 def test_build_context_tar_includes_context_files(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    (dockerfile.parent / "requirements.txt").write_text("requests\n")
+    (dockerfile.parent / "requirements.txt").write_bytes(b"requests\n")
     nested = dockerfile.parent / "scripts"
     nested.mkdir()
-    (nested / "setup.sh").write_text("echo hi\n")
+    (nested / "setup.sh").write_bytes(b"echo hi\n")
     entries = _read_tar(overlay.build_context_tar("base:latest", dockerfile))
     assert entries["requirements.txt"] == b"requests\n"
     assert entries["scripts/setup.sh"] == b"echo hi\n"
