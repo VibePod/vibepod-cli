@@ -29,6 +29,7 @@ from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protec
 from vibepod.core.config import get_config, get_config_root
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.herdr import PANE_LABEL, apply_herdr_if_enabled
+from vibepod.core.image_metadata import collect_image_metadata
 from vibepod.core.launch import (
     agent_extra_volumes,
     agent_init_commands,
@@ -745,6 +746,7 @@ def task_create(
         state = {}
     initial_status = TASK_STATUS_RUNNING if container.status == "running" else TASK_STATUS_STARTING
 
+    image_meta = collect_image_metadata(container, image)
     store = _task_store()
     try:
         record = store.create(
@@ -754,6 +756,9 @@ def task_create(
             container_id=container.id,
             container_name=container.name,
             image=image,
+            image_tag=image_meta.image_tag,
+            image_hash=image_meta.image_hash,
+            agent_version=image_meta.agent_version,
             vibepod_version=__version__,
             status=initial_status,
             started_at=_state_timestamp(state, "StartedAt"),

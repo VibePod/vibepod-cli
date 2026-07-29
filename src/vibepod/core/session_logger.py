@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Final
 from uuid import uuid4
 
 _SCHEMA = """\
@@ -12,6 +13,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     id              TEXT PRIMARY KEY,
     agent           TEXT NOT NULL,
     image           TEXT NOT NULL,
+    image_tag       TEXT,
+    image_hash      TEXT,
+    agent_version   TEXT,
     workspace       TEXT NOT NULL,
     container_id    TEXT NOT NULL,
     container_name  TEXT NOT NULL,
@@ -32,6 +36,19 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent);
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 """
+
+_MIGRATION_COLUMNS: Final[dict[str, str]] = {
+    "image_tag": "TEXT",
+    "image_hash": "TEXT",
+    "agent_version": "TEXT",
+}
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+    for column, definition in _MIGRATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
 
 
 class SessionLogger:
@@ -68,6 +85,9 @@ class SessionLogger:
         container_id: str,
         container_name: str,
         vibepod_version: str,
+        image_tag: str | None = None,
+        image_hash: str | None = None,
+        agent_version: str | None = None,
     ) -> str | None:
         """Create the session row.  Returns the session id, or ``None`` when disabled."""
         if not self._enabled:
@@ -79,19 +99,23 @@ class SessionLogger:
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        _migrate_schema(self._conn)
 
         self._session_id = uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
 
         self._conn.execute(
             "INSERT INTO sessions "
-            "(id, agent, image, workspace, container_id, container_name, "
-            "started_at, vibepod_version) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, agent, image, image_tag, image_hash, agent_version, "
+            "workspace, container_id, container_name, started_at, vibepod_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 self._session_id,
                 agent,
                 image,
+                image_tag,
+                image_hash,
+                agent_version,
                 workspace,
                 container_id,
                 container_name,

@@ -2240,3 +2240,118 @@ def test_run_aborts_when_user_declines_prompt(monkeypatch, tmp_path: Path) -> No
 
     assert exc.value.exit_code == 1
     assert added == []
+
+
+def test_run_passes_image_metadata_to_session_logger(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Attached runs persist image tag, hash, and agent version in the session row."""
+    opened: dict = {}
+
+    class _FakeLogger:
+        def __init__(self, db_path, *, enabled=True):
+            pass
+
+        def open_session(self, **kwargs):
+            opened.update(kwargs)
+            return "sid"
+
+        def close_session(self, exit_reason="normal"):
+            pass
+
+    class _AttachingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
+            pass
+
+        def attach_interactive(self, container, logger=None) -> None:
+            pass
+
+        def run_agent(self, **kwargs) -> object:
+            image = type(
+                "_Image",
+                (),
+                {
+                    "id": "sha256:" + "e" * 64,
+                    "labels": {"vibepod.agent.version": "3.0.1"},
+                },
+            )()
+            return type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                    "image": image,
+                },
+            )()
+
+    config = _make_config()
+    config["logging"] = {"enabled": True, "db_path": str(tmp_path / "logs.db")}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", _AttachingDockerManager)
+    monkeypatch.setattr(run_cmd, "SessionLogger", _FakeLogger)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=False)
+
+    assert opened["image_tag"] == "latest"
+    assert opened["image_hash"] == "sha256:" + "e" * 64
+    assert opened["agent_version"] == "3.0.1"
+
+
+def test_run_skips_image_inspection_when_logging_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With logging off, the extra image-inspect API call never happens."""
+    inspections = {"count": 0}
+
+    class _CountingContainer:
+        name = "vibepod-claude-test"
+        id = "abc123"
+        status = "running"
+        attrs = {"NetworkSettings": {"Networks": {}}}
+        labels: dict = {}
+
+        def reload(self) -> None:
+            pass
+
+        def logs(self, **kw) -> bytes:
+            return b""
+
+        @property
+        def image(self) -> object:
+            inspections["count"] += 1
+            return object()
+
+    class _AttachingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
+            pass
+
+        def attach_interactive(self, container, logger=None) -> None:
+            pass
+
+        def run_agent(self, **kwargs) -> object:
+            return _CountingContainer()
+
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _AttachingDockerManager)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=False)
+
+    assert inspections["count"] == 0

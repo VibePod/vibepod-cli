@@ -359,3 +359,112 @@ class TestSessionLogger:
         )
         logger.close_session()
         assert db.exists()
+
+
+class TestImageMetadata:
+    def _make_logger(self, tmp_path) -> SessionLogger:
+        return SessionLogger(tmp_path / "test.db")
+
+    def test_open_persists_image_metadata(self, tmp_path):
+        logger = self._make_logger(tmp_path)
+        sid = logger.open_session(
+            agent="claude",
+            image="vibepod/claude:0.18.0",
+            workspace="/workspace",
+            container_id="abc123",
+            container_name="vibepod-claude-test",
+            vibepod_version="0.18.0",
+            image_tag="0.18.0",
+            image_hash="sha256:" + "a" * 64,
+            agent_version="2.1.0",
+        )
+        logger.close_session()
+
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        row = conn.execute(
+            "SELECT image_tag, image_hash, agent_version FROM sessions WHERE id = ?",
+            (sid,),
+        ).fetchone()
+        conn.close()
+        assert row == ("0.18.0", "sha256:" + "a" * 64, "2.1.0")
+
+    def test_open_defaults_image_metadata_to_null(self, tmp_path):
+        logger = self._make_logger(tmp_path)
+        sid = logger.open_session(
+            agent="claude",
+            image="vibepod/claude:latest",
+            workspace="/workspace",
+            container_id="abc123",
+            container_name="vibepod-claude-test",
+            vibepod_version="0.18.0",
+        )
+        logger.close_session()
+
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        row = conn.execute(
+            "SELECT image_tag, image_hash, agent_version FROM sessions WHERE id = ?",
+            (sid,),
+        ).fetchone()
+        conn.close()
+        assert row == (None, None, None)
+
+    def test_existing_database_is_migrated_with_image_metadata_columns(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE sessions ("
+            "id TEXT PRIMARY KEY, "
+            "agent TEXT NOT NULL, "
+            "image TEXT NOT NULL, "
+            "workspace TEXT NOT NULL, "
+            "container_id TEXT NOT NULL, "
+            "container_name TEXT NOT NULL, "
+            "started_at TEXT NOT NULL, "
+            "ended_at TEXT, "
+            "exit_reason TEXT, "
+            "vibepod_version TEXT NOT NULL"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO sessions "
+            "(id, agent, image, workspace, container_id, container_name, "
+            "started_at, vibepod_version) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy1",
+                "claude",
+                "vibepod/claude:latest",
+                "/workspace",
+                "abc123",
+                "vibepod-claude-legacy",
+                "2026-06-11T14:00:00+00:00",
+                "0.11.0",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        logger = self._make_logger(tmp_path)
+        sid = logger.open_session(
+            agent="claude",
+            image="vibepod/claude:0.18.0",
+            workspace="/workspace",
+            container_id="def456",
+            container_name="vibepod-claude-new",
+            vibepod_version="0.18.0",
+            image_tag="0.18.0",
+            image_hash="sha256:" + "b" * 64,
+            agent_version="2.1.0",
+        )
+        logger.close_session()
+
+        conn = sqlite3.connect(str(db_path))
+        legacy = conn.execute(
+            "SELECT image_tag, image_hash, agent_version FROM sessions WHERE id = 'legacy1'"
+        ).fetchone()
+        fresh = conn.execute(
+            "SELECT image_tag FROM sessions WHERE id = ?", (sid,)
+        ).fetchone()
+        conn.close()
+        assert legacy == (None, None, None)
+        assert fresh == ("0.18.0",)

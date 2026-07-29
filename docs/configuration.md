@@ -269,6 +269,28 @@ agents:
 
 Like other agent keys, a project-level `ports` list replaces the global one for that agent. The list applies to both `vp run` and `vp task` containers; note that two containers cannot publish the same host port at the same time, so a fixed host port limits you to one such container per agent.
 
+## Session and task records
+
+Interactive runs (`vp run`) write a row to the `sessions` table in the logging
+database (`logging.db_path`, default `~/.config/vibepod/logs.db`, viewable in
+the Datasette UI via `vp logs start`). Background tasks (`vp task create`)
+write a row to the `tasks` table in `tasks.db` in the config directory;
+inspect it with `vp task list --json` or `vp task status <id> --json`.
+
+Besides the full image reference, each record tracks image provenance for
+traceability and auditing:
+
+| Column | Content |
+|---|---|
+| `image_tag` | The tag (or digest) portion of the image reference, e.g. `0.18.0` |
+| `image_hash` | The image ID reported by the container engine (`sha256:…`) |
+| `agent_version` | The agent's own version, read from the image label `vibepod.agent.version` (falling back to `org.opencontainers.image.version`) |
+
+All three columns are best-effort and nullable: an untagged reference leaves
+`image_tag` empty, and images without version labels leave `agent_version`
+empty. Databases created by older VibePod versions are migrated automatically
+on first use.
+
 ## The built-in proxy
 
 VibePod starts a `vibepod-proxy` container alongside every agent. It acts as an HTTP(S) MITM proxy and logs all outbound requests to a SQLite database viewable in the Datasette UI (`vp logs start`).
