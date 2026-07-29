@@ -52,6 +52,7 @@ nav:
   - Quickstart: quickstart.md
   - Development: development.md
   - Agents: agents/index.md
+  - Profiles: profiles.md
   - Skills:
     - Overview: skills/index.md
     - Locator format: skills/locators.md

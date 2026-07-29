@@ -13,6 +13,8 @@ from typing import Annotated, Any
 import typer
 
 from vibepod.core.agents import agent_config_dir
+from vibepod.core.config import get_config
+from vibepod.core.profiles import resolve_profile
 from vibepod.utils.console import console, error, success, warning
 
 app = typer.Typer(help="Inspect agent auth and config state")
@@ -64,10 +66,20 @@ def _file_ownership(path: Path) -> str:
 
 
 @app.command("claude")
-def claude() -> None:
+def claude(
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to inspect (see `vp profile list`)"),
+    ] = None,
+) -> None:
     """Inspect Claude Code credential state for diagnosing auth/refresh issues."""
-    cfg_dir = agent_config_dir("claude")
-    console.print(f"[bold]Claude config dir:[/bold] {cfg_dir}")
+    try:
+        active_profile = resolve_profile(profile, get_config())
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    cfg_dir = agent_config_dir("claude", active_profile)
+    console.print(f"[bold]Claude config dir:[/bold] {cfg_dir} (profile: {active_profile})")
 
     if not cfg_dir.exists():
         error(f"Config dir does not exist: {cfg_dir}")

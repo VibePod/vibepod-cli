@@ -13,6 +13,7 @@ from vibepod.commands import (
     doctor,
     list_cmd,
     logs,
+    profile,
     proxy,
     run,
     skills,
@@ -84,6 +85,10 @@ def run_command(
             help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
         ),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+    ] = None,
 ) -> None:
     """Start an agent container."""
     run.run(
@@ -99,6 +104,7 @@ def run_command(
         network=network,
         paste_images=paste_images,
         ikwid=ikwid,
+        profile=profile,
         passthrough_args=_context_args(ctx),
     )
 
@@ -114,6 +120,7 @@ app.command(name="version")(update.version)
 
 app.add_typer(logs.app, name="logs")
 app.add_typer(config.app, name="config")
+app.add_typer(profile.app, name="profile")
 app.add_typer(proxy.app, name="proxy")
 app.add_typer(doctor.app, name="doctor")
 app.add_typer(skills.app, name="skills")
@@ -170,6 +177,10 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
                 help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
             ),
         ] = False,
+        profile: Annotated[
+            str | None,
+            typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+        ] = None,
     ) -> None:
         run.run(
             agent=agent_name,
@@ -184,6 +195,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             network=network,
             paste_images=paste_images,
             ikwid=ikwid,
+            profile=profile,
             passthrough_args=_context_args(ctx),
         )
 

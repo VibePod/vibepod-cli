@@ -88,6 +88,7 @@ from vibepod.core.launch import (
 from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
+from vibepod.core.profiles import resolve_profile
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
 
@@ -306,6 +307,10 @@ def run(
             help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
         ),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+    ] = None,
     passthrough_args: list[str] | None = None,
 ) -> None:
     """Start an agent container.
@@ -316,6 +321,11 @@ def run(
     """
     passthrough_args = passthrough_args or []
     config = get_config()
+    try:
+        active_profile = resolve_profile(profile, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     selected_agent_input = agent or str(config.get("default_agent", "claude"))
     selected_agent = resolve_agent_name(selected_agent_input)
     if selected_agent is None:
@@ -397,7 +407,7 @@ def run(
         and "ANTHROPIC_API_KEY" not in merged_env
         and "setup-token" not in passthrough_args
     ):
-        stored_token = _read_claude_stored_token(agent_config_dir(selected_agent))
+        stored_token = _read_claude_stored_token(agent_config_dir(selected_agent, active_profile))
         if stored_token:
             merged_env["CLAUDE_CODE_OAUTH_TOKEN"] = stored_token
             info("Using stored Claude OAuth token (from `vp run claude setup-token`)")
@@ -494,7 +504,7 @@ def run(
                 raise typer.Exit(1) from exc
         command = list(command or []) + passthrough_args
 
-    config_dir = agent_config_dir(selected_agent)
+    config_dir = agent_config_dir(selected_agent, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
 
     proxy_cfg = config.get("proxy", {})
