@@ -32,6 +32,9 @@ from vibepod.core.launch import (
     agent_init_commands as _agent_init_commands,
 )
 from vibepod.core.launch import (
+    agent_port_bindings as _agent_port_bindings,
+)
+from vibepod.core.launch import (
     apply_overlay_if_enabled,
 )
 from vibepod.core.launch import (
@@ -340,12 +343,17 @@ def run(
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
     }
-    agent_ports: dict[str, Any] | None = None
+    agent_ports: dict[str, Any] | None = _agent_port_bindings(selected_agent, agent_cfg) or None
     if codex_oauth_login:
         # Tell the codex image to start the loopback forwarder, and publish it to
         # the host on the port Codex's redirect URI expects.
         merged_env["VIBEPOD_OAUTH_FORWARD_PORT"] = str(CODEX_OAUTH_FORWARD_PORT)
-        agent_ports = {f"{CODEX_OAUTH_FORWARD_PORT}/tcp": CODEX_OAUTH_CALLBACK_PORT}
+        # Merged last so a configured binding for the same container port loses:
+        # during `codex login` the callback forwarder must own this port.
+        agent_ports = {
+            **(agent_ports or {}),
+            f"{CODEX_OAUTH_FORWARD_PORT}/tcp": CODEX_OAUTH_CALLBACK_PORT,
+        }
         info(
             "codex login: publishing the OAuth callback on "
             f"http://localhost:{CODEX_OAUTH_CALLBACK_PORT}/auth/callback "

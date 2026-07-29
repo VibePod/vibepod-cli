@@ -126,6 +126,16 @@ def test_default_config_exposes_agent_init(monkeypatch, tmp_path: Path) -> None:
         assert agents[agent]["init"] == []
 
 
+def test_default_config_exposes_agent_ports(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+    agents = config.get("agents", {})
+    assert isinstance(agents, dict)
+
+    for agent in SUPPORTED_AGENTS:
+        assert agents[agent]["ports"] == []
+
+
 def test_default_config_exposes_agent_auto_pull(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
     config = get_config()

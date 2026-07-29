@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from docker.utils.ports import build_port_bindings
 
 from vibepod.core import overlay
 from vibepod.core.config import load_project_config
@@ -126,6 +127,43 @@ def agent_init_commands(agent: str, agent_cfg: dict[str, Any]) -> list[str]:
             )
         commands.append(command)
     return commands
+
+
+def agent_port_bindings(agent: str, agent_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Read and validate per-agent published ports from config.
+
+    Entries use `docker run -p` syntax (`8000:8000`, `127.0.0.1:8080:80`,
+    `6000:6000/udp`, ...) and are returned in docker-py port-bindings form.
+    """
+    raw_ports = agent_cfg.get("ports", [])
+    if raw_ports is None:
+        return {}
+
+    if isinstance(raw_ports, (str, int)) and not isinstance(raw_ports, bool):
+        items: list[Any] = [raw_ports]
+    elif isinstance(raw_ports, list):
+        items = raw_ports
+    else:
+        raise typer.BadParameter(
+            f"Invalid agents.{agent}.ports value, expected a string or list of strings."
+        )
+
+    bindings: dict[str, Any] = {}
+    for index, item in enumerate(items, start=1):
+        if isinstance(item, bool) or not isinstance(item, (str, int)):
+            raise typer.BadParameter(
+                f"Invalid agents.{agent}.ports[{index}] value, expected a string like '8000:8000'."
+            )
+        entry = str(item).strip()
+        try:
+            parsed = build_port_bindings([entry])
+        except ValueError as exc:
+            raise typer.BadParameter(
+                f"Invalid agents.{agent}.ports[{index}] value '{entry}': {exc}"
+            ) from exc
+        for internal, binds in parsed.items():
+            bindings.setdefault(internal, []).extend(binds)
+    return bindings
 
 
 def init_entrypoint(init_commands: list[str]) -> list[str]:

@@ -29,6 +29,7 @@ from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.launch import (
     agent_extra_volumes,
     agent_init_commands,
+    agent_port_bindings,
     apply_overlay_if_enabled,
     get_container_ip,
     host_identity_env,
@@ -491,6 +492,7 @@ def task_create(
 
     agent_cfg = config.get("agents", {}).get(selected, {})
     init_commands = agent_init_commands(selected, agent_cfg)
+    agent_ports = agent_port_bindings(selected, agent_cfg) or None
     merged_env = {
         **host_identity_env(),
         **terminal_env_defaults(),
@@ -663,6 +665,7 @@ def task_create(
         name=name,
         version=__version__,
         network=network_name,
+        ports=agent_ports,
         extra_volumes=extra_volumes,
         platform=spec.platform,
         user=container_user,
