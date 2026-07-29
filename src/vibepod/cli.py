@@ -44,6 +44,13 @@ def run_command(
         Path, typer.Option("-w", "--workspace", help="Workspace directory")
     ] = Path("."),
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    no_overlay: Annotated[
+        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+    ] = False,
+    rebuild_overlay: Annotated[
+        bool,
+        typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
+    ] = False,
     detach: Annotated[
         bool, typer.Option("-d", "--detach", help="Run container in background")
     ] = False,
@@ -76,6 +83,8 @@ def run_command(
         agent=agent,
         workspace=workspace,
         pull=pull,
+        no_overlay=no_overlay,
+        rebuild_overlay=rebuild_overlay,
         detach=detach,
         env=env,
         name=name,
@@ -109,8 +118,13 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
         workspace: Annotated[
             Path, typer.Option("-w", "--workspace", help="Workspace directory")
         ] = Path("."),
-        pull: Annotated[
-            bool, typer.Option("--pull", help="Pull latest image before run")
+        pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+        no_overlay: Annotated[
+            bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+        ] = False,
+        rebuild_overlay: Annotated[
+            bool,
+            typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
         ] = False,
         detach: Annotated[
             bool, typer.Option("-d", "--detach", help="Run container in background")
@@ -119,9 +133,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             list[str] | None,
             typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
         ] = None,
-        name: Annotated[
-            str | None, typer.Option("--name", help="Custom container name")
-        ] = None,
+        name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
         network: Annotated[
             str | None,
             typer.Option(
@@ -148,6 +160,8 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             agent=agent_name,
             workspace=workspace,
             pull=pull,
+            no_overlay=no_overlay,
+            rebuild_overlay=rebuild_overlay,
             detach=detach,
             env=env,
             name=name,

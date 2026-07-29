@@ -32,6 +32,9 @@ from vibepod.core.launch import (
     agent_init_commands as _agent_init_commands,
 )
 from vibepod.core.launch import (
+    apply_overlay_if_enabled,
+)
+from vibepod.core.launch import (
     get_container_ip as _get_container_ip,
 )
 from vibepod.core.launch import (
@@ -241,6 +244,13 @@ def run(
         Path, typer.Option("-w", "--workspace", help="Workspace directory")
     ] = Path("."),
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    no_overlay: Annotated[
+        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+    ] = False,
+    rebuild_overlay: Annotated[
+        bool,
+        typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
+    ] = False,
     detach: Annotated[
         bool, typer.Option("-d", "--detach", help="Run container in background")
     ] = False,
@@ -398,6 +408,16 @@ def run(
     if should_pull:
         info(f"Pulling image: {image}")
         manager.pull_image(image, auto_clean=bool(config.get("auto_clean", True)))
+
+    image = apply_overlay_if_enabled(
+        manager=manager,
+        workspace_path=workspace_path,
+        agent=selected_agent,
+        image=image,
+        agent_cfg=agent_cfg,
+        no_overlay=no_overlay,
+        rebuild_overlay=rebuild_overlay,
+    )
 
     command = spec.command
     entrypoint: list[str] | None = None

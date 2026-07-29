@@ -12,7 +12,10 @@ from typing import Any
 
 import typer
 
-from vibepod.utils.console import warning
+from vibepod.core import overlay
+from vibepod.core.config import load_project_config
+from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.utils.console import error, warning
 
 CLAUDE_TOKEN_FILENAME = "oauth-token"
 
@@ -59,6 +62,40 @@ def parse_env_pairs(values: list[str]) -> dict[str, str]:
             raise typer.BadParameter("Environment variable key cannot be empty")
         parsed[key] = value
     return parsed
+
+
+def _overlay_setting(workspace_path: Path, agent: str, agent_cfg: dict[str, Any]) -> Any:
+    """``agents.<agent>.overlay`` with the launched workspace's config winning.
+
+    *agent_cfg* comes from get_config(), which merges the project file of the
+    *current* directory; with ``-w`` pointing at another project, that
+    project's own setting must decide whether its overlay applies.
+    """
+    agents = load_project_config(workspace_path).get("agents")
+    entry = agents.get(agent) if isinstance(agents, dict) else None
+    if isinstance(entry, dict) and "overlay" in entry:
+        return entry["overlay"]
+    return agent_cfg.get("overlay")
+
+
+def apply_overlay_if_enabled(
+    *,
+    manager: DockerManager,
+    workspace_path: Path,
+    agent: str,
+    image: str,
+    agent_cfg: dict[str, Any],
+    no_overlay: bool,
+    rebuild_overlay: bool,
+) -> str:
+    """Swap in the project overlay image unless disabled by flag or config."""
+    if no_overlay or _overlay_setting(workspace_path, agent, agent_cfg) is False:
+        return image
+    try:
+        return overlay.apply_overlay(manager, workspace_path, agent, image, rebuild=rebuild_overlay)
+    except DockerClientError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
 
 
 def agent_init_commands(agent: str, agent_cfg: dict[str, Any]) -> list[str]:

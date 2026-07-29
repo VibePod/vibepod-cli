@@ -178,3 +178,40 @@ def test_alias_forwards_extra_option_args_after_delimiter(monkeypatch) -> None:
     assert result.exit_code == 0
     assert called["agent"] == "claude"
     assert called["passthrough"] == ["--model", "sonnet", "hello"]
+
+
+def test_run_command_forwards_overlay_flags(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["no_overlay"] = kwargs.get("no_overlay")
+        called["rebuild_overlay"] = kwargs.get("rebuild_overlay")
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["run", "claude", "--no-overlay", "--rebuild-overlay"])
+    assert result.exit_code == 0
+    assert called["no_overlay"] is True
+    assert called["rebuild_overlay"] is True
+    assert called["passthrough"] == []
+
+
+def test_alias_forwards_overlay_flags(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["no_overlay"] = kwargs.get("no_overlay")
+        called["rebuild_overlay"] = kwargs.get("rebuild_overlay")
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["claude", "--no-overlay", "--rebuild-overlay"])
+    assert result.exit_code == 0
+    assert called["agent"] == "claude"
+    assert called["no_overlay"] is True
+    assert called["rebuild_overlay"] is True
+    assert called["passthrough"] == []

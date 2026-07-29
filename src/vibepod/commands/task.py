@@ -29,6 +29,7 @@ from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.launch import (
     agent_extra_volumes,
     agent_init_commands,
+    apply_overlay_if_enabled,
     get_container_ip,
     host_identity_env,
     host_user,
@@ -294,6 +295,13 @@ def task_create_command(
         ),
     ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    no_overlay: Annotated[
+        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+    ] = False,
+    rebuild_overlay: Annotated[
+        bool,
+        typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
+    ] = False,
     ikwid: Annotated[
         bool,
         typer.Option(
@@ -312,6 +320,8 @@ def task_create_command(
         network=network,
         timeout=timeout,
         pull=pull,
+        no_overlay=no_overlay,
+        rebuild_overlay=rebuild_overlay,
         ikwid=ikwid,
         passthrough_args=_context_args(ctx),
     )
@@ -349,6 +359,13 @@ def task_run_command(
         ),
     ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    no_overlay: Annotated[
+        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+    ] = False,
+    rebuild_overlay: Annotated[
+        bool,
+        typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
+    ] = False,
     ikwid: Annotated[
         bool,
         typer.Option(
@@ -367,6 +384,8 @@ def task_run_command(
         network=network,
         timeout=timeout,
         pull=pull,
+        no_overlay=no_overlay,
+        rebuild_overlay=rebuild_overlay,
         ikwid=ikwid,
         passthrough_args=_context_args(ctx),
         deprecated_alias=True,
@@ -399,6 +418,13 @@ def task_create(
         ),
     ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    no_overlay: Annotated[
+        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+    ] = False,
+    rebuild_overlay: Annotated[
+        bool,
+        typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
+    ] = False,
     ikwid: Annotated[
         bool,
         typer.Option(
@@ -528,6 +554,16 @@ def task_create(
     if should_pull:
         info(f"Pulling image: {image}")
         manager.pull_image(image, auto_clean=bool(config.get("auto_clean", True)))
+
+    image = apply_overlay_if_enabled(
+        manager=manager,
+        workspace_path=workspace_path,
+        agent=selected,
+        image=image,
+        agent_cfg=agent_cfg,
+        no_overlay=no_overlay,
+        rebuild_overlay=rebuild_overlay,
+    )
 
     base_command = spec.command
     entrypoint: list[str] | None = None

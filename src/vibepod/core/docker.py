@@ -399,6 +399,66 @@ class DockerManager:
             # missing id as "no confirmed image", never as a failure to report.
             return None
 
+    def build_image(
+        self, context_tar: Any, tag: str, labels: dict[str, str], *, nocache: bool = False
+    ) -> None:
+        """Build *tag* from an in-memory custom-context tar, streaming output.
+
+        The tar must contain a complete Dockerfile (see
+        :func:`vibepod.core.overlay.build_context_tar`); nothing is written to
+        the host filesystem. *nocache* disables docker's layer cache so a
+        forced rebuild re-runs every instruction.
+        """
+        try:
+            chunks = self.client.api.build(
+                fileobj=context_tar,
+                custom_context=True,
+                tag=tag,
+                labels=labels,
+                rm=True,
+                nocache=nocache,
+                decode=True,
+            )
+            for chunk in chunks:
+                if not isinstance(chunk, dict):
+                    continue
+                if "error" in chunk:
+                    raise DockerClientError(f"Failed to build image {tag}: {chunk['error']}")
+                stream = chunk.get("stream")
+                if stream and stream.strip():
+                    print(stream, end="" if stream.endswith("\n") else "\n")
+        except DockerClientError:
+            raise
+        except (APIError, DockerException) as exc:
+            raise DockerClientError(f"Failed to build image {tag}: {exc}") from exc
+
+    def remove_stale_overlays(self, overlay_key: str, keep_tag: str) -> int:
+        """Remove overlay images labeled with *overlay_key* except *keep_tag*.
+
+        Old content-addressed tags accumulate as the overlay evolves; each
+        successful build sweeps its predecessors. Images docker refuses to
+        remove (still used by a container) stay and are retried next build.
+        The label name is ``vibepod.core.overlay.OVERLAY_KEY_LABEL`` (kept as
+        a literal here to avoid an import cycle with that module).
+        """
+        try:
+            images = self.client.images.list(
+                filters={"label": [f"vibepod.overlay.key={overlay_key}"]}
+            )
+        except DockerException:
+            return 0
+
+        removed = 0
+        for image in images:
+            if keep_tag in (image.tags or []):
+                continue
+            try:
+                self.client.images.remove(str(image.id))
+            except DockerException:
+                continue
+            removed += 1
+        return removed
+
     def clean_untagged_images(self, namespace: str = IMAGE_NAMESPACE) -> int:
         """Remove untagged *namespace* images and return how many were removed.
 
