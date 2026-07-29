@@ -105,6 +105,12 @@ def test_resolve_profile_unknown_raises(config_root: Path) -> None:
         resolve_profile("nope", {})
 
 
+def test_resolve_profile_rejects_non_string_config_value(config_root: Path) -> None:
+    for configured in (123, True, [], {}, ""):
+        with pytest.raises(ValueError, match="'profile' must be"):
+            resolve_profile(None, {"profile": configured})
+
+
 def test_resolve_profile_rejects_traversal_names(
     config_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
