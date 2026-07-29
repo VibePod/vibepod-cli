@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     container_id     TEXT NOT NULL,
     container_name   TEXT NOT NULL,
     image            TEXT NOT NULL,
+    image_tag        TEXT,
+    image_hash       TEXT,
+    agent_version    TEXT,
     vibepod_version  TEXT NOT NULL,
     created_at       TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'running',
@@ -47,6 +50,9 @@ _MIGRATION_COLUMNS: Final[dict[str, str]] = {
     "started_at": "TEXT",
     "finished_at": "TEXT",
     "updated_at": "TEXT",
+    "image_tag": "TEXT",
+    "image_hash": "TEXT",
+    "agent_version": "TEXT",
 }
 
 
@@ -63,6 +69,9 @@ class TaskRecord:
     container_id: str
     container_name: str
     image: str
+    image_tag: str | None
+    image_hash: str | None
+    agent_version: str | None
     vibepod_version: str
     created_at: str
     status: str
@@ -81,6 +90,9 @@ class TaskRecord:
             container_id=row["container_id"],
             container_name=row["container_name"],
             image=row["image"],
+            image_tag=row["image_tag"],
+            image_hash=row["image_hash"],
+            agent_version=row["agent_version"],
             vibepod_version=row["vibepod_version"],
             created_at=row["created_at"],
             status=row["status"],
@@ -99,6 +111,9 @@ class TaskRecord:
             "container_id": self.container_id,
             "container_name": self.container_name,
             "image": self.image,
+            "image_tag": self.image_tag,
+            "image_hash": self.image_hash,
+            "agent_version": self.agent_version,
             "vibepod_version": self.vibepod_version,
             "created_at": self.created_at,
             "status": self.status,
@@ -146,6 +161,9 @@ class TaskStore:
         container_id: str,
         container_name: str,
         image: str,
+        image_tag: str | None = None,
+        image_hash: str | None = None,
+        agent_version: str | None = None,
         vibepod_version: str,
         status: str = TASK_STATUS_RUNNING,
         started_at: str | None = None,
@@ -156,9 +174,9 @@ class TaskStore:
             conn.execute(
                 "INSERT INTO tasks "
                 "(id, agent, prompt, workspace, container_id, container_name, "
-                "image, vibepod_version, created_at, status, exit_code, started_at, "
-                "finished_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "image, image_tag, image_hash, agent_version, vibepod_version, "
+                "created_at, status, exit_code, started_at, finished_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id,
                     agent,
@@ -167,6 +185,9 @@ class TaskStore:
                     container_id,
                     container_name,
                     image,
+                    image_tag,
+                    image_hash,
+                    agent_version,
                     vibepod_version,
                     created_at,
                     status,
@@ -184,6 +205,9 @@ class TaskStore:
             container_id=container_id,
             container_name=container_name,
             image=image,
+            image_tag=image_tag,
+            image_hash=image_hash,
+            agent_version=agent_version,
             vibepod_version=vibepod_version,
             created_at=created_at,
             status=status,
