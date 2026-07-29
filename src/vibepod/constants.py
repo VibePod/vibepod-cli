@@ -29,6 +29,7 @@ SUPPORTED_AGENTS = (
     "pi",
     "agy",
     "tau",
+    "jcode",
 )
 
 AGENT_SHORTCUTS: dict[str, str] = {
@@ -41,6 +42,7 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "x": "codex",
     "n": "agy",
     "t": "tau",
+    "j": "jcode",
 }
 
 AGENT_ALIASES: dict[str, str] = {
@@ -59,6 +61,7 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_PI",
     "VP_IMAGE_AGY",
     "VP_IMAGE_TAU",
+    "VP_IMAGE_JCODE",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
     "VP_SKILLS_ENGINE_IMAGE",
@@ -119,6 +122,10 @@ def get_default_images() -> dict[str, str]:
         "tau": os.environ.get(
             "VP_IMAGE_TAU",
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/tau:latest",
+        ),
+        "jcode": os.environ.get(
+            "VP_IMAGE_JCODE",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/jcode:latest",
         ),
         "datasette": os.environ.get(
             "VP_DATASETTE_IMAGE",

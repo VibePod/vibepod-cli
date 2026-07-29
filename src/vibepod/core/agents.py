@@ -159,6 +159,19 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         {"HOME": "/config", "TAU_NO_UPDATE_CHECK": "1"},
         headless_prefix=["-p"],
     ),
+    "jcode": AgentSpec(
+        "jcode",
+        "1jehuang",
+        DEFAULT_IMAGES["jcode"],
+        "jcode",
+        ["jcode"],
+        "/config",
+        # jcode resolves ~/.jcode (sessions, auth, config.toml, mcp.json) via
+        # $HOME and its provider env files via XDG config (~/.config/jcode),
+        # so pointing HOME at the persisted /config mount covers both.
+        {"HOME": "/config", "JCODE_NO_AUTO_UPDATE": "1"},
+        headless_prefix=["run"],
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
