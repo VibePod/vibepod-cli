@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
+from vibepod.core.sqlite_migrations import add_missing_columns
+
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS sessions (
     id              TEXT PRIMARY KEY,
@@ -42,13 +44,6 @@ _MIGRATION_COLUMNS: Final[dict[str, str]] = {
     "image_hash": "TEXT",
     "agent_version": "TEXT",
 }
-
-
-def _migrate_schema(conn: sqlite3.Connection) -> None:
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
-    for column, definition in _MIGRATION_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE sessions ADD COLUMN {column} {definition}")
 
 
 class SessionLogger:
@@ -99,7 +94,7 @@ class SessionLogger:
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
-        _migrate_schema(self._conn)
+        add_missing_columns(self._conn, "sessions", _MIGRATION_COLUMNS)
 
         self._session_id = uuid4().hex
         now = datetime.now(timezone.utc).isoformat()

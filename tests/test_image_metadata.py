@@ -144,3 +144,21 @@ def test_broken_id_attribute_is_swallowed() -> None:
     meta = collect_image_metadata(container, "vibepod/claude:latest")
 
     assert meta.image_hash == "sha256:" + "9" * 64
+
+
+def test_bare_image_id_reference_yields_no_tag() -> None:
+    meta = collect_image_metadata(_FakeContainer(), "sha256:" + "a" * 64)
+
+    assert meta.image_tag is None
+
+
+def test_truncated_bare_image_id_reference_yields_no_tag() -> None:
+    meta = collect_image_metadata(_FakeContainer(), "sha256:0123456789ab")
+
+    assert meta.image_tag is None
+
+
+def test_plain_repo_tag_without_namespace_still_parsed() -> None:
+    meta = collect_image_metadata(_FakeContainer(), "ubuntu:24.04")
+
+    assert meta.image_tag == "24.04"

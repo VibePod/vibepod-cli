@@ -286,10 +286,10 @@ traceability and auditing:
 | `image_hash` | The image ID reported by the container engine (`sha256:…`) |
 | `agent_version` | The agent's own version, read from the image label `vibepod.agent.version` (falling back to `org.opencontainers.image.version`) |
 
-All three columns are best-effort and nullable: an untagged reference leaves
-`image_tag` empty, and images without version labels leave `agent_version`
-empty. Databases created by older VibePod versions are migrated automatically
-on first use.
+All three columns are best-effort and nullable: an untagged reference stores
+`image_tag` as `NULL`, and images without version labels store `agent_version`
+as `NULL`. Databases created by older VibePod versions are migrated
+automatically on first use.
 
 ## The built-in proxy
 
