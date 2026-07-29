@@ -56,6 +56,7 @@ nav:
     - Overview: skills/index.md
     - Locator format: skills/locators.md
     - Authoring: skills/authoring.md
+  - Project overlays: overlays.md
   - Configuration: configuration.md
   - LLM Integration: llm.md
   - CLI Reference: cli-reference.md

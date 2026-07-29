@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import socket
 import subprocess
 import tempfile
@@ -623,3 +624,91 @@ def test_init_fallback_failure_raises(mock_docker) -> None:
             DockerManager()
 
     assert "Docker is not available" in str(exc_info.value)
+
+
+@patch("vibepod.core.docker.docker")
+def test_build_image_streams_and_succeeds(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.api.build.return_value = iter([{"stream": "Step 1/2\n"}, {"stream": "Done\n"}])
+
+    manager = DockerManager()
+    context = io.BytesIO(b"tar")
+    manager.build_image(context, tag="vibepod/overlay-claude:abc", labels={"a": "b"})
+
+    mock_client.api.build.assert_called_once_with(
+        fileobj=context,
+        custom_context=True,
+        tag="vibepod/overlay-claude:abc",
+        labels={"a": "b"},
+        rm=True,
+        decode=True,
+    )
+
+
+@patch("vibepod.core.docker.docker")
+def test_build_image_raises_on_error_chunk(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.api.build.return_value = iter([{"stream": "Step 1/2\n"}, {"error": "boom"}])
+
+    manager = DockerManager()
+    with pytest.raises(DockerClientError, match="boom"):
+        manager.build_image(io.BytesIO(b"tar"), tag="t:1", labels={})
+
+
+@patch("vibepod.core.docker.docker")
+def test_build_image_wraps_api_error(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.api.build.side_effect = APIError("daemon down")
+
+    manager = DockerManager()
+    with pytest.raises(DockerClientError, match="Failed to build image"):
+        manager.build_image(io.BytesIO(b"tar"), tag="t:1", labels={})
+
+
+def _overlay_image(image_id: str, tags: list[str], key: str) -> MagicMock:
+    image = MagicMock()
+    image.id = image_id
+    image.tags = tags
+    image.labels = {"vibepod.overlay.key": key}
+    return image
+
+
+@patch("vibepod.core.docker.docker")
+def test_remove_stale_overlays_removes_same_key_other_tags(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    keep = _overlay_image("sha256:keep", ["vibepod/overlay-claude:new1"], "k1")
+    stale = _overlay_image("sha256:old", ["vibepod/overlay-claude:old1"], "k1")
+    mock_client.images.list.return_value = [keep, stale]
+
+    manager = DockerManager()
+    removed = manager.remove_stale_overlays("k1", keep_tag="vibepod/overlay-claude:new1")
+
+    assert removed == 1
+    mock_client.images.list.assert_called_once_with(filters={"label": ["vibepod.overlay.key=k1"]})
+    mock_client.images.remove.assert_called_once_with("sha256:old")
+
+
+@patch("vibepod.core.docker.docker")
+def test_remove_stale_overlays_survives_remove_failure(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    stale = _overlay_image("sha256:old", ["vibepod/overlay-claude:old1"], "k1")
+    mock_client.images.list.return_value = [stale]
+    mock_client.images.remove.side_effect = DockerException("in use")
+
+    manager = DockerManager()
+    assert manager.remove_stale_overlays("k1", keep_tag="vibepod/overlay-claude:new1") == 0
+
+
+@patch("vibepod.core.docker.docker")
+def test_remove_stale_overlays_survives_list_failure(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.images.list.side_effect = DockerException("daemon down")
+
+    manager = DockerManager()
+    assert manager.remove_stale_overlays("k1", keep_tag="t:1") == 0

@@ -52,6 +52,7 @@ agents:
     env: {}       # Extra environment variables passed to the container
     volumes: []   # Reserved for future use
     init: []      # Optional shell commands run before agent startup
+    overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
 
   gemini:
     enabled: true

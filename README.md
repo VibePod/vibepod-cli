@@ -23,6 +23,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
 - 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau & more
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
+- 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image ([docs](https://vibepod.dev/docs/overlays/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
 - 🔒 **Privacy-first** — all metrics collected and stored locally, never sent to the cloud
