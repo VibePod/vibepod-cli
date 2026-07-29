@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Final
 from uuid import uuid4
 
+from vibepod.core.sqlite_migrations import add_missing_columns
+
 TASK_STATUS_QUEUED: Final = "queued"
 TASK_STATUS_STARTING: Final = "starting"
 TASK_STATUS_RUNNING: Final = "running"
@@ -140,13 +142,7 @@ class TaskStore:
         return conn
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
-        existing = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
-        migrated = False
-        for column, definition in _MIGRATION_COLUMNS.items():
-            if column not in existing:
-                conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} {definition}")
-                migrated = True
-        if migrated:
+        if add_missing_columns(conn, "tasks", _MIGRATION_COLUMNS):
             conn.execute(
                 "UPDATE tasks SET updated_at = created_at "
                 "WHERE updated_at IS NULL OR updated_at = ''",

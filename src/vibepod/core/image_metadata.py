@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Final
 
@@ -11,6 +12,10 @@ AGENT_VERSION_LABELS: Final = (
     "vibepod.agent.version",
     "org.opencontainers.image.version",
 )
+
+# A bare engine image ID (possibly truncated) used directly as the image
+# reference — its colon is not a repository/tag separator.
+_BARE_IMAGE_ID: Final = re.compile(r"sha256:[0-9a-fA-F]{6,64}")
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,10 @@ def collect_image_metadata(container: object, image: str) -> ImageMetadata:
     containers in tests, or a daemon that dropped away mid-inspect must never
     break the launch — missing pieces simply become ``None``.
     """
-    _, image_tag = _parse_image_name(image)
+    if _BARE_IMAGE_ID.fullmatch(image):
+        image_tag = None
+    else:
+        _, image_tag = _parse_image_name(image)
 
     image_hash: str | None = None
     agent_version: str | None = None
