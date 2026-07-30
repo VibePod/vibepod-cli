@@ -76,6 +76,19 @@ def test_tau_spec_matches_container_contract() -> None:
     assert spec.headless_prefix == ["-p"]
 
 
+def test_jcode_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("jcode")
+    assert spec.id == "jcode"
+    assert spec.provider == "1jehuang"
+    assert spec.image == DEFAULT_IMAGES["jcode"]
+    assert spec.config_subdir == "jcode"
+    assert spec.command == ["jcode"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env["HOME"] == "/config"
+    assert spec.extra_env["JCODE_NO_AUTO_UPDATE"] == "1"
+    assert spec.headless_prefix == ["run"]
+
+
 def test_get_agent_spec_unknown() -> None:
     with pytest.raises(ValueError):
         get_agent_spec("unknown")
@@ -129,7 +142,7 @@ def test_gemini_spec_runs_via_node_wrapper() -> None:
 
 
 def test_unsupported_agents_have_no_ikwid_args() -> None:
-    for agent in ("opencode", "auggie", "tau"):
+    for agent in ("opencode", "auggie", "tau", "jcode"):
         spec = get_agent_spec(agent)
         assert spec.ikwid_args is None, f"{agent} should not have ikwid_args"
 
@@ -169,7 +182,17 @@ def test_codex_spec_has_llm_env_map() -> None:
 
 
 def test_agents_without_llm_env_map() -> None:
-    for agent in ("gemini", "opencode", "devstral", "auggie", "copilot", "pi", "agy", "tau"):
+    for agent in (
+        "gemini",
+        "opencode",
+        "devstral",
+        "auggie",
+        "copilot",
+        "pi",
+        "agy",
+        "tau",
+        "jcode",
+    ):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
 

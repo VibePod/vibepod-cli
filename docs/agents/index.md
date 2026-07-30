@@ -16,6 +16,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `pi` | Earendil | `vp pi` | `vibepod/pi:latest` |
 | `agy` (Antigravity) | Google | `vp n` | `vibepod/agy:latest` |
 | `tau` | Hugging Face | `vp t` | `vibepod/tau:latest` |
+| `jcode` | 1jehuang | `vp j` | `vibepod/jcode:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`.
 
@@ -76,7 +77,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -203,6 +204,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `opencode` | Not supported |
 | `auggie` | Not supported |
 | `tau` | Not supported |
+| `jcode` | Not supported |
 
 Example:
 
@@ -315,6 +317,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `codex` | `codex exec "<prompt>"` |
 | `auggie` | `auggie --print "<prompt>"` |
 | `tau` | `tau -p "<prompt>"` |
+| `jcode` | `jcode run "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` on their `AgentSpec`.
 
@@ -718,3 +721,72 @@ vp task create tau "Summarize the README"
 are mounted at `/config/.agents/skills/<id>` and picked up automatically.
 
 Tau has no auto-approval flag, so `--ikwid` is not supported for it.
+
+### Jcode (1jehuang)
+
+```bash
+vp run jcode   # or: vp j
+```
+
+Jcode is a resource-focused terminal coding agent written in Rust, distributed
+as a single static binary. It supports Anthropic, OpenAI (including the Codex
+subscription), Gemini, GitHub Copilot, OpenRouter, Azure, Ollama, LM Studio,
+and custom OpenAI-compatible endpoints. Credentials and configuration are
+persisted under `~/.config/vibepod/agents/jcode/`, mounted at `/config` inside
+the container, where Jcode finds them as `~/.jcode/` and `~/.config/jcode/`:
+
+| Path in container | Contents |
+|---|---|
+| `/config/.jcode/config.toml` | Main configuration (display, providers, timeouts) |
+| `/config/.jcode/auth.json` | Claude/account credentials written by `jcode login` (OpenAI tokens go to `openai-auth.json`) |
+| `/config/.jcode/mcp.json` | Global MCP server configuration |
+| `/config/.jcode/sessions/` | Session history (resume with `jcode --resume <name>`) |
+| `/config/.config/jcode/` | Provider env files for custom endpoints (API keys) |
+
+**Authentication.** Run `jcode login` inside the container:
+
+```bash
+vp run jcode -- login --provider claude                # Anthropic OAuth / subscription
+vp run jcode -- login --provider anthropic-api         # Anthropic API key
+vp run jcode -- login --provider openai --no-browser   # headless: prints the auth URL
+```
+
+OAuth-style providers support `--no-browser` (alias `--headless`) so the auth
+URL is printed instead of a browser being launched — open the URL on the host,
+then paste the callback URL (or code) back into the container prompt, since the
+container's localhost callback listener is not reachable from the host browser.
+Saved credentials survive container restarts because they live in the
+persisted mount.
+
+API keys can also be injected instead of `jcode login`:
+
+```yaml
+agents:
+  jcode:
+    env:
+      ANTHROPIC_API_KEY: sk-ant-...
+      OPENAI_API_KEY: sk-...
+```
+
+Or per run: `vp run jcode -e ANTHROPIC_API_KEY=sk-ant-...`.
+
+**Proxy and TLS.** Jcode's HTTP client (reqwest with rustls) honors
+`HTTP_PROXY`/`HTTPS_PROXY` and loads extra CA certificates from
+`SSL_CERT_FILE`, both of which VibePod sets when the proxy is enabled, so
+traffic routes through `vibepod-proxy` with the mounted mitmproxy CA.
+
+**Non-interactive mode.** Jcode's `run` subcommand works with both `vp run`
+and task mode:
+
+```bash
+vp run jcode run "explain this repo"
+vp task create jcode "Summarize the README"
+```
+
+**Skills.** Jcode scans `~/.agents/skills/`, so skills installed via
+`vp skills` are mounted at `/config/.agents/skills/<id>` and picked up
+automatically.
+
+VibePod sets `JCODE_NO_AUTO_UPDATE=1` so the pinned binary in the image is
+never self-updated at runtime. Jcode has no auto-approval flag (its safety
+system asks for permission in-session), so `--ikwid` is not supported for it.

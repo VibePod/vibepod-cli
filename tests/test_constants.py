@@ -18,6 +18,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_PI",
         "VP_IMAGE_AGY",
         "VP_IMAGE_TAU",
+        "VP_IMAGE_JCODE",
         "VP_DATASETTE_IMAGE",
         "VP_PROXY_IMAGE",
     ):
@@ -35,6 +36,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["pi"] == "vibepod/pi:latest"
     assert images["agy"] == "vibepod/agy:latest"
     assert images["tau"] == "vibepod/tau:latest"
+    assert images["jcode"] == "vibepod/jcode:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -61,3 +63,11 @@ def test_tau_image_override(monkeypatch) -> None:
     images = get_default_images()
 
     assert images["tau"] == "example/tau:dev"
+
+
+def test_jcode_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_JCODE", "example/jcode:dev")
+
+    images = get_default_images()
+
+    assert images["jcode"] == "example/jcode:dev"

@@ -122,6 +122,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
       - opencode reads ~/.agents/skills/ (also ~/.claude/skills/, ~/.config/opencode/skills/)
       - auggie   reads ~/.agents/skills/ (also ~/.augment/skills/, ~/.claude/skills/)
       - tau      reads ~/.agents/skills/ (also ~/.tau/skills/)
+      - jcode    reads ~/.agents/skills/ (also ~/.jcode/skills/)
 
     Gemini wraps skills inside an extension manifest and would need a generated
     gemini-extension.json — handled separately when we add that support.
@@ -131,7 +132,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/claude/skills"]
     if agent == "pi":
         return ["/config/.pi/agent/skills"]
-    if agent in ("codex", "opencode", "auggie", "tau"):
+    if agent in ("codex", "opencode", "auggie", "tau", "jcode"):
         return ["/config/.agents/skills"]
     return []
 

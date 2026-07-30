@@ -109,6 +109,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["codex"].headless_prefix == ["exec"]
     assert AGENT_SPECS["auggie"].headless_prefix == ["--print"]
     assert AGENT_SPECS["tau"].headless_prefix == ["-p"]
+    assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:

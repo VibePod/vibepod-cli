@@ -126,6 +126,14 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
+            "jcode": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["jcode"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,
