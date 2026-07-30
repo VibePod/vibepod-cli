@@ -24,8 +24,8 @@ profile — nothing moves when you start using profiles.
 ## Managing profiles
 
 ```bash
-vp profile list            # list profiles; * marks the active one,
-                           # agents with stored credentials shown in parentheses
+vp profile list            # list profiles; * marks the active one, agents with
+                           # stored data (config, caches, credentials) in parentheses
 vp profile create work     # create an empty profile
 vp profile remove work     # delete a profile and its credentials (asks first)
 ```
