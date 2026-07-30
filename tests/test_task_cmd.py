@@ -159,6 +159,48 @@ def test_task_create_claude_builds_headless_command(monkeypatch, tmp_path, tmp_t
     assert stub.run_kwargs["agent"] == "claude"
 
 
+def test_task_create_publishes_configured_ports(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["claude"]["ports"] = ["8000:8000", "6000:6000/udp"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["ports"] == {"8000": ["8000"], "6000/udp": ["6000"]}
+
+
+def test_task_create_rejects_invalid_ports_before_docker(
+    monkeypatch, tmp_path, tmp_task_store
+) -> None:
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["claude"]["ports"] = ["not-a-port"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.ports\[1\]"):
+        task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+
+
+def test_task_create_without_configured_ports_publishes_none(
+    monkeypatch, tmp_path, tmp_task_store
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["ports"] is None
+
+
 def test_task_create_codex_uses_exec_subcommand(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)

@@ -51,6 +51,7 @@ agents:
     auto_pull: null  # Per-agent override: true/false, or null to use global auto_pull
     env: {}       # Extra environment variables passed to the container
     volumes: []   # Reserved for future use
+    ports: []     # Ports to publish on the host, `docker run -p` syntax
     init: []      # Optional shell commands run before agent startup
     overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
 
@@ -59,6 +60,7 @@ agents:
     image: vibepod/gemini:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
   opencode:
@@ -66,6 +68,7 @@ agents:
     image: vibepod/opencode:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
   devstral:
@@ -73,6 +76,7 @@ agents:
     image: vibepod/devstral:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
   auggie:
@@ -80,6 +84,7 @@ agents:
     image: vibepod/auggie:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
   copilot:
@@ -87,6 +92,7 @@ agents:
     image: vibepod/copilot:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
   codex:
@@ -94,6 +100,7 @@ agents:
     image: vibepod/codex:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
   pi:
@@ -101,6 +108,7 @@ agents:
     image: vibepod/pi:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
   agy:
@@ -108,6 +116,7 @@ agents:
     image: vibepod/agy:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
   tau:
@@ -115,6 +124,7 @@ agents:
     image: vibepod/tau:latest
     env: {}
     volumes: []
+    ports: []
     init: []
 
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
@@ -227,6 +237,29 @@ agents:
 `agents.<agent>.init` runs inside the container before the agent process starts. Commands run with `/bin/sh -lc` and `set -e` (startup stops on the first failed command).
 
 Commit this file to share project defaults with your team.
+
+## Publishing ports
+
+By default no user-defined ports are published, so anything the agent starts inside the container — a dev server, web UI, or debugger — is unreachable from the host. `agents.<agent>.ports` publishes container ports on the host using the same syntax as `docker run -p`:
+
+```yaml
+# .vibepod/config.yaml
+agents:
+  claude:
+    ports:
+      - "8000:8000"            # host:container
+      - "127.0.0.1:9229:9229"  # bind to a specific host interface
+      - "6000:6000/udp"        # UDP
+      - "3000"                 # container port on a random host port
+```
+
+!!! warning "Always quote port entries"
+    YAML 1.1 parses unquoted `host:container` pairs as base-60 numbers:
+    `- 22:22` loads as the integer `1342` and would publish the wrong port.
+    Out-of-range results (e.g. `3000:30` → `180030`) are rejected at startup,
+    but in-range ones are not detectable — quote every entry.
+
+Like other agent keys, a project-level `ports` list replaces the global one for that agent. The list applies to both `vp run` and `vp task` containers; note that two containers cannot publish the same host port at the same time, so a fixed host port limits you to one such container per agent.
 
 ## The built-in proxy
 

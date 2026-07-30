@@ -618,7 +618,10 @@ class DockerManager:
                     "host_config": host_config,
                 }
                 if ports:
-                    create_kwargs["ports"] = list(ports.keys())
+                    # (port, proto) tuples: raw "1456/tcp" keys would be
+                    # re-suffixed by docker-py's exposed-port normalization
+                    # into "1456/tcp/tcp".
+                    create_kwargs["ports"] = [tuple(p.split("/", 1)) for p in ports]
                 if platform:
                     create_kwargs["platform"] = platform
                 if user:

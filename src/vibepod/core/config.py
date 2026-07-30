@@ -42,6 +42,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "gemini": {
@@ -50,6 +51,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "opencode": {
@@ -58,6 +60,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "devstral": {
@@ -66,6 +69,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "auggie": {
@@ -74,6 +78,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "copilot": {
@@ -82,6 +87,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "codex": {
@@ -90,6 +96,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "pi": {
@@ -98,6 +105,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "agy": {
@@ -106,6 +114,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
             "tau": {
@@ -114,6 +123,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
         },

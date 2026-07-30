@@ -115,6 +115,76 @@ def test_agent_extra_volumes_for_opencode(tmp_path: Path) -> None:
     ]
 
 
+def test_agent_port_bindings_empty_config() -> None:
+    assert launch.agent_port_bindings("claude", {}) == {}
+    assert launch.agent_port_bindings("claude", {"ports": None}) == {}
+    assert launch.agent_port_bindings("claude", {"ports": []}) == {}
+
+
+def test_agent_port_bindings_supports_docker_publish_syntax() -> None:
+    bindings = launch.agent_port_bindings(
+        "claude",
+        {
+            "ports": [
+                "8000:8000",
+                "127.0.0.1:8080:80",
+                "6000:6000/udp",
+                9000,
+                "127.0.0.1::5000",
+            ]
+        },
+    )
+    assert bindings == {
+        "8000": ["8000"],
+        "80": [("127.0.0.1", "8080")],
+        "6000/udp": ["6000"],
+        "9000": [None],
+        "5000": [("127.0.0.1", None)],
+    }
+
+
+def test_agent_port_bindings_accepts_single_string_and_merges_duplicates() -> None:
+    assert launch.agent_port_bindings("claude", {"ports": "8000:80"}) == {"80": [("8000")]}
+
+    bindings = launch.agent_port_bindings("claude", {"ports": ["8000:80", "9000:80"]})
+    assert bindings == {"80": ["8000", "9000"]}
+
+
+def test_agent_port_bindings_rejects_invalid_entries() -> None:
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.ports\[2\]"):
+        launch.agent_port_bindings("claude", {"ports": ["8000:8000", "not-a-port"]})
+
+    with pytest.raises(typer.BadParameter, match=r"agents\.gemini\.ports\[1\]"):
+        launch.agent_port_bindings("gemini", {"ports": [""]})
+
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.ports\[1\]"):
+        launch.agent_port_bindings("claude", {"ports": [{"host": 8000}]})
+
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.ports"):
+        launch.agent_port_bindings("claude", {"ports": {"8000": 8000}})
+
+
+def test_agent_port_bindings_rejects_out_of_range_ports() -> None:
+    # Container port out of range.
+    with pytest.raises(typer.BadParameter, match=r"out of range"):
+        launch.agent_port_bindings("claude", {"ports": ["8000:70000"]})
+
+    # Host port out of range.
+    with pytest.raises(typer.BadParameter, match=r"out of range"):
+        launch.agent_port_bindings("claude", {"ports": ["99999:8000"]})
+
+    # YAML 1.1 sexagesimal surprise: unquoted `3000:30` loads as the int
+    # 180030, which must not silently publish container port 180030.
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.ports\[1\].*out of range"):
+        launch.agent_port_bindings("claude", {"ports": [180030]})
+
+    # Port 0 stays valid on the host side (daemon assigns an ephemeral port)
+    # but not as a container port.
+    assert launch.agent_port_bindings("claude", {"ports": ["0:80"]}) == {"80": ["0"]}
+    with pytest.raises(typer.BadParameter, match=r"out of range"):
+        launch.agent_port_bindings("claude", {"ports": ["8000:0"]})
+
+
 def test_skills_mounts_for_agent_ignores_malformed_lockfiles(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -473,7 +543,7 @@ def test_run_agent_uses_low_level_api_for_podman_keep_id(tmp_path: Path) -> None
         name="vibepod-pi-test",
         version="0.14.0",
         network="vibepod-network",
-        ports={"1456/tcp": 1455},
+        ports={"1456/tcp": 1455, "6000/udp": ["6000"], "9000": [None]},
         extra_volumes=[(str(config_dir / "extra"), "/extra", "ro")],
         platform="linux/amd64",
         user="1000:1000",
@@ -492,7 +562,7 @@ def test_run_agent_uses_low_level_api_for_podman_keep_id(tmp_path: Path) -> None
         ],
         "auto_remove": True,
         "network_mode": "vibepod-network",
-        "port_bindings": {"1456/tcp": 1455},
+        "port_bindings": {"1456/tcp": 1455, "6000/udp": ["6000"], "9000": [None]},
     }
     assert client.api.host_config is not None
     assert client.api.host_config["UsernsMode"] == "keep-id"
@@ -503,10 +573,140 @@ def test_run_agent_uses_low_level_api_for_podman_keep_id(tmp_path: Path) -> None
     assert client.api.create_kwargs["labels"]["vibepod.agent"] == "pi"
     assert client.api.create_kwargs["environment"] == {"USER_UID": "0"}
     assert client.api.create_kwargs["working_dir"] == "/workspace"
-    assert client.api.create_kwargs["ports"] == ["1456/tcp"]
+    # (port, proto) tuples: raw "1456/tcp" strings would be re-suffixed by
+    # docker-py's exposed-port normalization into "1456/tcp/tcp".
+    assert client.api.create_kwargs["ports"] == [("1456", "tcp"), ("6000", "udp"), ("9000",)]
     assert client.api.create_kwargs["platform"] == "linux/amd64"
     assert client.api.create_kwargs["user"] == "1000:1000"
     assert client.api.create_kwargs["entrypoint"] == ["/entrypoint.sh"]
+
+
+class _PortCapturingManager:
+    """DockerManager stub that records run_agent kwargs for `vp run` wiring tests."""
+
+    def __init__(self) -> None:
+        self.run_kwargs: dict | None = None
+
+    def ensure_network(self, name: str) -> None:
+        pass
+
+    def networks_with_running_containers(self) -> list[str]:
+        return []
+
+    def is_rootless_podman(self) -> bool:
+        return False
+
+    def pull_image(self, image: str, auto_clean: bool = False) -> None:
+        pass
+
+    def pull_if_newer(self, image: str, auto_clean: bool = False) -> None:
+        pass
+
+    def ensure_proxy(self, **kwargs) -> None:
+        pass
+
+    def resolve_launch_command(self, image: str, command: list[str] | None) -> list[str]:
+        return command or []
+
+    def run_agent(self, **kwargs):
+        self.run_kwargs = kwargs
+        return type(
+            "_Container",
+            (),
+            {
+                "id": "cid123456789012",
+                "name": kwargs.get("name") or "vibepod-claude-abcdef",
+                "status": "running",
+                "attrs": {"NetworkSettings": {"Networks": {}}},
+                "reload": lambda self: None,
+                "labels": {},
+                "logs": lambda self, **kw: b"",
+            },
+        )()
+
+
+def _ports_config(agent: str, ports) -> dict:
+    agent_cfg: dict = {"env": {}, "init": []}
+    if ports is not None:
+        agent_cfg["ports"] = ports
+    return {
+        "default_agent": "claude",
+        "auto_pull": False,
+        "auto_remove": True,
+        "network": "vibepod-network",
+        "agents": {agent: agent_cfg},
+        "proxy": {"enabled": False},
+        "logging": {"enabled": False},
+    }
+
+
+@pytest.fixture
+def _tmp_config_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
+    return tmp_path
+
+
+def test_run_publishes_configured_ports(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(
+        run_cmd, "get_config", lambda: _ports_config("claude", ["8000:8000", "6000:6000/udp"])
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "claude", "-w", str(workspace), "--detach"])
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["ports"] == {"8000": ["8000"], "6000/udp": ["6000"]}
+
+
+def test_run_without_configured_ports_publishes_none(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "claude", "-w", str(workspace), "--detach"])
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["ports"] is None
+
+
+def test_run_codex_oauth_ports_merge_with_configured_ports(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("codex", ["8000:8000"]))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app, ["run", "codex", "-w", str(workspace), "--detach", "login"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["ports"] == {
+        "8000": ["8000"],
+        f"{run_cmd.CODEX_OAUTH_FORWARD_PORT}/tcp": run_cmd.CODEX_OAUTH_CALLBACK_PORT,
+    }
+
+
+def test_run_rejects_invalid_configured_ports(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", ["not-a-port"]))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "claude", "-w", str(workspace), "--detach"])
+
+    assert result.exit_code != 0
+    assert "agents.claude.ports" in result.output
+    assert stub.run_kwargs is None
 
 
 def test_run_agent_is_rootless_podman_detects_podman_engine() -> None:
