@@ -47,17 +47,20 @@ def _emit_or_raise(result: skills_engine.EngineResult, json_out: bool) -> None:
 @app.command("add")
 def add_cmd(
     locator: Annotated[
-        str, typer.Argument(help="Skill locator (github:..., npm:..., ./path, ...)")
+        str,
+        typer.Argument(help="Skill locator (github:..., npm:..., ./path, ...)"),
     ],
     skill_id: Annotated[
-        str | None, typer.Option("--id", help="Override the derived skill ID")
+        str | None,
+        typer.Option("--id", help="Override the derived skill ID"),
     ] = None,
     scope: Annotated[
         str | None,
         typer.Option("--scope", help="local|user (defaults to local inside a project, else user)"),
     ] = None,
     link: Annotated[
-        bool, typer.Option("--link", help="Symlink instead of copy (local sources only)")
+        bool,
+        typer.Option("--link", help="Symlink instead of copy (local sources only)"),
     ] = False,
     json_out: Annotated[bool, typer.Option("--json", help="Emit JSON to stdout")] = False,
 ) -> None:
@@ -78,8 +81,7 @@ def add_cmd(
             if record.get("bundle"):
                 installed = record.get("installed", [])
                 success(
-                    f"Installed {len(installed)} skill(s) from bundle "
-                    f"{record.get('locator', '')}"
+                    f"Installed {len(installed)} skill(s) from bundle {record.get('locator', '')}",
                 )
                 for item in installed:
                     info(f"  + {item.get('id', '?')} ({item.get('name', '')})")
@@ -88,7 +90,7 @@ def add_cmd(
             else:
                 success(
                     f"Installed {record.get('id', '?')} "
-                    f"({record.get('name', '')}) → {record.get('path', '')}"
+                    f"({record.get('name', '')}) → {record.get('path', '')}",
                 )
     _emit_or_raise(result, json_out)
 
@@ -115,7 +117,8 @@ def delete_cmd(
 @app.command("list")
 def list_cmd(
     scope: Annotated[
-        str | None, typer.Option("--scope", help="Filter by scope (local|user)")
+        str | None,
+        typer.Option("--scope", help="Filter by scope (local|user)"),
     ] = None,
     json_out: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
@@ -187,7 +190,7 @@ def sync_cmd(
             if record.get("command") == "sync":
                 success(
                     f"Synced {resolved_scope}: restored={len(record.get('restored', []))}, "
-                    f"unchanged={len(record.get('unchanged', []))}"
+                    f"unchanged={len(record.get('unchanged', []))}",
                 )
     _emit_or_raise(result, json_out)
 

@@ -245,18 +245,21 @@ def _maybe_select_network(
 def run(
     agent: Annotated[str | None, typer.Argument(help="Agent to run")] = None,
     workspace: Annotated[
-        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+        Path,
+        typer.Option("-w", "--workspace", help="Workspace directory"),
     ] = Path("."),
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     no_overlay: Annotated[
-        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+        bool,
+        typer.Option("--no-overlay", help="Skip the project overlay image"),
     ] = False,
     rebuild_overlay: Annotated[
         bool,
         typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
     ] = False,
     detach: Annotated[
-        bool, typer.Option("-d", "--detach", help="Run container in background")
+        bool,
+        typer.Option("-d", "--detach", help="Run container in background"),
     ] = False,
     env: Annotated[
         list[str] | None,
@@ -298,7 +301,7 @@ def run(
         for supported_agent in SUPPORTED_AGENTS:
             shortcut = get_agent_shortcut(supported_agent)
             supported_labels.append(
-                f"{supported_agent} ({shortcut})" if shortcut else supported_agent
+                f"{supported_agent} ({shortcut})" if shortcut else supported_agent,
             )
         error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
@@ -310,7 +313,7 @@ def run(
     if is_protected_dir(workspace_path):
         error(
             f"'{workspace_path}' is a protected directory (home or root) and cannot be "
-            "added to the allow list. Change to a project directory first."
+            "added to the allow list. Change to a project directory first.",
         )
         raise typer.Exit(1)
 
@@ -318,7 +321,7 @@ def run(
         if not sys.stdin.isatty():
             error(
                 f"'{workspace_path}' is not in the allowed directories list. "
-                "Run `vp config allow-dir` to add it."
+                "Run `vp config allow-dir` to add it.",
             )
             raise typer.Exit(1)
         if not Confirm.ask(
@@ -361,7 +364,7 @@ def run(
         info(
             "codex login: publishing the OAuth callback on "
             f"http://localhost:{CODEX_OAUTH_CALLBACK_PORT}/auth/callback "
-            "(open the URL Codex prints in your host browser)"
+            "(open the URL Codex prints in your host browser)",
         )
 
     if (
@@ -495,7 +498,7 @@ def run(
             if x11_auth is None:
                 warning(
                     "Could not prepare an X11 auth cookie (is `xauth` installed?); "
-                    "clipboard access may be rejected by the X server"
+                    "clipboard access may be rejected by the X server",
                 )
             x11_vols, x11_env = _x11_volumes_and_env(display, x11_auth)
             extra_volumes.extend(x11_vols)
@@ -587,19 +590,23 @@ def run(
         if container_ip:
             mapping_path = proxy_db_path.parent / "containers.json"
             mapping_updated = _update_container_mapping(
-                mapping_path, container_ip, container.id, container.name, selected_agent
+                mapping_path,
+                container_ip,
+                container.id,
+                container.name,
+                selected_agent,
             )
             if not mapping_updated:
                 warning(
                     f"Could not write proxy container mapping at {mapping_path}. "
-                    "Fix proxy directory permissions to restore container attribution."
+                    "Fix proxy directory permissions to restore container attribution.",
                 )
 
     if detach:
         if selected_agent == "claude" and "setup-token" in passthrough_args:
             error(
                 "Cannot use --detach with `claude setup-token`: "
-                "the setup-token flow requires an interactive session."
+                "the setup-token flow requires an interactive session.",
             )
             container.stop(timeout=5)
             raise typer.Exit(1)
@@ -637,11 +644,7 @@ def run(
     finally:
         logger.close_session(exit_reason)
 
-    if (
-        selected_agent == "claude"
-        and "setup-token" in passthrough_args
-        and exit_reason == "normal"
-    ):
+    if selected_agent == "claude" and "setup-token" in passthrough_args and exit_reason == "normal":
         _capture_claude_setup_token(config_dir)
 
 

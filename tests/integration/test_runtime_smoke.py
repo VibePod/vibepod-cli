@@ -74,7 +74,7 @@ def cleanup_smoke_containers(manager: DockerManager) -> Iterator[None]:
                 last_error = exc
                 print(
                     f"cleanup: removing {container.name} failed "
-                    f"(attempt {attempt}/{_CLEANUP_ATTEMPTS}): {exc}"
+                    f"(attempt {attempt}/{_CLEANUP_ATTEMPTS}): {exc}",
                 )
                 time.sleep(0.5)
         if last_error is not None:
@@ -100,7 +100,7 @@ def _wait_for_log(container: Any, needle: bytes, timeout: float = 30.0) -> bytes
             exit_code = container.attrs.get("State", {}).get("ExitCode")
             raise AssertionError(
                 f"Container {container.status} (exit code {exit_code}) "
-                f"before {needle!r} appeared in logs: {logs!r}"
+                f"before {needle!r} appeared in logs: {logs!r}",
             )
         time.sleep(0.5)
     raise AssertionError(f"Timed out waiting for {needle!r} in logs: {logs!r}")

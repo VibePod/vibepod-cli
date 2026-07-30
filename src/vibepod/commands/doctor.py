@@ -120,7 +120,7 @@ def claude() -> None:
             if not refresh:
                 warning(
                     "  → no refreshToken present; Claude Code cannot rotate this "
-                    "session and will require re-login after expiry"
+                    "session and will require re-login after expiry",
                 )
 
     console.print()
@@ -168,7 +168,7 @@ def claude() -> None:
     if not found_any:
         console.print("  none set on host")
     console.print(
-        "  [dim]note: these are host-side; the container sees its own env.[/dim]"
+        "  [dim]note: these are host-side; the container sees its own env.[/dim]",
     )
 
     console.print()
@@ -182,29 +182,29 @@ def claude() -> None:
     elif creds_path.exists():
         console.print(
             "  [yellow]OAuth credentials.json[/yellow] "
-            "(subject to the known refresh bug — may require /login when expired)"
+            "(subject to the known refresh bug — may require /login when expired)",
         )
     else:
         console.print(
             "  [red]no auth[/red] — run `vp run claude` and `/login`, "
-            "or `vp run claude setup-token`"
+            "or `vp run claude setup-token`",
         )
 
     console.print()
     console.print("[bold]Tips[/bold]")
     console.print(
-        "  • If `modified` on .credentials.json never updates past the original /login time,"
+        "  • If `modified` on .credentials.json never updates past the original /login time,",
     )
     console.print("    the token is not being rotated. Re-run with:")
     console.print(
-        "      [cyan]vp run claude -e ANTHROPIC_LOG=debug -e DEBUG=1[/cyan]"
+        "      [cyan]vp run claude -e ANTHROPIC_LOG=debug -e DEBUG=1[/cyan]",
     )
     console.print(
-        "    and look for [dim][API:auth][/dim] entries near/after expiry to confirm."
+        "    and look for [dim][API:auth][/dim] entries near/after expiry to confirm.",
     )
     console.print(
         "  • For headless/CI, consider `claude setup-token` + "
-        "`-e CLAUDE_CODE_OAUTH_TOKEN=...` to bypass refresh entirely."
+        "`-e CLAUDE_CODE_OAUTH_TOKEN=...` to bypass refresh entirely.",
     )
 
     # Exit 2 only if credentials.json is expired AND nothing else would auth:

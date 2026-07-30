@@ -80,7 +80,9 @@ def _local_mount_dir(cwd: Path | None, *, local_required: bool) -> Path:
 
 
 def _ensure_dirs(
-    cwd: Path | None = None, *, local_required: bool = False
+    cwd: Path | None = None,
+    *,
+    local_required: bool = False,
 ) -> tuple[Path, Path, Path]:
     local = _local_mount_dir(cwd, local_required=local_required)
     user = user_skills_dir()
@@ -158,10 +160,9 @@ def run_engine(
 
             config = get_config()
             auto_pull_enabled = bool(config.get("auto_pull", True))
-            is_latest = (
-                ":" not in SKILLS_ENGINE_IMAGE.split("/")[-1]
-                or SKILLS_ENGINE_IMAGE.endswith(":latest")
-            )
+            is_latest = ":" not in SKILLS_ENGINE_IMAGE.split("/")[
+                -1
+            ] or SKILLS_ENGINE_IMAGE.endswith(":latest")
 
             if not image_exists:
                 manager.pull_image(
@@ -171,6 +172,7 @@ def run_engine(
             elif auto_pull_enabled and is_latest:
                 try:
                     from vibepod.utils.console import info
+
                     info("Checking for skills-engine image updates…")
                     manager.pull_if_newer(
                         SKILLS_ENGINE_IMAGE,
@@ -222,11 +224,14 @@ def run_engine(
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
             raise SkillsEngineError(
-                f"Engine returned non-JSON output (exit={proc.returncode}): {proc.stdout!r}"
+                f"Engine returned non-JSON output (exit={proc.returncode}): {proc.stdout!r}",
             ) from exc
 
     return EngineResult(
-        exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr, data=payload
+        exit_code=proc.returncode,
+        stdout=proc.stdout,
+        stderr=proc.stderr,
+        data=payload,
     )
 
 
@@ -266,7 +271,9 @@ def add(
 
 def delete(skill_id: str, *, scope: Scope, cwd: Path | None = None) -> EngineResult:
     return run_engine(
-        ["delete", skill_id, "--scope", scope], cwd=cwd, local_required=scope == "local"
+        ["delete", skill_id, "--scope", scope],
+        cwd=cwd,
+        local_required=scope == "local",
     )
 
 

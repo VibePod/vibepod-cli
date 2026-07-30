@@ -43,19 +43,22 @@ def test_python314_http_response_flush_filter_does_not_hide_other_errors() -> No
 
     assert (
         should_ignore_closed_http_response_flush_error(
-            closed_response, ValueError("different error")
+            closed_response,
+            ValueError("different error"),
         )
         is False
     )
     assert (
         should_ignore_closed_http_response_flush_error(
-            open_response, ValueError("I/O operation on closed file.")
+            open_response,
+            ValueError("I/O operation on closed file."),
         )
         is False
     )
     assert (
         should_ignore_closed_http_response_flush_error(
-            closed_response, RuntimeError("I/O operation on closed file.")
+            closed_response,
+            RuntimeError("I/O operation on closed file."),
         )
         is False
     )

@@ -32,7 +32,8 @@ def test_config_init_creates_project_config(monkeypatch, tmp_path: Path) -> None
 
 
 def test_config_init_does_not_overwrite_existing_config_without_force(
-    monkeypatch, tmp_path: Path
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     project_config = Path(".vibepod/config.yaml")
@@ -57,7 +58,8 @@ def test_config_init_force_overwrites_existing_config(monkeypatch, tmp_path: Pat
 
 
 def test_config_init_with_agent_creates_project_config_with_agent_block(
-    monkeypatch, tmp_path: Path
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -78,7 +80,8 @@ def test_config_init_with_agent_creates_project_config_with_agent_block(
 
 
 def test_config_init_with_agent_appends_to_existing_project_config(
-    monkeypatch, tmp_path: Path
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     project_config = Path(".vibepod/config.yaml")
@@ -96,7 +99,8 @@ def test_config_init_with_agent_appends_to_existing_project_config(
 
 
 def test_config_init_with_agent_fails_when_agent_already_configured(
-    monkeypatch, tmp_path: Path
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     project_config = Path(".vibepod/config.yaml")
@@ -186,7 +190,6 @@ def test_llm_env_overrides(monkeypatch, tmp_path: Path) -> None:
     assert llm["base_url"] == "http://localhost:11434/v1"
     assert llm["api_key"] == "sk-test"
     assert llm["model"] == "llama3"
-
 
 
 # ---------------------------------------------------------------------------

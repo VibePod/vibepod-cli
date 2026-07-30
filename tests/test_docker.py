@@ -23,7 +23,8 @@ from vibepod.core.docker import (
 )
 
 requires_af_unix = pytest.mark.skipif(
-    not hasattr(socket, "AF_UNIX"), reason="AF_UNIX sockets are not available on this platform"
+    not hasattr(socket, "AF_UNIX"),
+    reason="AF_UNIX sockets are not available on this platform",
 )
 
 
@@ -82,7 +83,10 @@ def test_pull_image_success(mock_docker) -> None:
     manager.pull_image("vibepod/datasette:latest")
 
     mock_client.api.pull.assert_called_once_with(
-        "vibepod/datasette", tag="latest", stream=True, decode=True
+        "vibepod/datasette",
+        tag="latest",
+        stream=True,
+        decode=True,
     )
 
 
@@ -372,7 +376,10 @@ def test_ensure_datasette_pulls_image_when_missing(mock_docker, tmp_path: Path) 
     )
 
     mock_client.api.pull.assert_called_once_with(
-        "vibepod/datasette", tag="latest", stream=True, decode=True
+        "vibepod/datasette",
+        tag="latest",
+        stream=True,
+        decode=True,
     )
     mock_client.containers.run.assert_called_once()
 
@@ -397,7 +404,10 @@ def test_ensure_proxy_pulls_image_when_missing(mock_docker, tmp_path: Path) -> N
     )
 
     mock_client.api.pull.assert_called_once_with(
-        "vibepod/proxy", tag="latest", stream=True, decode=True
+        "vibepod/proxy",
+        tag="latest",
+        stream=True,
+        decode=True,
     )
     mock_client.containers.run.assert_called_once()
 
@@ -496,7 +506,8 @@ def test_discover_podman_socket_falls_back_to_podman_info(monkeypatch, socket_di
 
 @requires_af_unix
 def test_discover_podman_socket_enumerates_non_default_machines(
-    monkeypatch, socket_dir: Path
+    monkeypatch,
+    socket_dir: Path,
 ) -> None:
     """A running non-default machine is found even when the default one is dead."""
     monkeypatch.delenv("DOCKER_HOST", raising=False)

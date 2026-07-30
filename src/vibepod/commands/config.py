@@ -28,10 +28,12 @@ PROJECT_CONFIG_MINIMAL = "version: 1\n"
 @app.command("init")
 def init(
     agent: Annotated[
-        str | None, typer.Argument(help="Optional agent config to copy into project")
+        str | None,
+        typer.Argument(help="Optional agent config to copy into project"),
     ] = None,
     force: Annotated[
-        bool, typer.Option("--force", help="Overwrite existing project config if present")
+        bool,
+        typer.Option("--force", help="Overwrite existing project config if present"),
     ] = False,
 ) -> None:
     """Create a minimal project config or add a specific agent config."""
@@ -119,10 +121,12 @@ def show(
 @app.command("path")
 def path(
     global_only: Annotated[
-        bool, typer.Option("--global", help="Show global config path only")
+        bool,
+        typer.Option("--global", help="Show global config path only"),
     ] = False,
     project_only: Annotated[
-        bool, typer.Option("--project", help="Show project config path only")
+        bool,
+        typer.Option("--project", help="Show project config path only"),
     ] = False,
 ) -> None:
     """Show config and logs paths."""
@@ -141,7 +145,7 @@ def path(
         return
 
     logs_path = Path(
-        str(get_config().get("logging", {}).get("db_path", "~/.config/vibepod/logs.db"))
+        str(get_config().get("logging", {}).get("db_path", "~/.config/vibepod/logs.db")),
     )
     logs_path = logs_path.expanduser().resolve()
 
@@ -169,7 +173,7 @@ def allow_dir(
     if is_protected_dir(target):
         error(
             f"'{target}' is a protected directory (home or root) and cannot be added "
-            "to the allow list."
+            "to the allow list.",
         )
         raise typer.Exit(1)
     try:

@@ -19,8 +19,10 @@ def mock_docker_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeDockerManager:
         def __init__(self) -> None:
             self.client = MagicMock()
+
         def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
+
         def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
             return False
 
@@ -41,7 +43,8 @@ def _fake_run_factory(stdout: str = "", exit_code: int = 0) -> Any:
 
 
 def test_run_engine_builds_expected_docker_command(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
     monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
@@ -69,7 +72,8 @@ def test_run_engine_builds_expected_docker_command(
 
 
 def test_run_engine_explicit_local_scope_creates_local_skills_dir(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
     monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
@@ -80,15 +84,14 @@ def test_run_engine_explicit_local_scope_creates_local_skills_dir(
     skills_engine.list_skills("local", cwd=tmp_path)
 
     local = tmp_path / ".vibepod" / "skills"
-    mount_args = [
-        arg for i, arg in enumerate(captured["cmd"]) if captured["cmd"][i - 1] == "-v"
-    ]
+    mount_args = [arg for i, arg in enumerate(captured["cmd"]) if captured["cmd"][i - 1] == "-v"]
     assert local.is_dir()
     assert f"{local}:/vibepod/local-skills" in mount_args
 
 
 def test_run_engine_propagates_trusted_sources_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
     monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
@@ -116,7 +119,8 @@ def test_run_engine_raises_on_non_json(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 
 def test_add_mounts_local_locator_from_cwd_read_only(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     cwd = tmp_path / "project"
     process_cwd = tmp_path / "process-cwd"
@@ -150,8 +154,7 @@ def test_add_accepts_github_tree_url(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     url = (
-        "https://github.com/alirezarezvani/claude-skills/tree/main/"
-        "product-team/skills/spec-to-repo"
+        "https://github.com/alirezarezvani/claude-skills/tree/main/product-team/skills/spec-to-repo"
     )
     skills_engine.add(url, scope="user", cwd=tmp_path)
 
@@ -167,7 +170,8 @@ def test_add_rejects_missing_local_locator(tmp_path: Path) -> None:
 
 
 def test_add_mounts_bare_relative_local_locator(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     cwd = tmp_path / "project"
     source = cwd / "skills" / "researcher"
@@ -190,7 +194,8 @@ def test_add_mounts_bare_relative_local_locator(
 
 
 def test_add_mounts_current_directory_locator(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     source = tmp_path / "skill"
     source.mkdir()
@@ -209,7 +214,8 @@ def test_add_mounts_current_directory_locator(
 
 
 def test_add_does_not_mount_remote_locators(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
     monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
@@ -233,7 +239,8 @@ def test_add_does_not_mount_remote_locators(
 
 
 def test_add_expands_tilde_local_locator(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
     source = home / "skills" / "foo"
@@ -293,7 +300,8 @@ def test_add_rejects_missing_bare_local_locator(tmp_path: Path) -> None:
 
 
 def test_run_engine_pulls_image_when_missing(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
     monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
@@ -308,8 +316,10 @@ def test_run_engine_pulls_image_when_missing(
         def __init__(self) -> None:
             self.client = MagicMock()
             self.client.images.get.side_effect = NotFound("not found")
+
         def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pulled_images.append((image, auto_clean))
+
         def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
             checked_images.append(image)
             return False
@@ -327,7 +337,8 @@ def test_run_engine_pulls_image_when_missing(
 
 
 def test_run_engine_checks_updates_when_latest(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
     monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
@@ -341,8 +352,10 @@ def test_run_engine_checks_updates_when_latest(
         def __init__(self) -> None:
             self.client = MagicMock()
             self.client.images.get.return_value = MagicMock()
+
         def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pulled_images.append((image, auto_clean))
+
         def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
             checked_images.append((image, auto_clean))
             return False
@@ -350,7 +363,9 @@ def test_run_engine_checks_updates_when_latest(
     monkeypatch.setattr(skills_engine, "DockerManager", FakeDockerManager)
     monkeypatch.setattr(skills_engine, "_skills_engine_checked", False)
     monkeypatch.setattr(
-        skills_engine, "get_config", lambda: {"auto_pull": True, "auto_clean": True}
+        skills_engine,
+        "get_config",
+        lambda: {"auto_pull": True, "auto_clean": True},
     )
 
     fake_run, _ = _fake_run_factory(stdout=json.dumps([]))

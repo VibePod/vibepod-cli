@@ -16,7 +16,7 @@ TASK_STATUS_COMPLETED: Final = "completed"
 TASK_STATUS_FAILED: Final = "failed"
 TASK_STATUS_CANCELLED: Final = "cancelled"
 TERMINAL_TASK_STATUSES: Final = frozenset(
-    {TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_CANCELLED}
+    {TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_CANCELLED},
 )
 
 _SCHEMA = """\
@@ -134,7 +134,7 @@ class TaskStore:
         if migrated:
             conn.execute(
                 "UPDATE tasks SET updated_at = created_at "
-                "WHERE updated_at IS NULL OR updated_at = ''"
+                "WHERE updated_at IS NULL OR updated_at = ''",
             )
 
     def create(

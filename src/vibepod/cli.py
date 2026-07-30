@@ -41,18 +41,21 @@ def run_command(
     ctx: typer.Context,
     agent: Annotated[str | None, typer.Argument(help="Agent to run")] = None,
     workspace: Annotated[
-        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+        Path,
+        typer.Option("-w", "--workspace", help="Workspace directory"),
     ] = Path("."),
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     no_overlay: Annotated[
-        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+        bool,
+        typer.Option("--no-overlay", help="Skip the project overlay image"),
     ] = False,
     rebuild_overlay: Annotated[
         bool,
         typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
     ] = False,
     detach: Annotated[
-        bool, typer.Option("-d", "--detach", help="Run container in background")
+        bool,
+        typer.Option("-d", "--detach", help="Run container in background"),
     ] = False,
     env: Annotated[
         list[str] | None,
@@ -116,18 +119,21 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
     def _alias(
         ctx: typer.Context,
         workspace: Annotated[
-            Path, typer.Option("-w", "--workspace", help="Workspace directory")
+            Path,
+            typer.Option("-w", "--workspace", help="Workspace directory"),
         ] = Path("."),
         pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
         no_overlay: Annotated[
-            bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+            bool,
+            typer.Option("--no-overlay", help="Skip the project overlay image"),
         ] = False,
         rebuild_overlay: Annotated[
             bool,
             typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
         ] = False,
         detach: Annotated[
-            bool, typer.Option("-d", "--detach", help="Run container in background")
+            bool,
+            typer.Option("-d", "--detach", help="Run container in background"),
         ] = False,
         env: Annotated[
             list[str] | None,

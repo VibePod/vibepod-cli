@@ -131,7 +131,7 @@ def test_agent_port_bindings_supports_docker_publish_syntax() -> None:
                 "6000:6000/udp",
                 9000,
                 "127.0.0.1::5000",
-            ]
+            ],
         },
     )
     assert bindings == {
@@ -186,7 +186,8 @@ def test_agent_port_bindings_rejects_out_of_range_ports() -> None:
 
 
 def test_skills_mounts_for_agent_ignores_malformed_lockfiles(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     local_root = tmp_path / "local-skills"
     user_root = tmp_path / "user-skills"
@@ -202,7 +203,8 @@ def test_skills_mounts_for_agent_ignores_malformed_lockfiles(
 
 
 def test_skills_mounts_for_agent_requires_skill_directories_under_scope_root(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     local_root = tmp_path / "local-skills"
     user_root = tmp_path / "user-skills"
@@ -230,8 +232,8 @@ def test_skills_mounts_for_agent_requires_skill_directories_under_scope_root(
                     "absolute": {"path": str(outside_root)},
                     "file": {"path": "installed/file-skill"},
                     "symlink": {"path": "installed/symlink-skill"},
-                }
-            }
+                },
+            },
         ),
         encoding="utf-8",
     )
@@ -247,7 +249,8 @@ def test_skills_mounts_for_agent_requires_skill_directories_under_scope_root(
 
 
 def test_skills_mounts_for_pi_use_agent_dir_skills_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     local_root = tmp_path / "local-skills"
     user_root = tmp_path / "user-skills"
@@ -264,12 +267,13 @@ def test_skills_mounts_for_pi_use_agent_dir_skills_path(
     monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
 
     assert run_cmd._skills_mounts_for_agent("pi", tmp_path) == [
-        (str(skill_dir.resolve()), "/config/.pi/agent/skills/example", "ro")
+        (str(skill_dir.resolve()), "/config/.pi/agent/skills/example", "ro"),
     ]
 
 
 def test_skills_mounts_for_tau_use_agents_skills_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     local_root = tmp_path / "local-skills"
     user_root = tmp_path / "user-skills"
@@ -286,12 +290,13 @@ def test_skills_mounts_for_tau_use_agents_skills_path(
     monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
 
     assert run_cmd._skills_mounts_for_agent("tau", tmp_path) == [
-        (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro")
+        (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro"),
     ]
 
 
 def test_skills_mounts_for_jcode_use_agents_skills_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     local_root = tmp_path / "local-skills"
     user_root = tmp_path / "user-skills"
@@ -308,7 +313,7 @@ def test_skills_mounts_for_jcode_use_agents_skills_path(
     monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
 
     assert run_cmd._skills_mounts_for_agent("jcode", tmp_path) == [
-        (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro")
+        (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro"),
     ]
 
 
@@ -673,7 +678,9 @@ def test_run_publishes_configured_ports(monkeypatch, _tmp_config_root) -> None:
     workspace.mkdir()
     stub = _PortCapturingManager()
     monkeypatch.setattr(
-        run_cmd, "get_config", lambda: _ports_config("claude", ["8000:8000", "6000:6000/udp"])
+        run_cmd,
+        "get_config",
+        lambda: _ports_config("claude", ["8000:8000", "6000:6000/udp"]),
     )
     monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
 
@@ -706,7 +713,8 @@ def test_run_codex_oauth_ports_merge_with_configured_ports(monkeypatch, _tmp_con
     monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
 
     result = CliRunner().invoke(
-        app, ["run", "codex", "-w", str(workspace), "--detach", "login"]
+        app,
+        ["run", "codex", "-w", str(workspace), "--detach", "login"],
     )
 
     assert result.exit_code == 0, result.output
@@ -759,7 +767,8 @@ def test_run_agent_is_rootless_podman_detects_podman_engine() -> None:
     ],
 )
 def test_run_agent_is_rootless_podman_requires_rootless_podman_evidence(
-    info: dict, version: dict
+    info: dict,
+    version: dict,
 ) -> None:
     client = _EngineClient(info, version)
     manager = object.__new__(DockerManager)
@@ -902,7 +911,8 @@ def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path)
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
 
     assert ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw") in captured.get(
-        "extra_volumes", []
+        "extra_volumes",
+        [],
     ), f"X11 socket not found in extra_volumes: {captured.get('extra_volumes')}"
 
 
@@ -951,7 +961,8 @@ def test_paste_images_flag_mounts_xauth_cookie(monkeypatch, tmp_path: Path) -> N
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
 
     assert (str(auth_file), launch.X11_CONTAINER_XAUTH_PATH, "ro") in captured.get(
-        "extra_volumes", []
+        "extra_volumes",
+        [],
     ), f"Xauthority mount not found in extra_volumes: {captured.get('extra_volumes')}"
     assert captured.get("env", {}).get("XAUTHORITY") == launch.X11_CONTAINER_XAUTH_PATH
 
@@ -1196,7 +1207,9 @@ def _make_config(
 
 @pytest.mark.parametrize("agent", SUPPORTED_AGENTS)
 def test_run_uses_keep_id_for_rootless_podman_agents(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    agent: str,
 ) -> None:
     stub = _StubDockerManager(rootless_podman=True)
     config = _make_config()
@@ -1215,7 +1228,8 @@ def test_run_uses_keep_id_for_rootless_podman_agents(
 
 
 def test_run_preserves_host_user_for_non_podman_devstral(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     stub = _StubDockerManager(rootless_podman=False)
     config = _make_config()
@@ -2122,7 +2136,6 @@ def test_run_sets_default_term_when_host_term_missing(monkeypatch, tmp_path: Pat
     assert env["TERM"] == "xterm-256color"
 
 
-
 # ---------------------------------------------------------------------------
 # Directory permission tests
 # ---------------------------------------------------------------------------
@@ -2165,7 +2178,8 @@ def _make_capturing_docker_manager():
 
 
 def test_run_aborts_when_dir_not_allowed_and_non_interactive(
-    monkeypatch, tmp_path: Path
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     """Non-interactive stdin + disallowed dir → Exit(1) with no prompt."""
     monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)

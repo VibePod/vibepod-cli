@@ -133,7 +133,9 @@ def test_task_create_rejects_unknown_agent(monkeypatch, tmp_path, tmp_task_store
 
 
 def test_task_create_rejects_agent_without_headless_prefix(
-    monkeypatch, tmp_path, tmp_task_store
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
 ) -> None:
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
 
@@ -174,7 +176,9 @@ def test_task_create_publishes_configured_ports(monkeypatch, tmp_path, tmp_task_
 
 
 def test_task_create_rejects_invalid_ports_before_docker(
-    monkeypatch, tmp_path, tmp_task_store
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
 ) -> None:
     stub = _CapturingDockerManager()
     cfg = _make_config()
@@ -190,7 +194,9 @@ def test_task_create_rejects_invalid_ports_before_docker(
 
 
 def test_task_create_without_configured_ports_publishes_none(
-    monkeypatch, tmp_path, tmp_task_store
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
 ) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
@@ -240,7 +246,9 @@ def test_task_create_auggie_uses_print_flag(monkeypatch, tmp_path, tmp_task_stor
 
 
 def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
-    monkeypatch, tmp_path, tmp_task_store
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
 ) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
@@ -257,7 +265,9 @@ def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
 
 
 def test_task_create_passthrough_args_appended_after_prompt(
-    monkeypatch, tmp_path, tmp_task_store
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
 ) -> None:
     """Extra args after `--` are appended to the agent's command after the prompt."""
     stub = _CapturingDockerManager()
@@ -377,7 +387,8 @@ def test_task_create_timeout_none_disables_watcher(monkeypatch, tmp_path, tmp_ta
 
 
 def test_timeout_watcher_stops_running_container_and_marks_failed(
-    monkeypatch, tmp_task_store
+    monkeypatch,
+    tmp_task_store,
 ) -> None:
     record = tmp_task_store.create(
         agent="claude",
@@ -468,7 +479,7 @@ def test_task_status_persists_terminal_container_state(monkeypatch, tmp_task_sto
                 "ExitCode": 0,
                 "StartedAt": "2026-06-11T14:00:00Z",
                 "FinishedAt": "2026-06-11T14:05:00Z",
-            }
+            },
         }
 
         def reload(self) -> None:
@@ -494,7 +505,8 @@ def test_task_status_persists_terminal_container_state(monkeypatch, tmp_task_sto
 
 
 def test_task_status_uses_persisted_terminal_state_when_container_removed(
-    monkeypatch, tmp_task_store
+    monkeypatch,
+    tmp_task_store,
 ) -> None:
     record = tmp_task_store.create(
         agent="claude",
@@ -774,7 +786,8 @@ def test_task_cancel_handles_missing_container_gracefully(monkeypatch, tmp_task_
 
 
 def test_task_cancel_ignores_stop_exception_if_container_reaches_terminal_state(
-    monkeypatch, tmp_task_store
+    monkeypatch,
+    tmp_task_store,
 ) -> None:
     record = tmp_task_store.create(
         agent="claude",
@@ -1052,9 +1065,12 @@ def test_task_create_uses_keep_id_on_rootless_podman(monkeypatch, tmp_path, tmp_
 
 
 def test_task_create_preserves_host_user_for_non_podman(
-    monkeypatch, tmp_path, tmp_task_store
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
 ) -> None:
     import os
+
     class _DockerDockerManager(_CapturingDockerManager):
         def is_rootless_podman(self) -> bool:
             return False
@@ -1064,15 +1080,14 @@ def test_task_create_preserves_host_user_for_non_podman(
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
     import dataclasses
+
     original_get_agent_spec = task_cmd.get_agent_spec
     spec = original_get_agent_spec("claude")
     modified_spec = dataclasses.replace(spec, run_as_host_user=True)
     monkeypatch.setattr(
         task_cmd,
         "get_agent_spec",
-        lambda agent: (
-            modified_spec if agent == "claude" else original_get_agent_spec(agent)
-        ),
+        lambda agent: modified_spec if agent == "claude" else original_get_agent_spec(agent),
     )
     monkeypatch.setattr(os, "getuid", lambda: 1234, raising=False)
     monkeypatch.setattr(os, "getgid", lambda: 5678, raising=False)

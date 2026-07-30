@@ -30,7 +30,8 @@ def test_update_container_mapping_success(tmp_path: Path) -> None:
 
 
 def test_update_container_mapping_permission_error_returns_false(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
     mapping_path = tmp_path / "proxy" / "containers.json"
     mapping_path.parent.mkdir(parents=True, exist_ok=True)

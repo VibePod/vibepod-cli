@@ -293,4 +293,3 @@ VP_PROXY_ENABLED=false vp run claude
     network. If you use Podman with the CNI backend, install the `dnsname`
     plugin (e.g. `podman-plugins` on Fedora, `golang-github-containernetworking-plugin-dnsname`
     on Debian/Ubuntu) and recreate the network. See [Quickstart — Using Podman](quickstart.md#using-podman-instead-of-docker) for full instructions.
-
