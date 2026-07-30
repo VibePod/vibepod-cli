@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import typer
 from typer.testing import CliRunner
 
 from vibepod.cli import app
 from vibepod.commands import task as task_cmd
+from vibepod.core import skills_engine
 from vibepod.core.agents import AGENT_SPECS
 from vibepod.core.tasks import TaskStore
 
@@ -158,6 +161,36 @@ def test_task_create_claude_builds_headless_command(monkeypatch, tmp_path, tmp_t
     assert stub.run_kwargs["command"] == ["claude", "-p", "do the thing"]
     assert stub.run_kwargs["auto_remove"] is False
     assert stub.run_kwargs["agent"] == "claude"
+
+
+def test_task_create_mounts_installed_skills(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["jcode"] = {"env": {}, "init": []}
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    skill_dir = local_root / "installed" / "example"
+    skill_dir.mkdir(parents=True)
+    user_root.mkdir()
+    (local_root / "skills-lock.json").write_text(
+        json.dumps({"skills": {"example": {"path": "installed/example"}}}),
+        encoding="utf-8",
+    )
+    (user_root / "skills-lock.json").write_text(json.dumps({"skills": {}}), encoding="utf-8")
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+
+    task_cmd.task_create(agent="jcode", prompt="use the skill", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    assert (
+        str(skill_dir.resolve()),
+        "/config/.agents/skills/example",
+        "ro",
+    ) in stub.run_kwargs["extra_volumes"]
 
 
 def test_task_create_codex_uses_exec_subcommand(monkeypatch, tmp_path, tmp_task_store) -> None:

@@ -36,6 +36,7 @@ from vibepod.core.launch import (
     init_entrypoint,
     parse_env_pairs,
     read_claude_stored_token,
+    skills_mounts_for_agent,
     terminal_env_defaults,
     update_container_mapping,
 )
@@ -598,6 +599,8 @@ def task_create(
     extra_volumes = agent_extra_volumes(selected, config_dir)
     for host_path, _, _ in extra_volumes:
         Path(host_path).mkdir(parents=True, exist_ok=True)
+
+    extra_volumes.extend(skills_mounts_for_agent(selected, workspace_path))
 
     proxy_cfg = config.get("proxy", {})
     proxy_enabled = bool(proxy_cfg.get("enabled", True))
