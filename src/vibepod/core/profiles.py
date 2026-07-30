@@ -69,12 +69,16 @@ def remove_profile(name: str) -> None:
 
 def resolve_profile(cli_value: str | None, config: dict[str, Any]) -> str:
     """Resolve the active profile: CLI flag > VP_PROFILE > config key > default."""
-    configured = config.get("profile")
-    if configured is not None and (not isinstance(configured, str) or not configured):
-        raise ValueError(
-            f"Config key 'profile' must be a non-empty string, got {configured!r}."
-        )
-    selected = cli_value or os.environ.get("VP_PROFILE") or configured or DEFAULT_PROFILE
+    selected = cli_value or os.environ.get("VP_PROFILE")
+    if not selected:
+        # only validate the config value when it is actually the selected source,
+        # so a valid flag or VP_PROFILE can override a broken config key
+        configured = config.get("profile")
+        if configured is not None and (not isinstance(configured, str) or not configured):
+            raise ValueError(
+                f"Config key 'profile' must be a non-empty string, got {configured!r}."
+            )
+        selected = configured or DEFAULT_PROFILE
     if selected != DEFAULT_PROFILE:
         validate_profile_name(selected)
     if not profile_exists(selected):

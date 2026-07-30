@@ -19,12 +19,13 @@ from vibepod.core.profiles import (
     resolve_profile,
     validate_profile_name,
 )
-from vibepod.utils.console import console, error, success
+from vibepod.utils.console import console, error, success, warning
 
 app = typer.Typer(help="Manage credential profiles (separate agent logins per environment)")
 
 
-def _agents_with_credentials(profile: str) -> list[str]:
+def _agents_with_data(profile: str) -> list[str]:
+    """Agents with any stored data (config, caches, credentials) in the profile."""
     root = profile_agents_root(profile)
     found: list[str] = []
     for agent in sorted(SUPPORTED_AGENTS):
@@ -34,20 +35,22 @@ def _agents_with_credentials(profile: str) -> list[str]:
     return found
 
 
-def _active_profile() -> str:
+def _active_profile() -> str | None:
+    """Resolved active profile, or None when the current selection is broken."""
     try:
         return resolve_profile(None, get_config())
-    except ValueError:
-        return DEFAULT_PROFILE
+    except ValueError as exc:
+        warning(str(exc))
+        return None
 
 
 @app.command("list")
 def list_() -> None:
-    """List profiles, the active one, and which agents have credentials."""
+    """List profiles, the active one, and which agents have stored data."""
     active = _active_profile()
     for name in list_profiles():
         marker = "*" if name == active else " "
-        agents = ", ".join(_agents_with_credentials(name))
+        agents = ", ".join(_agents_with_data(name))
         suffix = f"  ({agents})" if agents else ""
         console.print(f"{marker} {name}{suffix}")
 
@@ -61,6 +64,9 @@ def create(
         path = create_profile(name)
     except ValueError as exc:
         error(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        error(f"Could not create profile '{name}': {exc}")
         raise typer.Exit(code=1) from exc
     success(f"Created profile '{name}' at {path.parent}")
 
@@ -90,6 +96,13 @@ def remove(
         remove_profile(name)
     except ValueError as exc:
         error(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        error(
+            f"Could not remove profile '{name}': {exc}. The profile may be partially "
+            "deleted. Files created by agent containers can be owned by another user; "
+            "fix ownership (e.g. `sudo chown -R $USER ...`) and retry."
+        )
         raise typer.Exit(code=1) from exc
     if os.environ.get("VP_PROFILE") == name:
         console.print(f"Note: VP_PROFILE still points at removed profile '{name}'.")

@@ -92,6 +92,32 @@ def test_profile_remove_validates_before_confirmation(config_root: Path) -> None
     assert "Remove profile" not in result.output
 
 
+def test_profile_list_broken_selection_shows_warning_not_default(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VP_PROFILE", "ghost")
+    result = runner.invoke(app, ["profile", "list"])
+    assert result.exit_code == 0
+    assert "ghost" in result.output
+    assert "* default" not in result.output
+
+
+def test_profile_remove_reports_filesystem_errors(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner.invoke(app, ["profile", "create", "work"])
+
+    def broken_rmtree(path: object) -> None:
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr("vibepod.core.profiles.shutil.rmtree", broken_rmtree)
+    result = runner.invoke(app, ["profile", "remove", "work", "--yes"])
+    assert result.exit_code == 1
+    assert not isinstance(result.exception, OSError)  # handled, no traceback
+    assert "work" in result.output
+    assert "Permission denied" in result.output
+
+
 def test_profile_remove_asks_for_confirmation(config_root: Path) -> None:
     runner.invoke(app, ["profile", "create", "work"])
     result = runner.invoke(app, ["profile", "remove", "work"], input="n\n")

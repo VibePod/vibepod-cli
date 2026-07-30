@@ -111,6 +111,17 @@ def test_resolve_profile_rejects_non_string_config_value(config_root: Path) -> N
             resolve_profile(None, {"profile": configured})
 
 
+def test_resolve_profile_higher_priority_overrides_bad_config_value(
+    config_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # first-match precedence: a valid flag or env var must win over an
+    # invalid lower-priority config value instead of erroring on it
+    create_profile("work")
+    assert resolve_profile("work", {"profile": 123}) == "work"
+    monkeypatch.setenv("VP_PROFILE", "work")
+    assert resolve_profile(None, {"profile": 123}) == "work"
+
+
 def test_resolve_profile_rejects_traversal_names(
     config_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
