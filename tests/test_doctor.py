@@ -23,9 +23,7 @@ def test_doctor_missing_dir(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_doctor_valid_token(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path
-    )
+    monkeypatch.setattr("vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path)
     future_ms = int((time.time() + 3600) * 1000)
     (tmp_path / ".credentials.json").write_text(
         json.dumps(
@@ -46,9 +44,7 @@ def test_doctor_valid_token(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_doctor_expired_token(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path
-    )
+    monkeypatch.setattr("vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     past_ms = int((time.time() - 3600) * 1000)
@@ -70,16 +66,12 @@ def test_doctor_expired_token(tmp_path: Path, monkeypatch) -> None:
 
 def test_doctor_expired_creds_but_stored_token_is_ok(tmp_path: Path, monkeypatch) -> None:
     """Expired credentials.json should NOT exit 2 when a stored token covers auth."""
-    monkeypatch.setattr(
-        "vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path
-    )
+    monkeypatch.setattr("vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     past_ms = int((time.time() - 3600) * 1000)
     (tmp_path / ".credentials.json").write_text(
-        json.dumps(
-            {"claudeAiOauth": {"accessToken": "a", "expiresAt": past_ms}}
-        )
+        json.dumps({"claudeAiOauth": {"accessToken": "a", "expiresAt": past_ms}})
     )
     (tmp_path / "oauth-token").write_text("sk-stored\n", encoding="utf-8")
     result = runner.invoke(app, ["doctor", "claude"])
@@ -88,9 +80,7 @@ def test_doctor_expired_creds_but_stored_token_is_ok(tmp_path: Path, monkeypatch
 
 
 def test_doctor_missing_refresh_token(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path
-    )
+    monkeypatch.setattr("vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path)
     future_ms = int((time.time() + 3600) * 1000)
     (tmp_path / ".credentials.json").write_text(
         json.dumps(
@@ -108,9 +98,7 @@ def test_doctor_missing_refresh_token(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_doctor_reports_stored_token_mode(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path
-    )
+    monkeypatch.setattr("vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     (tmp_path / "oauth-token").write_text("sk-xyz\n", encoding="utf-8")
@@ -120,9 +108,7 @@ def test_doctor_reports_stored_token_mode(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_doctor_reports_host_env_mode(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path
-    )
+    monkeypatch.setattr("vibepod.commands.doctor.agent_config_dir", lambda _agent: tmp_path)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "host-token-abc")
     result = runner.invoke(app, ["doctor", "claude"])

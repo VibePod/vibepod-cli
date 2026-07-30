@@ -78,8 +78,7 @@ def add_cmd(
             if record.get("bundle"):
                 installed = record.get("installed", [])
                 success(
-                    f"Installed {len(installed)} skill(s) from bundle "
-                    f"{record.get('locator', '')}"
+                    f"Installed {len(installed)} skill(s) from bundle {record.get('locator', '')}"
                 )
                 for item in installed:
                     info(f"  + {item.get('id', '?')} ({item.get('name', '')})")

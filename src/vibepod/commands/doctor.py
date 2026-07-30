@@ -167,9 +167,7 @@ def claude() -> None:
             console.print(f"  {key}: {masked}")
     if not found_any:
         console.print("  none set on host")
-    console.print(
-        "  [dim]note: these are host-side; the container sees its own env.[/dim]"
-    )
+    console.print("  [dim]note: these are host-side; the container sees its own env.[/dim]")
 
     console.print()
     console.print("[bold]Effective auth mode on next `vp run claude`[/bold]")
@@ -196,12 +194,8 @@ def claude() -> None:
         "  • If `modified` on .credentials.json never updates past the original /login time,"
     )
     console.print("    the token is not being rotated. Re-run with:")
-    console.print(
-        "      [cyan]vp run claude -e ANTHROPIC_LOG=debug -e DEBUG=1[/cyan]"
-    )
-    console.print(
-        "    and look for [dim][API:auth][/dim] entries near/after expiry to confirm."
-    )
+    console.print("      [cyan]vp run claude -e ANTHROPIC_LOG=debug -e DEBUG=1[/cyan]")
+    console.print("    and look for [dim][API:auth][/dim] entries near/after expiry to confirm.")
     console.print(
         "  • For headless/CI, consider `claude setup-token` + "
         "`-e CLAUDE_CODE_OAUTH_TOKEN=...` to bypass refresh entirely."

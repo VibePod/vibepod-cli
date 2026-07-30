@@ -29,10 +29,7 @@ def _check_image_exists(image: str) -> tuple[bool, str]:
     except subprocess.TimeoutExpired:
         return (
             False,
-            (
-                "timed out after "
-                f"{MANIFEST_CHECK_TIMEOUT_SECONDS}s while checking docker manifest"
-            ),
+            (f"timed out after {MANIFEST_CHECK_TIMEOUT_SECONDS}s while checking docker manifest"),
         )
     if proc.returncode == 0:
         return True, ""

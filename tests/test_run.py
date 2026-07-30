@@ -679,9 +679,9 @@ def test_paste_images_flag_adds_x11_volumes_and_env(monkeypatch, tmp_path: Path)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, paste_images=True)
 
-    assert ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw") in captured.get(
-        "extra_volumes", []
-    ), f"X11 socket not found in extra_volumes: {captured.get('extra_volumes')}"
+    assert ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw") in captured.get("extra_volumes", []), (
+        f"X11 socket not found in extra_volumes: {captured.get('extra_volumes')}"
+    )
 
 
 def test_paste_images_flag_mounts_xauth_cookie(monkeypatch, tmp_path: Path) -> None:
@@ -1900,7 +1900,6 @@ def test_run_sets_default_term_when_host_term_missing(monkeypatch, tmp_path: Pat
     assert env["TERM"] == "xterm-256color"
 
 
-
 # ---------------------------------------------------------------------------
 # Directory permission tests
 # ---------------------------------------------------------------------------
@@ -1942,9 +1941,7 @@ def _make_capturing_docker_manager():
     return _CapturingDockerManager, captured
 
 
-def test_run_aborts_when_dir_not_allowed_and_non_interactive(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_run_aborts_when_dir_not_allowed_and_non_interactive(monkeypatch, tmp_path: Path) -> None:
     """Non-interactive stdin + disallowed dir → Exit(1) with no prompt."""
     monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
     monkeypatch.setattr(run_cmd, "is_protected_dir", lambda p: False)

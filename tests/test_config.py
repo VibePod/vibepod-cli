@@ -178,7 +178,6 @@ def test_llm_env_overrides(monkeypatch, tmp_path: Path) -> None:
     assert llm["model"] == "llama3"
 
 
-
 # ---------------------------------------------------------------------------
 # allow-dir / remove-dir / list-allowed-dirs subcommand tests
 # ---------------------------------------------------------------------------

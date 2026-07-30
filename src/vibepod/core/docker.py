@@ -689,13 +689,9 @@ class DockerManager:
         try:
             container.stop(timeout=0 if force else 10)
         except APIError as exc:
-            raise DockerClientError(
-                f"Failed to stop container '{name_or_id}': {exc}"
-            ) from exc
+            raise DockerClientError(f"Failed to stop container '{name_or_id}': {exc}") from exc
         except DockerException as exc:
-            raise DockerClientError(
-                f"Failed to stop container '{name_or_id}': {exc}"
-            ) from exc
+            raise DockerClientError(f"Failed to stop container '{name_or_id}': {exc}") from exc
         return container
 
     def stop_all(self, force: bool = False) -> int:

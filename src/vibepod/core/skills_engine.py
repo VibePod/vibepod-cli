@@ -158,10 +158,9 @@ def run_engine(
 
             config = get_config()
             auto_pull_enabled = bool(config.get("auto_pull", True))
-            is_latest = (
-                ":" not in SKILLS_ENGINE_IMAGE.split("/")[-1]
-                or SKILLS_ENGINE_IMAGE.endswith(":latest")
-            )
+            is_latest = ":" not in SKILLS_ENGINE_IMAGE.split("/")[
+                -1
+            ] or SKILLS_ENGINE_IMAGE.endswith(":latest")
 
             if not image_exists:
                 manager.pull_image(
@@ -171,6 +170,7 @@ def run_engine(
             elif auto_pull_enabled and is_latest:
                 try:
                     from vibepod.utils.console import info
+
                     info("Checking for skills-engine image updates…")
                     manager.pull_if_newer(
                         SKILLS_ENGINE_IMAGE,

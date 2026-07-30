@@ -79,9 +79,7 @@ def attach(
 
     agent = (getattr(target, "labels", {}) or {}).get("vibepod.agent", "agent")
     info(f"Attaching to {target.name} ({agent})")
-    warning(
-        f"Close the terminal to leave it running, or stop it with `vp stop {target.name}`."
-    )
+    warning(f"Close the terminal to leave it running, or stop it with `vp stop {target.name}`.")
     try:
         manager.attach_interactive(target)
     except DockerClientError as exc:

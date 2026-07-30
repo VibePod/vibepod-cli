@@ -625,11 +625,7 @@ def run(
     finally:
         logger.close_session(exit_reason)
 
-    if (
-        selected_agent == "claude"
-        and "setup-token" in passthrough_args
-        and exit_reason == "normal"
-    ):
+    if selected_agent == "claude" and "setup-token" in passthrough_args and exit_reason == "normal":
         _capture_claude_setup_token(config_dir)
 
 

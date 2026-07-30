@@ -19,8 +19,10 @@ def mock_docker_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeDockerManager:
         def __init__(self) -> None:
             self.client = MagicMock()
+
         def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
+
         def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
             return False
 
@@ -80,9 +82,7 @@ def test_run_engine_explicit_local_scope_creates_local_skills_dir(
     skills_engine.list_skills("local", cwd=tmp_path)
 
     local = tmp_path / ".vibepod" / "skills"
-    mount_args = [
-        arg for i, arg in enumerate(captured["cmd"]) if captured["cmd"][i - 1] == "-v"
-    ]
+    mount_args = [arg for i, arg in enumerate(captured["cmd"]) if captured["cmd"][i - 1] == "-v"]
     assert local.is_dir()
     assert f"{local}:/vibepod/local-skills" in mount_args
 
@@ -150,8 +150,7 @@ def test_add_accepts_github_tree_url(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     url = (
-        "https://github.com/alirezarezvani/claude-skills/tree/main/"
-        "product-team/skills/spec-to-repo"
+        "https://github.com/alirezarezvani/claude-skills/tree/main/product-team/skills/spec-to-repo"
     )
     skills_engine.add(url, scope="user", cwd=tmp_path)
 
@@ -232,9 +231,7 @@ def test_add_does_not_mount_remote_locators(
         assert "-w" not in cmd, locator
 
 
-def test_add_expands_tilde_local_locator(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_add_expands_tilde_local_locator(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     source = home / "skills" / "foo"
     source.mkdir(parents=True)
@@ -308,8 +305,10 @@ def test_run_engine_pulls_image_when_missing(
         def __init__(self) -> None:
             self.client = MagicMock()
             self.client.images.get.side_effect = NotFound("not found")
+
         def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pulled_images.append((image, auto_clean))
+
         def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
             checked_images.append(image)
             return False
@@ -341,8 +340,10 @@ def test_run_engine_checks_updates_when_latest(
         def __init__(self) -> None:
             self.client = MagicMock()
             self.client.images.get.return_value = MagicMock()
+
         def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pulled_images.append((image, auto_clean))
+
         def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
             checked_images.append((image, auto_clean))
             return False

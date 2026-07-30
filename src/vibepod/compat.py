@@ -9,9 +9,7 @@ _HTTP_RESPONSE_FLUSH_PATCH_ATTR = "_vibepod_python314_closed_file_patch"
 _CLOSED_FILE_ERROR = "I/O operation on closed file."
 
 
-def should_ignore_closed_http_response_flush_error(
-    response: object, exc: BaseException
-) -> bool:
+def should_ignore_closed_http_response_flush_error(response: object, exc: BaseException) -> bool:
     """Return True for Python 3.14's closed ``HTTPResponse.fp`` flush cleanup error.
 
     Python 3.14 can surface a ``ValueError`` while finalizing Docker SDK / urllib3
