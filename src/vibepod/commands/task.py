@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json as _json
+import os
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from vibepod import __version__
+from vibepod.commands.stop import _release_herdr_entries
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.agents import (
     agent_config_dir,
@@ -26,6 +28,7 @@ from vibepod.core.agents import (
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config, get_config_root
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
+from vibepod.core.herdr import PANE_LABEL, apply_herdr_if_enabled
 from vibepod.core.launch import (
     agent_extra_volumes,
     agent_init_commands,
@@ -305,6 +308,10 @@ def task_create_command(
         bool,
         typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
     ] = False,
+    no_herdr: Annotated[
+        bool,
+        typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
+    ] = False,
     ikwid: Annotated[
         bool,
         typer.Option(
@@ -325,6 +332,7 @@ def task_create_command(
         pull=pull,
         no_overlay=no_overlay,
         rebuild_overlay=rebuild_overlay,
+        no_herdr=no_herdr,
         ikwid=ikwid,
         passthrough_args=_context_args(ctx),
     )
@@ -371,6 +379,10 @@ def task_run_command(
         bool,
         typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
     ] = False,
+    no_herdr: Annotated[
+        bool,
+        typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
+    ] = False,
     ikwid: Annotated[
         bool,
         typer.Option(
@@ -391,6 +403,7 @@ def task_run_command(
         pull=pull,
         no_overlay=no_overlay,
         rebuild_overlay=rebuild_overlay,
+        no_herdr=no_herdr,
         ikwid=ikwid,
         passthrough_args=_context_args(ctx),
         deprecated_alias=True,
@@ -431,6 +444,10 @@ def task_create(
     rebuild_overlay: Annotated[
         bool,
         typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
+    ] = False,
+    no_herdr: Annotated[
+        bool,
+        typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
     ] = False,
     ikwid: Annotated[
         bool,
@@ -607,6 +624,22 @@ def task_create(
     for host_path, _, _ in extra_volumes:
         Path(host_path).mkdir(parents=True, exist_ok=True)
 
+    herdr_volumes, herdr_env = apply_herdr_if_enabled(
+        selected,
+        config_dir,
+        config,
+        no_herdr=no_herdr,
+    )
+    extra_volumes.extend(herdr_volumes)
+    herdr_labels = (
+        {PANE_LABEL: os.environ["HERDR_PANE_ID"]}
+        if herdr_volumes and os.environ.get("HERDR_PANE_ID")
+        else {}
+    )
+    # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
+    for key, value in herdr_env.items():
+        merged_env.setdefault(key, value)
+
     proxy_cfg = config.get("proxy", {})
     proxy_enabled = bool(proxy_cfg.get("enabled", True))
     proxy_ca_dir_value = str(proxy_cfg.get("ca_dir", "")).strip()
@@ -677,6 +710,7 @@ def task_create(
         user=container_user,
         entrypoint=entrypoint,
         userns_mode=agent_userns_mode,
+        extra_labels=herdr_labels,
     )
 
     container.reload()
@@ -969,6 +1003,8 @@ def task_cancel(
             error(f"Failed to remove created task container {record.id[:12]}: {exc}")
             raise typer.Exit(1) from exc
 
+    _release_herdr_entries([container])
+
     updated: TaskRecord | None
     if record.status in TERMINAL_TASK_STATUSES:
         updated = record
@@ -1082,6 +1118,7 @@ def _remove_task_record(
                 "Use --force to kill and remove, or wait for it to finish.",
             )
             raise typer.Exit(1)
+        _release_herdr_entries([container])
         try:
             container.remove(force=True)
         except Exception as exc:  # docker SDK raises APIError / DockerException

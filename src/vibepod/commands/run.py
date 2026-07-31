@@ -25,6 +25,24 @@ from vibepod.core.agents import (
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
+from vibepod.core.herdr import (
+    PANE_LABEL as _HERDR_PANE_LABEL,
+)
+from vibepod.core.herdr import (
+    apply_herdr_if_enabled as _apply_herdr_if_enabled,
+)
+from vibepod.core.herdr import (
+    clear_pane_metadata as _clear_herdr_metadata,
+)
+from vibepod.core.herdr import (
+    reexec_with_agent_hint as _reexec_with_herdr_hint,
+)
+from vibepod.core.herdr import (
+    release_agent as _release_herdr_agent,
+)
+from vibepod.core.herdr import (
+    report_pane_metadata as _report_herdr_metadata,
+)
 from vibepod.core.launch import (
     agent_extra_volumes as _agent_extra_volumes,
 )
@@ -257,6 +275,10 @@ def run(
         bool,
         typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
     ] = False,
+    no_herdr: Annotated[
+        bool,
+        typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
+    ] = False,
     detach: Annotated[
         bool,
         typer.Option("-d", "--detach", help="Run container in background"),
@@ -305,6 +327,8 @@ def run(
             )
         error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
+
+    _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr)
 
     workspace_path = workspace.expanduser().resolve()
     if not workspace_path.exists() or not workspace_path.is_dir():
@@ -489,6 +513,24 @@ def run(
 
     extra_volumes.extend(_skills_mounts_for_agent(selected_agent, workspace_path))
 
+    herdr_volumes, herdr_env = _apply_herdr_if_enabled(
+        selected_agent,
+        config_dir,
+        config,
+        no_herdr=no_herdr,
+    )
+    herdr_labels = (
+        {_HERDR_PANE_LABEL: os.environ["HERDR_PANE_ID"]}
+        if herdr_volumes and os.environ.get("HERDR_PANE_ID")
+        else {}
+    )
+    if herdr_volumes:
+        _report_herdr_metadata(selected_agent)
+    extra_volumes.extend(herdr_volumes)
+    # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
+    for key, value in herdr_env.items():
+        merged_env.setdefault(key, value)
+
     if paste_images:
         display = os.environ.get("DISPLAY", "")
         if not display:
@@ -568,6 +610,7 @@ def run(
         user=container_user,
         entrypoint=entrypoint,
         userns_mode=agent_userns_mode,
+        extra_labels=herdr_labels,
     )
 
     container.reload()
@@ -576,6 +619,9 @@ def run(
         error("Container exited immediately after start.")
         if recent.strip():
             print(recent)
+        if herdr_volumes:
+            _release_herdr_agent(selected_agent)
+            _clear_herdr_metadata(selected_agent)
         raise typer.Exit(1)
 
     if extra_network and extra_network != network_name:
@@ -609,6 +655,9 @@ def run(
                 "the setup-token flow requires an interactive session.",
             )
             container.stop(timeout=5)
+            if herdr_volumes:
+                _release_herdr_agent(selected_agent)
+                _clear_herdr_metadata(selected_agent)
             raise typer.Exit(1)
         success(f"Started {container.name}")
         return
@@ -643,6 +692,9 @@ def run(
         raise
     finally:
         logger.close_session(exit_reason)
+        if herdr_volumes:
+            _release_herdr_agent(selected_agent)
+            _clear_herdr_metadata(selected_agent)
 
     if selected_agent == "claude" and "setup-token" in passthrough_args and exit_reason == "normal":
         _capture_claude_setup_token(config_dir)
