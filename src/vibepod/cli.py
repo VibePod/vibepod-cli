@@ -53,6 +53,10 @@ def run_command(
         bool,
         typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
     ] = False,
+    no_herdr: Annotated[
+        bool,
+        typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
+    ] = False,
     detach: Annotated[
         bool,
         typer.Option("-d", "--detach", help="Run container in background"),
@@ -88,6 +92,7 @@ def run_command(
         pull=pull,
         no_overlay=no_overlay,
         rebuild_overlay=rebuild_overlay,
+        no_herdr=no_herdr,
         detach=detach,
         env=env,
         name=name,
@@ -131,6 +136,10 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             bool,
             typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
         ] = False,
+        no_herdr: Annotated[
+            bool,
+            typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
+        ] = False,
         detach: Annotated[
             bool,
             typer.Option("-d", "--detach", help="Run container in background"),
@@ -168,6 +177,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             pull=pull,
             no_overlay=no_overlay,
             rebuild_overlay=rebuild_overlay,
+            no_herdr=no_herdr,
             detach=detach,
             env=env,
             name=name,

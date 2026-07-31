@@ -57,6 +57,7 @@ nav:
     - Locator format: skills/locators.md
     - Authoring: skills/authoring.md
   - Project overlays: overlays.md
+  - Herdr integration: herdr.md
   - Configuration: configuration.md
   - LLM Integration: llm.md
   - CLI Reference: cli-reference.md

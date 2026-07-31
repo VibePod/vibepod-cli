@@ -25,6 +25,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image ([docs](https://vibepod.dev/docs/overlays/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
+- 🐑 **Herdr aware** — `vp run` inside a [herdr](https://herdr.dev/) pane reports agent state automatically
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
 - 🔒 **Privacy-first** — all metrics collected and stored locally, never sent to the cloud
 - 📦 **Simple install** — `pip install vibepod`

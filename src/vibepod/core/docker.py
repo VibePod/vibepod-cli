@@ -579,6 +579,7 @@ class DockerManager:
         user: str | None = None,
         entrypoint: list[str] | None = None,
         userns_mode: str | None = None,
+        extra_labels: dict[str, str] | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -587,6 +588,7 @@ class DockerManager:
             "vibepod.agent": agent,
             "vibepod.workspace": str(workspace),
             "vibepod.version": version,
+            **(extra_labels or {}),
         }
 
         environment = {**env}

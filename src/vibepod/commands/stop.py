@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from collections.abc import Iterable
+from typing import Annotated, Any
 
 import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.agents import resolve_agent_name
 from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.herdr import PANE_LABEL, release_agent
 from vibepod.utils.console import error, success
 
 
@@ -39,6 +41,7 @@ def stop(
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
 
     if all_containers:
+        _release_herdr_entries(_managed_containers(manager))
         try:
             stopped = manager.stop_all(force=force)
         except DockerClientError as exc:
@@ -50,6 +53,11 @@ def stop(
     assert target is not None
     resolved_agent = resolve_agent_name(target)
     if resolved_agent is not None:
+        _release_herdr_entries(
+            c
+            for c in _managed_containers(manager)
+            if (getattr(c, "labels", {}) or {}).get("vibepod.agent") == resolved_agent
+        )
         try:
             stopped = manager.stop_agent(agent=resolved_agent, force=force)
         except DockerClientError as exc:
@@ -63,4 +71,25 @@ def stop(
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
+    _release_herdr_entries([container])
     success(f"Stopped {container.name}")
+
+
+def _managed_containers(manager: Any) -> list[Any]:
+    lister = getattr(manager, "list_managed", None)
+    if not callable(lister):
+        return []
+    try:
+        return list(lister(all_containers=True))
+    except DockerClientError:
+        return []
+
+
+def _release_herdr_entries(containers: Iterable[Any]) -> None:
+    """Clear herdr sidebar entries for containers started inside herdr panes."""
+    for container in containers:
+        labels = getattr(container, "labels", {}) or {}
+        pane = labels.get(PANE_LABEL)
+        agent = labels.get("vibepod.agent")
+        if pane and agent:
+            release_agent(agent, pane=pane)
