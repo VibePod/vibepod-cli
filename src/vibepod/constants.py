@@ -110,10 +110,12 @@ def get_default_images() -> dict[str, str]:
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/copilot:latest",
         ),
         "codex": os.environ.get(
-            "VP_IMAGE_CODEX", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/codex:latest"
+            "VP_IMAGE_CODEX",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/codex:latest",
         ),
         "pi": os.environ.get(
-            "VP_IMAGE_PI", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/pi:latest"
+            "VP_IMAGE_PI",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/pi:latest",
         ),
         "agy": os.environ.get(
             "VP_IMAGE_AGY",
@@ -132,7 +134,8 @@ def get_default_images() -> dict[str, str]:
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/datasette:latest",
         ),
         "proxy": os.environ.get(
-            "VP_PROXY_IMAGE", f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/proxy:latest"
+            "VP_PROXY_IMAGE",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/proxy:latest",
         ),
         "skills-engine": get_skills_engine_image(),
     }

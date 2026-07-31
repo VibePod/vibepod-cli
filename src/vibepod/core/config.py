@@ -132,6 +132,7 @@ def _default_config() -> dict[str, Any]:
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
+                "ports": [],
                 "init": [],
             },
         },

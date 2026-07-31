@@ -48,14 +48,14 @@ def attach(
         if not running:
             error(
                 "No running VibePod agent containers to attach to. "
-                "Start one with `vp run`, or check `vp list --running`."
+                "Start one with `vp run`, or check `vp list --running`.",
             )
             raise typer.Exit(1)
         if len(running) > 1:
             names = ", ".join(sorted(c.name for c in running))
             error(
                 f"Multiple running containers: {names}. "
-                "Specify one explicitly: `vp attach <container>`."
+                "Specify one explicitly: `vp attach <container>`.",
             )
             raise typer.Exit(1)
         target = running[0]
@@ -73,14 +73,14 @@ def attach(
         if getattr(target, "status", "") != "running":
             error(
                 f"Container '{container}' is not running "
-                f"(status: {getattr(target, 'status', 'unknown')})."
+                f"(status: {getattr(target, 'status', 'unknown')}).",
             )
             raise typer.Exit(1)
 
     agent = (getattr(target, "labels", {}) or {}).get("vibepod.agent", "agent")
     info(f"Attaching to {target.name} ({agent})")
     warning(
-        f"Close the terminal to leave it running, or stop it with `vp stop {target.name}`."
+        f"Close the terminal to leave it running, or stop it with `vp stop {target.name}`.",
     )
     try:
         manager.attach_interactive(target)

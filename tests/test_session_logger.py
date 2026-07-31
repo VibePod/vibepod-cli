@@ -51,7 +51,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         row = conn.execute(
-            "SELECT agent, container_name FROM sessions WHERE id = ?", (sid,)
+            "SELECT agent, container_name FROM sessions WHERE id = ?",
+            (sid,),
         ).fetchone()
         assert row == ("claude", "vibepod-claude-test")
         conn.close()
@@ -64,7 +65,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         row = conn.execute(
-            "SELECT ended_at, exit_reason FROM sessions WHERE id = ?", (sid,)
+            "SELECT ended_at, exit_reason FROM sessions WHERE id = ?",
+            (sid,),
         ).fetchone()
         assert row[0] is not None
         assert row[1] == "keyboard_interrupt"
@@ -98,7 +100,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "hello"
         conn.close()
@@ -113,7 +116,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "hello"
         conn.close()
@@ -127,7 +131,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "hi"
         conn.close()
@@ -141,7 +146,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         rows = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ? ORDER BY id", (sid,)
+            "SELECT content FROM messages WHERE session_id = ? ORDER BY id",
+            (sid,),
         ).fetchall()
         assert [r[0] for r in rows] == ["first", "second"]
         conn.close()
@@ -155,7 +161,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         count = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_id = ?", (sid,)
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert count == 0
         conn.close()
@@ -170,7 +177,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "hi"
         conn.close()
@@ -187,7 +195,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "hello"
         conn.close()
@@ -202,7 +211,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "abcd"
         conn.close()
@@ -217,7 +227,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "xy"
         conn.close()
@@ -232,7 +243,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "abcd"
         conn.close()
@@ -247,7 +259,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "docker"
         conn.close()
@@ -263,7 +276,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "hilo"
         conn.close()
@@ -278,7 +292,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         content = conn.execute(
-            "SELECT content FROM messages WHERE session_id = ?", (sid,)
+            "SELECT content FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert content == "pending"
         conn.close()
@@ -311,7 +326,8 @@ class TestSessionLogger:
 
         conn = sqlite3.connect(str(tmp_path / "test.db"))
         count = conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_id = ?", (sid,)
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            (sid,),
         ).fetchone()[0]
         assert count == 0
         conn.close()

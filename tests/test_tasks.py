@@ -85,7 +85,7 @@ def test_existing_database_is_migrated_with_lifecycle_columns(tmp_path: Path) ->
         "image TEXT NOT NULL, "
         "vibepod_version TEXT NOT NULL, "
         "created_at TEXT NOT NULL"
-        ")"
+        ")",
     )
     conn.execute(
         "INSERT INTO tasks "

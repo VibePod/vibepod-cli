@@ -111,19 +111,19 @@ def agent_init_commands(agent: str, agent_cfg: dict[str, Any]) -> list[str]:
         items = raw_init
     else:
         raise typer.BadParameter(
-            f"Invalid agents.{agent}.init value, expected a string or list of strings."
+            f"Invalid agents.{agent}.init value, expected a string or list of strings.",
         )
 
     commands: list[str] = []
     for index, item in enumerate(items, start=1):
         if not isinstance(item, str):
             raise typer.BadParameter(
-                f"Invalid agents.{agent}.init[{index}] value, expected a string."
+                f"Invalid agents.{agent}.init[{index}] value, expected a string.",
             )
         command = item.strip()
         if not command:
             raise typer.BadParameter(
-                f"Invalid agents.{agent}.init[{index}] value, cannot be empty."
+                f"Invalid agents.{agent}.init[{index}] value, cannot be empty.",
             )
         commands.append(command)
     return commands
@@ -141,7 +141,7 @@ def _check_publish_port(value: Any, *, minimum: int, agent: str, index: int, ent
     if text.isdigit() and not minimum <= int(text) <= 65535:
         raise typer.BadParameter(
             f"Invalid agents.{agent}.ports[{index}] value '{entry}': "
-            f"port {text} is out of range {minimum}-65535."
+            f"port {text} is out of range {minimum}-65535.",
         )
 
 
@@ -162,21 +162,21 @@ def agent_port_bindings(agent: str, agent_cfg: dict[str, Any]) -> dict[str, Any]
     else:
         raise typer.BadParameter(
             f"Invalid agents.{agent}.ports value, "
-            "expected a string like '8000:8000' or a list of them."
+            "expected a string like '8000:8000' or a list of them.",
         )
 
     bindings: dict[str, Any] = {}
     for index, item in enumerate(items, start=1):
         if isinstance(item, bool) or not isinstance(item, (str, int)):
             raise typer.BadParameter(
-                f"Invalid agents.{agent}.ports[{index}] value, expected a string like '8000:8000'."
+                f"Invalid agents.{agent}.ports[{index}] value, expected a string like '8000:8000'.",
             )
         entry = str(item).strip()
         try:
             parsed = build_port_bindings([entry])
         except ValueError as exc:
             raise typer.BadParameter(
-                f"Invalid agents.{agent}.ports[{index}] value '{entry}': {exc}"
+                f"Invalid agents.{agent}.ports[{index}] value '{entry}': {exc}",
             ) from exc
         for internal, binds in parsed.items():
             container_port = internal.split("/", 1)[0]
@@ -196,7 +196,7 @@ def init_entrypoint(init_commands: list[str]) -> list[str]:
             "set -e",
             *init_commands,
             'exec "$@"',
-        ]
+        ],
     )
     return ["/bin/sh", "-lc", script, "--"]
 
@@ -277,7 +277,8 @@ def prepare_x11_auth(display: str, config_dir: Path) -> Path | None:
 
 
 def x11_volumes_and_env(
-    display: str, xauth_file: Path | None = None
+    display: str,
+    xauth_file: Path | None = None,
 ) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
     """Return X11 socket volumes and DISPLAY env for paste-image support."""
     volumes: list[tuple[str, str, str]] = [("/tmp/.X11-unix", "/tmp/.X11-unix", "rw")]

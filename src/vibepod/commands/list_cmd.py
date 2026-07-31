@@ -21,7 +21,7 @@ def _configured_agent_rows() -> list[dict[str, str]]:
                 "short": get_agent_shortcut(agent) or "-",
                 "agent": agent,
                 "image": DEFAULT_IMAGES[agent],
-            }
+            },
         )
     return rows
 
@@ -39,14 +39,15 @@ def _running_rows(containers: list[Any]) -> list[dict[str, str]]:
                 "agent": agent,
                 "container": getattr(container, "name", "-"),
                 "context": labels.get("vibepod.workspace", "-"),
-            }
+            },
         )
     return sorted(rows, key=lambda row: (row["agent"], row["container"]))
 
 
 def list_agents(
     running: Annotated[
-        bool, typer.Option("-r", "--running", help="Show only running agents")
+        bool,
+        typer.Option("-r", "--running", help="Show only running agents"),
     ] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:

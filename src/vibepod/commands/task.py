@@ -274,7 +274,8 @@ def task_create_command(
     agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
     prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
     workspace: Annotated[
-        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+        Path,
+        typer.Option("-w", "--workspace", help="Workspace directory"),
     ] = Path("."),
     env: Annotated[
         list[str] | None,
@@ -297,7 +298,8 @@ def task_create_command(
     ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     no_overlay: Annotated[
-        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+        bool,
+        typer.Option("--no-overlay", help="Skip the project overlay image"),
     ] = False,
     rebuild_overlay: Annotated[
         bool,
@@ -338,7 +340,8 @@ def task_run_command(
     agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
     prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
     workspace: Annotated[
-        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+        Path,
+        typer.Option("-w", "--workspace", help="Workspace directory"),
     ] = Path("."),
     env: Annotated[
         list[str] | None,
@@ -361,7 +364,8 @@ def task_run_command(
     ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     no_overlay: Annotated[
-        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+        bool,
+        typer.Option("--no-overlay", help="Skip the project overlay image"),
     ] = False,
     rebuild_overlay: Annotated[
         bool,
@@ -397,7 +401,8 @@ def task_create(
     agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
     prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
     workspace: Annotated[
-        Path, typer.Option("-w", "--workspace", help="Workspace directory")
+        Path,
+        typer.Option("-w", "--workspace", help="Workspace directory"),
     ] = Path("."),
     env: Annotated[
         list[str] | None,
@@ -420,7 +425,8 @@ def task_create(
     ] = DEFAULT_TASK_TIMEOUT,
     pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
     no_overlay: Annotated[
-        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+        bool,
+        typer.Option("--no-overlay", help="Skip the project overlay image"),
     ] = False,
     rebuild_overlay: Annotated[
         bool,
@@ -456,7 +462,7 @@ def task_create(
     if not spec.headless_prefix:
         error(
             f"Agent '{selected}' does not yet support headless task mode. "
-            "Supported in v1: claude, codex, auggie."
+            "Supported in v1: claude, codex, auggie.",
         )
         raise typer.Exit(1)
 
@@ -467,7 +473,7 @@ def task_create(
     if is_protected_dir(workspace_path):
         error(
             f"'{workspace_path}' is a protected directory (home or root) and cannot be "
-            "added to the allow list. Change to a project directory first."
+            "added to the allow list. Change to a project directory first.",
         )
         raise typer.Exit(1)
 
@@ -475,7 +481,7 @@ def task_create(
         if not sys.stdin.isatty():
             error(
                 f"'{workspace_path}' is not in the allowed directories list. "
-                "Run `vp config allow-dir` to add it."
+                "Run `vp config allow-dir` to add it.",
             )
             raise typer.Exit(1)
         if not Confirm.ask(
@@ -693,7 +699,11 @@ def task_create(
         if container_ip:
             mapping_path = proxy_db_path.parent / "containers.json"
             update_container_mapping(
-                mapping_path, container_ip, container.id, container.name, selected
+                mapping_path,
+                container_ip,
+                container.id,
+                container.name,
+                selected,
             )
 
     state = container.attrs.get("State", {}) or {}
@@ -806,7 +816,8 @@ def task_list(
 def task_logs(
     task_id: Annotated[str, typer.Argument(help="Task id (full or prefix)")],
     follow: Annotated[
-        bool, typer.Option("-f", "--follow", help="Stream logs as they are written")
+        bool,
+        typer.Option("-f", "--follow", help="Stream logs as they are written"),
     ] = False,
 ) -> None:
     """Print the agent's stdout/stderr for a task."""
@@ -824,7 +835,7 @@ def task_logs(
     except DockerClientError as exc:
         error(
             f"{exc}. Container for this task is gone; "
-            f"remove the registry entry with `vp task rm {record.id[:12]}`."
+            f"remove the registry entry with `vp task rm {record.id[:12]}`.",
         )
         raise typer.Exit(1) from exc
 
@@ -926,7 +937,7 @@ def task_cancel(
         )
         error(
             f"Container for this task is gone. "
-            f"Use `vp task rm {record.id[:12]}` to remove the stale registry entry."
+            f"Use `vp task rm {record.id[:12]}` to remove the stale registry entry.",
         )
         raise typer.Exit(0) from None
 
@@ -986,7 +997,8 @@ def task_rm(
         typer.Option("--all", help="Remove all task records and their containers"),
     ] = False,
     force: Annotated[
-        bool, typer.Option("-f", "--force", help="Kill a running container before removing")
+        bool,
+        typer.Option("-f", "--force", help="Kill a running container before removing"),
     ] = False,
 ) -> None:
     """Remove one task, or all tasks with --all."""
@@ -1017,7 +1029,7 @@ def task_rm(
                     ids += ", ..."
                 error(
                     f"{len(running)} task container(s) are still running: {ids}. "
-                    "Use --force to kill and remove them."
+                    "Use --force to kill and remove them.",
                 )
                 raise typer.Exit(1)
 
@@ -1067,7 +1079,7 @@ def _remove_task_record(
         if getattr(container, "status", "") == "running" and not force:
             error(
                 f"Task {record.id[:12]} is still running. "
-                "Use --force to kill and remove, or wait for it to finish."
+                "Use --force to kill and remove, or wait for it to finish.",
             )
             raise typer.Exit(1)
         try:

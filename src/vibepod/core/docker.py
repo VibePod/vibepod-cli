@@ -246,7 +246,7 @@ class DockerManager:
             except DockerException as retry_exc:
                 raise DockerClientError(
                     f"Docker is not available: {exc}. "
-                    f"Found Podman socket {podman_socket} but could not connect: {retry_exc}"
+                    f"Found Podman socket {podman_socket} but could not connect: {retry_exc}",
                 ) from retry_exc
 
         self._rootless_podman: bool | None = None
@@ -400,7 +400,12 @@ class DockerManager:
             return None
 
     def build_image(
-        self, context_tar: Any, tag: str, labels: dict[str, str], *, nocache: bool = False
+        self,
+        context_tar: Any,
+        tag: str,
+        labels: dict[str, str],
+        *,
+        nocache: bool = False,
     ) -> None:
         """Build *tag* from an in-memory custom-context tar, streaming output.
 
@@ -443,7 +448,7 @@ class DockerManager:
         """
         try:
             images = self.client.images.list(
-                filters={"label": [f"vibepod.overlay.key={overlay_key}"]}
+                filters={"label": [f"vibepod.overlay.key={overlay_key}"]},
             )
         except DockerException:
             return 0
@@ -531,7 +536,7 @@ class DockerManager:
             image_obj = self.client.images.get(image)
         except NotFound as exc:
             raise DockerClientError(
-                f"Image {image} not found locally. Pull the image first (for example with --pull)."
+                f"Image {image} not found locally. Pull the image first (for example with --pull).",
             ) from exc
         except APIError as exc:
             raise DockerClientError(f"Failed to inspect image {image}: {exc}") from exc
@@ -550,7 +555,7 @@ class DockerManager:
         if not launch:
             raise DockerClientError(
                 f"Could not resolve a startup command for image {image}. "
-                "Specify a command in the image or in agent settings."
+                "Specify a command in the image or in agent settings.",
             )
         return launch
 
@@ -673,11 +678,11 @@ class DockerManager:
                 container.stop(timeout=timeout)
             except APIError as exc:
                 raise DockerClientError(
-                    f"Failed to stop container '{container.name}': {exc}"
+                    f"Failed to stop container '{container.name}': {exc}",
                 ) from exc
             except DockerException as exc:
                 raise DockerClientError(
-                    f"Failed to stop container '{container.name}': {exc}"
+                    f"Failed to stop container '{container.name}': {exc}",
                 ) from exc
             stopped += 1
         return stopped
@@ -687,17 +692,17 @@ class DockerManager:
         labels = getattr(container, "labels", {}) or {}
         if labels.get(CONTAINER_LABEL_MANAGED) != "true":
             raise DockerClientError(
-                f"Container '{name_or_id}' is not managed by VibePod; refusing to stop."
+                f"Container '{name_or_id}' is not managed by VibePod; refusing to stop.",
             )
         try:
             container.stop(timeout=0 if force else 10)
         except APIError as exc:
             raise DockerClientError(
-                f"Failed to stop container '{name_or_id}': {exc}"
+                f"Failed to stop container '{name_or_id}': {exc}",
             ) from exc
         except DockerException as exc:
             raise DockerClientError(
-                f"Failed to stop container '{name_or_id}': {exc}"
+                f"Failed to stop container '{name_or_id}': {exc}",
             ) from exc
         return container
 
@@ -709,11 +714,11 @@ class DockerManager:
                 container.stop(timeout=timeout)
             except APIError as exc:
                 raise DockerClientError(
-                    f"Failed to stop container '{container.name}': {exc}"
+                    f"Failed to stop container '{container.name}': {exc}",
                 ) from exc
             except DockerException as exc:
                 raise DockerClientError(
-                    f"Failed to stop container '{container.name}': {exc}"
+                    f"Failed to stop container '{container.name}': {exc}",
                 ) from exc
             stopped += 1
         return stopped
@@ -729,12 +734,17 @@ class DockerManager:
 
     def find_datasette(self) -> Any | None:
         containers = self.client.containers.list(
-            all=True, filters={"label": ["vibepod.managed=true", "vibepod.role=datasette"]}
+            all=True,
+            filters={"label": ["vibepod.managed=true", "vibepod.role=datasette"]},
         )
         return containers[0] if containers else None
 
     def ensure_datasette(
-        self, image: str, logs_db_path: Path, proxy_db_path: Path, port: int
+        self,
+        image: str,
+        logs_db_path: Path,
+        proxy_db_path: Path,
+        port: int,
     ) -> Any:
         existing = self.find_datasette()
         if existing:
@@ -786,7 +796,8 @@ class DockerManager:
 
     def find_proxy(self) -> Any | None:
         containers = self.client.containers.list(
-            all=True, filters={"label": ["vibepod.managed=true", "vibepod.role=proxy"]}
+            all=True,
+            filters={"label": ["vibepod.managed=true", "vibepod.role=proxy"]},
         )
         return containers[0] if containers else None
 

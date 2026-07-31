@@ -52,7 +52,8 @@ def test_find_overlay_dockerfile_ignores_directory_named_dockerfile(tmp_path: Pa
 def _hash(base_ref: str, dockerfile: Path, base_image: str = "base:latest") -> str:
     """Hash a context the way apply_overlay does: over the snapshot tar."""
     return overlay.overlay_hash(
-        base_ref, overlay.build_context_tar(base_image, dockerfile).getvalue()
+        base_ref,
+        overlay.build_context_tar(base_image, dockerfile).getvalue(),
     )
 
 
@@ -303,7 +304,8 @@ def test_apply_overlay_key_differs_per_workspace_and_agent(tmp_path: Path) -> No
 
 
 def test_apply_overlay_if_enabled_calls_core(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     calls = {}
 
@@ -326,10 +328,13 @@ def test_apply_overlay_if_enabled_calls_core(
 
 
 def test_apply_overlay_if_enabled_respects_no_overlay_flag(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        launch.overlay, "apply_overlay", lambda *a, **k: pytest.fail("should not build")
+        launch.overlay,
+        "apply_overlay",
+        lambda *a, **k: pytest.fail("should not build"),
     )
     result = launch.apply_overlay_if_enabled(
         manager="mgr",
@@ -344,10 +349,13 @@ def test_apply_overlay_if_enabled_respects_no_overlay_flag(
 
 
 def test_apply_overlay_if_enabled_respects_agent_config(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        launch.overlay, "apply_overlay", lambda *a, **k: pytest.fail("should not build")
+        launch.overlay,
+        "apply_overlay",
+        lambda *a, **k: pytest.fail("should not build"),
     )
     result = launch.apply_overlay_if_enabled(
         manager="mgr",
@@ -368,12 +376,15 @@ def _write_project_config(workspace: Path, content: str) -> None:
 
 
 def test_apply_overlay_if_enabled_respects_workspace_config(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """agents.<agent>.overlay: false in the *workspace* project config wins,
     even when get_config() was resolved from a different current directory."""
     monkeypatch.setattr(
-        launch.overlay, "apply_overlay", lambda *a, **k: pytest.fail("should not build")
+        launch.overlay,
+        "apply_overlay",
+        lambda *a, **k: pytest.fail("should not build"),
     )
     _write_project_config(tmp_path, "agents:\n  claude:\n    overlay: false\n")
     result = launch.apply_overlay_if_enabled(
@@ -389,10 +400,13 @@ def test_apply_overlay_if_enabled_respects_workspace_config(
 
 
 def test_apply_overlay_if_enabled_workspace_config_overrides_cwd_config(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        launch.overlay, "apply_overlay", lambda *a, **k: "vibepod/overlay-claude:abc"
+        launch.overlay,
+        "apply_overlay",
+        lambda *a, **k: "vibepod/overlay-claude:abc",
     )
     _write_project_config(tmp_path, "agents:\n  claude:\n    overlay: true\n")
     result = launch.apply_overlay_if_enabled(
@@ -408,7 +422,8 @@ def test_apply_overlay_if_enabled_workspace_config_overrides_cwd_config(
 
 
 def test_apply_overlay_if_enabled_exits_on_build_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     def failing_apply(*a, **k):
         raise DockerClientError("build broke")

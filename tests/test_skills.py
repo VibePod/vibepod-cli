@@ -16,7 +16,9 @@ runner = CliRunner()
 
 
 def _fake_result(
-    exit_code: int = 0, data: Any | None = None, stderr: str = ""
+    exit_code: int = 0,
+    data: Any | None = None,
+    stderr: str = "",
 ) -> skills_engine.EngineResult:
     return skills_engine.EngineResult(
         exit_code=exit_code,
@@ -46,7 +48,7 @@ def test_skills_add_invokes_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     ) -> skills_engine.EngineResult:
         seen.update(locator=locator, scope=scope, skill_id=skill_id, link=link)
         return _fake_result(
-            data=[{"command": "add", "id": "researcher", "name": "Researcher", "path": "/x"}]
+            data=[{"command": "add", "id": "researcher", "name": "Researcher", "path": "/x"}],
         )
 
     monkeypatch.setattr(skills_engine, "add", fake_add)
@@ -78,7 +80,7 @@ def test_skills_list_renders_table(monkeypatch: pytest.MonkeyPatch) -> None:
                     "shadowedBy": "local",
                 },
             ],
-        }
+        },
     ]
 
     def fake_list(scope: Any = None, *, cwd: Any = None) -> skills_engine.EngineResult:
@@ -138,7 +140,10 @@ def test_skills_json_failure_keeps_stdout_parseable_and_stderr_human(
 
 def test_skills_delete_propagates_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_delete(
-        skill_id: str, *, scope: str, cwd: Path | None = None
+        skill_id: str,
+        *,
+        scope: str,
+        cwd: Path | None = None,
     ) -> skills_engine.EngineResult:
         return _fake_result(exit_code=1, stderr="not found")
 
