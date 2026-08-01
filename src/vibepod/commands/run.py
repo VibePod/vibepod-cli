@@ -43,6 +43,7 @@ from vibepod.core.herdr import (
 from vibepod.core.herdr import (
     report_pane_metadata as _report_herdr_metadata,
 )
+from vibepod.core.image_metadata import ImageMetadata, collect_image_metadata
 from vibepod.core.launch import (
     agent_extra_volumes as _agent_extra_volumes,
 )
@@ -668,6 +669,13 @@ def run(
         Path(str(log_cfg.get("db_path", "~/.config/vibepod/logs.db"))).expanduser().resolve()
     )
 
+    # Collecting metadata inspects the image via the engine API — skip the
+    # roundtrip entirely when nothing will be persisted.
+    image_meta = (
+        collect_image_metadata(container, image)
+        if log_enabled
+        else ImageMetadata(image_tag=None, image_hash=None, agent_version=None)
+    )
     logger = SessionLogger(log_db_path, enabled=log_enabled)
     logger.open_session(
         agent=selected_agent,
@@ -676,6 +684,9 @@ def run(
         container_id=container.id,
         container_name=container.name,
         vibepod_version=__version__,
+        image_tag=image_meta.image_tag,
+        image_hash=image_meta.image_hash,
+        agent_version=image_meta.agent_version,
     )
 
     exit_reason = "normal"

@@ -1099,3 +1099,51 @@ def test_task_create_preserves_host_user_for_non_podman(
     assert stub.run_kwargs["user"] == "1234:5678"
     assert stub.run_kwargs["env"]["USER_UID"] == "1234"
     assert stub.run_kwargs["env"]["USER_GID"] == "5678"
+
+
+class _MetadataDockerManager(_CapturingDockerManager):
+    """Stub whose containers expose a resolved image with id and labels."""
+
+    def run_agent(self, **kwargs):
+        container = super().run_agent(**kwargs)
+        container.image = type(
+            "_Image",
+            (),
+            {
+                "id": "sha256:" + "d" * 64,
+                "labels": {"vibepod.agent.version": "2.1.0"},
+            },
+        )()
+        return container
+
+
+def test_task_create_records_image_metadata(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _MetadataDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="do a thing", workspace=tmp_path)
+
+    rows = tmp_task_store.list()
+    assert len(rows) == 1
+    assert rows[0].image_tag == "latest"
+    assert rows[0].image_hash == "sha256:" + "d" * 64
+    assert rows[0].agent_version == "2.1.0"
+
+
+def test_task_create_survives_missing_image_metadata(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="do a thing", workspace=tmp_path)
+
+    rows = tmp_task_store.list()
+    assert len(rows) == 1
+    assert rows[0].image_tag == "latest"
+    assert rows[0].image_hash is None
+    assert rows[0].agent_version is None
