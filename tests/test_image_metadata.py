@@ -84,7 +84,7 @@ def test_vibepod_label_wins_over_oci_label() -> None:
         labels={
             "org.opencontainers.image.version": "1.5.0",
             "vibepod.agent.version": "2.0.0",
-        }
+        },
     )
 
     meta = collect_image_metadata(_FakeContainer(image=image), "vibepod/claude:latest")
@@ -122,7 +122,8 @@ def test_broken_labels_property_is_swallowed() -> None:
             raise KeyError("Config")
 
     meta = collect_image_metadata(
-        _FakeContainer(image=_BrokenLabelsImage()), "vibepod/claude:latest"
+        _FakeContainer(image=_BrokenLabelsImage()),
+        "vibepod/claude:latest",
     )
 
     assert meta.image_hash == "sha256:" + "f" * 64
@@ -138,7 +139,8 @@ def test_broken_id_attribute_is_swallowed() -> None:
             raise RuntimeError("daemon gone")
 
     container = _FakeContainer(
-        image=_BrokenIdImage(), attrs={"Image": "sha256:" + "9" * 64}
+        image=_BrokenIdImage(),
+        attrs={"Image": "sha256:" + "9" * 64},
     )
 
     meta = collect_image_metadata(container, "vibepod/claude:latest")

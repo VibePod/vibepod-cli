@@ -1132,7 +1132,9 @@ def test_task_create_records_image_metadata(monkeypatch, tmp_path, tmp_task_stor
 
 
 def test_task_create_survives_missing_image_metadata(
-    monkeypatch, tmp_path, tmp_task_store
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
 ) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)

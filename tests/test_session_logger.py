@@ -423,7 +423,7 @@ class TestImageMetadata:
             "ended_at TEXT, "
             "exit_reason TEXT, "
             "vibepod_version TEXT NOT NULL"
-            ")"
+            ")",
         )
         conn.execute(
             "INSERT INTO sessions "
@@ -460,10 +460,11 @@ class TestImageMetadata:
 
         conn = sqlite3.connect(str(db_path))
         legacy = conn.execute(
-            "SELECT image_tag, image_hash, agent_version FROM sessions WHERE id = 'legacy1'"
+            "SELECT image_tag, image_hash, agent_version FROM sessions WHERE id = 'legacy1'",
         ).fetchone()
         fresh = conn.execute(
-            "SELECT image_tag FROM sessions WHERE id = ?", (sid,)
+            "SELECT image_tag FROM sessions WHERE id = ?",
+            (sid,),
         ).fetchone()
         conn.close()
         assert legacy == (None, None, None)

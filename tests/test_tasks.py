@@ -235,7 +235,7 @@ def test_existing_database_is_migrated_with_image_metadata_columns(tmp_path: Pat
         "started_at TEXT, "
         "finished_at TEXT, "
         "updated_at TEXT"
-        ")"
+        ")",
     )
     conn.execute(
         "INSERT INTO tasks "

@@ -2243,7 +2243,8 @@ def test_run_aborts_when_user_declines_prompt(monkeypatch, tmp_path: Path) -> No
 
 
 def test_run_passes_image_metadata_to_session_logger(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Attached runs persist image tag, hash, and agent version in the session row."""
     opened: dict = {}
@@ -2310,7 +2311,8 @@ def test_run_passes_image_metadata_to_session_logger(
 
 
 def test_run_skips_image_inspection_when_logging_disabled(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """With logging off, the extra image-inspect API call never happens."""
     inspections = {"count": 0}
