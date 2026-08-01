@@ -47,6 +47,7 @@ class _StalePragmaConn:
 
     def execute(self, sql: str, *args: object) -> object:
         if sql.startswith("PRAGMA"):
+
             class _Empty:
                 @staticmethod
                 def fetchall() -> list:
