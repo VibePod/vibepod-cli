@@ -6,7 +6,9 @@ import sqlite3
 
 
 def add_missing_columns(
-    conn: sqlite3.Connection, table: str, columns: dict[str, str]
+    conn: sqlite3.Connection,
+    table: str,
+    columns: dict[str, str],
 ) -> bool:
     """Add each column in *columns* missing from *table*.
 
