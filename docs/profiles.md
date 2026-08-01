@@ -12,7 +12,7 @@ via a project config (see below).
 
 ## Layout
 
-```
+```text
 ~/.config/vibepod/
   agents/<agent>/                    # the built-in "default" profile
   profiles/<name>/agents/<agent>/    # named profiles
