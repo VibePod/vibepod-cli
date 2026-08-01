@@ -284,7 +284,7 @@ def _herdr_log_relpath(agent: str) -> str | None:
     }.get(agent)
 
 
-def _herdr_agent_summary() -> None:
+def _herdr_agent_summary(profile: str) -> None:
     """One line per supported agent: integration, injection, registration, activity."""
     from rich.table import Table
 
@@ -312,7 +312,7 @@ def _herdr_agent_summary() -> None:
         else:
             integration = "none"
 
-        cfg_dir = agent_config_dir(name)
+        cfg_dir = agent_config_dir(name, profile)
         dests = [dest for _, dest in builtin] + [
             str(entry.get("dest")) for entry in custom_entries if isinstance(entry, dict)
         ]
@@ -359,6 +359,10 @@ def herdr_doctor(
         str | None,
         typer.Argument(help="Agent to inspect in depth; omit for an all-agents summary"),
     ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to inspect (see `vp profile list`)"),
+    ] = None,
 ) -> None:
     """Diagnose herdr terminal-multiplexer wiring end to end.
 
@@ -382,6 +386,12 @@ def herdr_doctor(
             error(f"Unknown agent '{agent}'. Supported: {', '.join(SUPPORTED_AGENTS)}")
             raise typer.Exit(1)
         agent = resolved
+
+    try:
+        active_profile = resolve_profile(profile, get_config())
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
 
     failures = 0
 
@@ -431,7 +441,7 @@ def herdr_doctor(
 
     if agent is None:
         console.print()
-        _herdr_agent_summary()
+        _herdr_agent_summary(active_profile)
         if failures:
             error(f"{failures} problem(s) found")
             raise typer.Exit(1)
@@ -482,7 +492,7 @@ def herdr_doctor(
 
     console.print()
     console.print(f"[bold]Injected files ({agent})[/bold]")
-    cfg_dir = agent_config_dir(agent)
+    cfg_dir = agent_config_dir(agent, active_profile)
     entries = herdr_core.BUILTIN_INTEGRATIONS.get(agent, [])
     if not entries:
         console.print("  (no built-in integration for this agent)")
