@@ -44,7 +44,8 @@ def test_profile_remove_rejects_traversal_name(config_root: Path) -> None:
 
 
 def test_run_unknown_profile_via_vp_profile_env(
-    config_root: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("VP_PROFILE", "ghost")
     result = runner.invoke(app, ["run", "claude"])
@@ -53,7 +54,8 @@ def test_run_unknown_profile_via_vp_profile_env(
 
 
 def test_run_uses_profile_config_dir_for_stored_token(
-    config_root: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     create_profile("work")
     seen: dict[str, Path] = {}
@@ -92,3 +94,25 @@ def test_doctor_claude_unknown_profile_fails(config_root: Path) -> None:
     result = runner.invoke(app, ["doctor", "claude", "--profile", "nope"])
     assert result.exit_code == 1
     assert "vp profile create nope" in result.output
+
+
+def test_doctor_herdr_unknown_profile_fails(config_root: Path) -> None:
+    result = runner.invoke(app, ["doctor", "herdr", "--profile", "nope"])
+    assert result.exit_code == 1
+    assert "vp profile create nope" in result.output
+
+
+def test_doctor_herdr_summary_uses_profile_dirs(
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    create_profile("work")
+    seen: set[str] = set()
+
+    def fake_config_dir(agent: str, profile: str = "default") -> Path:
+        seen.add(profile)
+        return config_root / "x" / agent
+
+    monkeypatch.setattr("vibepod.commands.doctor.agent_config_dir", fake_config_dir)
+    runner.invoke(app, ["doctor", "herdr", "--profile", "work"])
+    assert seen == {"work"}

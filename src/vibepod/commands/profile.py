@@ -89,9 +89,7 @@ def remove(
         error(f"Profile '{name}' does not exist.")
         raise typer.Exit(code=1)
     if not yes:
-        typer.confirm(
-            f"Remove profile '{name}' and all credentials stored in it?", abort=True
-        )
+        typer.confirm(f"Remove profile '{name}' and all credentials stored in it?", abort=True)
     try:
         remove_profile(name)
     except ValueError as exc:
@@ -101,7 +99,7 @@ def remove(
         error(
             f"Could not remove profile '{name}': {exc}. The profile may be partially "
             "deleted. Files created by agent containers can be owned by another user; "
-            "fix ownership (e.g. `sudo chown -R $USER ...`) and retry."
+            "fix ownership (e.g. `sudo chown -R $USER ...`) and retry.",
         )
         raise typer.Exit(code=1) from exc
     if os.environ.get("VP_PROFILE") == name:

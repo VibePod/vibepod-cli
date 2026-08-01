@@ -84,9 +84,7 @@ def test_remove_profile(config_root: Path) -> None:
         remove_profile("missing")
 
 
-def test_resolve_profile_precedence(
-    config_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_profile_precedence(config_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     create_profile("flagged")
     create_profile("envvar")
     create_profile("configured")
@@ -112,7 +110,8 @@ def test_resolve_profile_rejects_non_string_config_value(config_root: Path) -> N
 
 
 def test_resolve_profile_higher_priority_overrides_bad_config_value(
-    config_root: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # first-match precedence: a valid flag or env var must win over an
     # invalid lower-priority config value instead of erroring on it
@@ -123,7 +122,8 @@ def test_resolve_profile_higher_priority_overrides_bad_config_value(
 
 
 def test_resolve_profile_rejects_traversal_names(
-    config_root: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for name in ("..", "../../tmp", "a/b"):
         with pytest.raises(ValueError, match="Invalid profile name"):

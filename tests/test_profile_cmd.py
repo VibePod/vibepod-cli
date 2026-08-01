@@ -93,7 +93,8 @@ def test_profile_remove_validates_before_confirmation(config_root: Path) -> None
 
 
 def test_profile_list_broken_selection_shows_warning_not_default(
-    config_root: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("VP_PROFILE", "ghost")
     result = runner.invoke(app, ["profile", "list"])
@@ -103,7 +104,8 @@ def test_profile_list_broken_selection_shows_warning_not_default(
 
 
 def test_profile_remove_reports_filesystem_errors(
-    config_root: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner.invoke(app, ["profile", "create", "work"])
 

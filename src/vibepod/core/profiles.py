@@ -18,7 +18,7 @@ def validate_profile_name(name: str) -> None:
     if not PROFILE_NAME_PATTERN.fullmatch(name):
         raise ValueError(
             f"Invalid profile name '{name}': use lowercase letters, digits, '-' and '_', "
-            "starting with a lowercase letter or digit."
+            "starting with a lowercase letter or digit.",
         )
 
 
@@ -76,13 +76,13 @@ def resolve_profile(cli_value: str | None, config: dict[str, Any]) -> str:
         configured = config.get("profile")
         if configured is not None and (not isinstance(configured, str) or not configured):
             raise ValueError(
-                f"Config key 'profile' must be a non-empty string, got {configured!r}."
+                f"Config key 'profile' must be a non-empty string, got {configured!r}.",
             )
         selected = configured or DEFAULT_PROFILE
     if selected != DEFAULT_PROFILE:
         validate_profile_name(selected)
     if not profile_exists(selected):
         raise ValueError(
-            f"Profile '{selected}' does not exist. Create it with: vp profile create {selected}"
+            f"Profile '{selected}' does not exist. Create it with: vp profile create {selected}",
         )
     return selected
