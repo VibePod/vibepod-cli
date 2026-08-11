@@ -578,7 +578,13 @@ def task_create(
     should_pull = pull or (auto_pull_enabled and _is_latest_tag(image))
     if should_pull:
         info(f"Pulling image: {image}")
-        manager.pull_image(image, auto_clean=bool(config.get("auto_clean", True)))
+        try:
+            manager.pull_image(image, auto_clean=bool(config.get("auto_clean", True)))
+        except DockerClientError as exc:
+            if manager.image_id(image) is not None and not pull:
+                warning(f"Failed to pull latest image '{image}' ({exc}). Using existing local image.")
+            else:
+                raise
 
     image = apply_overlay_if_enabled(
         manager=manager,

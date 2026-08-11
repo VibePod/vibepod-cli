@@ -87,7 +87,17 @@ def test_agent_extra_volumes_for_auggie(tmp_path: Path) -> None:
 def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
     config_dir = tmp_path / "agents" / "claude"
     # Agents without explicit volume mappings return empty
-    for agent in ("claude", "gemini", "codex", "devstral", "pi", "agy", "tau", "jcode"):
+    for agent in (
+        "claude",
+        "gemini",
+        "codex",
+        "devstral",
+        "pi",
+        "agy",
+        "tau",
+        "jcode",
+        "freebuff",
+    ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
 
@@ -1610,7 +1620,12 @@ def test_ikwid_appends_args_for_devstral(monkeypatch, tmp_path: Path) -> None:
     assert captured["command"] == ["vibe", "--auto-approve"]
 
 
-def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("agent", ["opencode", "freebuff"])
+def test_ikwid_ignored_for_unsupported_agent(
+    monkeypatch,
+    tmp_path: Path,
+    agent: str,
+) -> None:
     """--ikwid logs warning and proceeds for agents without ikwid_args."""
     captured: dict = {}
 
@@ -1633,7 +1648,7 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
                 "_Container",
                 (),
                 {
-                    "name": "vibepod-opencode-test",
+                    "name": f"vibepod-{agent}-test",
                     "id": "abc123",
                     "status": "running",
                     "attrs": {"NetworkSettings": {"Networks": {}}},
@@ -1645,14 +1660,14 @@ def test_ikwid_ignored_for_unsupported_agent(monkeypatch, tmp_path: Path) -> Non
             return container
 
     cfg = _make_config()
-    cfg["agents"]["opencode"] = {"env": {}, "init": []}
+    cfg["agents"][agent] = {"env": {}, "init": []}
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
     monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
 
-    run_cmd.run(agent="opencode", workspace=tmp_path, detach=True, ikwid=True)
+    run_cmd.run(agent=agent, workspace=tmp_path, detach=True, ikwid=True)
 
     # Command should be unchanged (no ikwid args appended)
-    assert captured["command"] == ["opencode"]
+    assert captured["command"] == [agent]
 
 
 def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> None:
@@ -2240,3 +2255,46 @@ def test_run_aborts_when_user_declines_prompt(monkeypatch, tmp_path: Path) -> No
 
     assert exc.value.exit_code == 1
     assert added == []
+
+
+def test_run_auto_pull_failure_fallback_to_local_image(monkeypatch, tmp_path: Path) -> None:
+    """When auto-pulling a :latest image fails but local image exists, log warning and continue."""
+    _CapturingDockerManager, captured = _make_capturing_docker_manager()
+
+    def failing_pull(self, image: str, auto_clean: bool = True) -> None:
+        raise DockerClientError(f"Failed to pull image {image}: 404 Not Found")
+
+    _CapturingDockerManager.pull_image = failing_pull
+    _CapturingDockerManager.image_id = lambda self, img: "sha256:123456789"
+
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config(global_auto_pull=True))
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    warnings: list[str] = []
+    monkeypatch.setattr(run_cmd, "warning", lambda msg: warnings.append(msg))
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    assert len(warnings) == 1
+    assert "Failed to pull latest image" in warnings[0]
+    assert "Using existing local image" in warnings[0]
+    assert captured["image"] == "vibepod/claude:latest"
+
+
+def test_run_explicit_pull_failure_raises(monkeypatch, tmp_path: Path) -> None:
+    """When explicit pull=True fails, raise error even if local image exists."""
+    _CapturingDockerManager, _ = _make_capturing_docker_manager()
+
+    def failing_pull(self, image: str, auto_clean: bool = True) -> None:
+        raise DockerClientError(f"Failed to pull image {image}: 404 Not Found")
+
+    _CapturingDockerManager.pull_image = failing_pull
+    _CapturingDockerManager.image_id = lambda self, img: "sha256:123456789"
+
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    with pytest.raises(DockerClientError):
+        run_cmd.run(agent="claude", workspace=tmp_path, pull=True, detach=True)
+
+

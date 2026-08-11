@@ -17,6 +17,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `agy` (Antigravity) | Google | `vp n` | `vibepod/agy:latest` |
 | `tau` | Hugging Face | `vp t` | `vibepod/tau:latest` |
 | `jcode` | 1jehuang | `vp j` | `vibepod/jcode:latest` |
+| `freebuff` | CodebuffAI | `vp fb` | `vibepod/freebuff:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`.
 
@@ -77,7 +78,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -205,6 +206,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `auggie` | Not supported |
 | `tau` | Not supported |
 | `jcode` | Not supported |
+| `freebuff` | Not supported |
 
 Example:
 
@@ -790,3 +792,49 @@ automatically.
 VibePod sets `JCODE_NO_AUTO_UPDATE=1` so the pinned binary in the image is
 never self-updated at runtime. Jcode has no auto-approval flag (its safety
 system asks for permission in-session), so `--ikwid` is not supported for it.
+
+### Freebuff (CodebuffAI)
+
+```bash
+vp run freebuff   # or: vp fb
+```
+
+Freebuff is a free AI coding agent built on the Codebuff platform. Its npm
+package is a thin Node launcher that downloads a compiled glibc binary on
+first run, so the `vibepod/freebuff` image is glibc-based (Debian Node), not
+Alpine. Credentials and configuration are persisted under
+`~/.config/vibepod/agents/freebuff/`, mounted at `/config` inside the
+container, where Freebuff finds them as `~/.config/manicode/`:
+
+| Path in container | Contents |
+|---|---|
+| `/config/.config/manicode/settings.json` | Freebuff settings |
+| `/config/.config/manicode/analytics-id.json` | Analytics ID |
+| `/config/.config/manicode/projects/<cwd>/chats/<ts>/log.jsonl` | Chat history |
+
+**Authentication.** Freebuff authenticates through its own interactive login
+flow:
+
+```bash
+vp run freebuff login
+```
+
+On first run without a saved session, Freebuff prints "Not authenticated" and
+prompts you to press ENTER to log in. Saved credentials survive container
+restarts because they live in the persisted mount.
+
+**Resuming a session.** Pass `--continue` (optionally with a conversation id)
+through the CLI:
+
+```bash
+vp run freebuff -- --continue
+vp run freebuff -- --continue <conversation-id>
+```
+
+Use `--` so VibePod does not parse the agent's own flags.
+
+**Headless / task mode.** Freebuff has no non-interactive print mode, so
+`vp task create freebuff ...` is not supported.
+
+**IKWID mode.** Freebuff is a managed TUI with no auto-approval or
+permission-skip flag, so `--ikwid` is not supported for it.

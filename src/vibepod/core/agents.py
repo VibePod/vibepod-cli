@@ -172,6 +172,18 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         {"HOME": "/config", "JCODE_NO_AUTO_UPDATE": "1"},
         headless_prefix=["run"],
     ),
+    "freebuff": AgentSpec(
+        "freebuff",
+        "codebuffai",
+        DEFAULT_IMAGES["freebuff"],
+        "freebuff",
+        ["freebuff"],
+        "/freebuff",
+        # The freebuff container entrypoint handles symlinking /freebuff
+        # to the correct internal config paths (~/.config/manicode) and
+        # overrides HOME internally. We just mount to /freebuff.
+        {"FREEBUFF_CONFIG_DIR": "/freebuff"},
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

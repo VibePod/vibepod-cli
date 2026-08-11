@@ -30,6 +30,7 @@ SUPPORTED_AGENTS = (
     "agy",
     "tau",
     "jcode",
+    "freebuff",
 )
 
 AGENT_SHORTCUTS: dict[str, str] = {
@@ -43,6 +44,7 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "n": "agy",
     "t": "tau",
     "j": "jcode",
+    "fb": "freebuff",
 }
 
 AGENT_ALIASES: dict[str, str] = {
@@ -62,6 +64,7 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_AGY",
     "VP_IMAGE_TAU",
     "VP_IMAGE_JCODE",
+    "VP_IMAGE_FREEBUFF",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
     "VP_SKILLS_ENGINE_IMAGE",
@@ -128,6 +131,10 @@ def get_default_images() -> dict[str, str]:
         "jcode": os.environ.get(
             "VP_IMAGE_JCODE",
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/jcode:latest",
+        ),
+        "freebuff": os.environ.get(
+            "VP_IMAGE_FREEBUFF",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/freebuff:latest",
         ),
         "datasette": os.environ.get(
             "VP_DATASETTE_IMAGE",
