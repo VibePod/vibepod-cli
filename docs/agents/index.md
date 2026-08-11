@@ -804,13 +804,13 @@ package is a thin Node launcher that downloads a compiled glibc binary on
 first run, so the `vibepod/freebuff` image is glibc-based (Debian Node), not
 Alpine. Credentials and configuration are persisted under
 `~/.config/vibepod/agents/freebuff/`, mounted at `/config` inside the
-container, where Freebuff finds them as `~/.config/manicode/`:
+container with `FREEBUFF_CONFIG_DIR=/config`, where Freebuff finds them internally as `~/.config/manicode/`:
 
 | Path in container | Contents |
 |---|---|
-| `/config/.config/manicode/settings.json` | Freebuff settings |
-| `/config/.config/manicode/analytics-id.json` | Analytics ID |
-| `/config/.config/manicode/projects/<cwd>/chats/<ts>/log.jsonl` | Chat history |
+| `~/.config/manicode/settings.json` | Freebuff settings |
+| `~/.config/manicode/analytics-id.json` | Analytics ID |
+| `~/.config/manicode/projects/<cwd>/chats/<ts>/log.jsonl` | Chat history |
 
 **Authentication.** Freebuff authenticates through its own interactive login
 flow:

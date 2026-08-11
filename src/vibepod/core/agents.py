@@ -178,11 +178,11 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         DEFAULT_IMAGES["freebuff"],
         "freebuff",
         ["freebuff"],
-        "/freebuff",
-        # The freebuff container entrypoint handles symlinking /freebuff
+        "/config",
+        # The freebuff container entrypoint handles symlinking /config
         # to the correct internal config paths (~/.config/manicode) and
-        # overrides HOME internally. We just mount to /freebuff.
-        {"FREEBUFF_CONFIG_DIR": "/freebuff"},
+        # overrides HOME internally. We just mount to /config.
+        {"HOME": "/config", "FREEBUFF_CONFIG_DIR": "/config"},
     ),
 }
 
