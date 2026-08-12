@@ -840,6 +840,10 @@ Use `--` so VibePod does not parse the agent's own flags.
 **Headless / task mode.** Freebuff has no non-interactive print mode, so
 `vp task create freebuff ...` is not supported.
 
+**Skills.** Freebuff scans `~/.agents/skills/`, so skills installed via
+`vp skills` are mounted at `/config/.agents/skills/<id>` and picked up
+automatically.
+
 **IKWID mode.** Freebuff is a managed TUI with no auto-approval or
 permission-skip flag, so `--ikwid` is not supported for it.
 

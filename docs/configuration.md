@@ -134,6 +134,14 @@ agents:
     volumes: []
     init: []
 
+  freebuff:
+    enabled: true
+    image: vibepod/freebuff:latest
+    env: {}
+    volumes: []
+    ports: []
+    init: []
+
   qwen:
     enabled: true
     image: vibepod/qwen:latest
