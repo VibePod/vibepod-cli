@@ -134,6 +134,14 @@ agents:
     volumes: []
     init: []
 
+  qwen:
+    enabled: true
+    image: vibepod/qwen:latest
+    env: {}
+    volumes: []
+    ports: []
+    init: []
+
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
   enabled: false
@@ -191,6 +199,8 @@ Each agent image can be overridden individually:
 | `VP_IMAGE_AGY` | agy |
 | `VP_IMAGE_TAU` | tau |
 | `VP_IMAGE_JCODE` | jcode |
+| `VP_IMAGE_FREEBUFF` | freebuff |
+| `VP_IMAGE_QWEN` | qwen |
 | `VP_DATASETTE_IMAGE` | datasette (logs UI) |
 | `VP_PROXY_IMAGE` | proxy |
 | `VP_SKILLS_ENGINE_IMAGE` | skills-engine (used by `vp skills`) |

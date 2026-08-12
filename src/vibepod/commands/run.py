@@ -142,6 +142,8 @@ def _agent_skill_paths(agent: str) -> list[str]:
       - tau      reads ~/.agents/skills/ (also ~/.tau/skills/)
       - jcode    reads ~/.agents/skills/ (also ~/.jcode/skills/)
       - freebuff reads ~/.agents/skills/ (also ~/.freebuff/skills/)
+      - qwen     reads ~/.qwen/skills/, which the image symlinks to /qwen/skills
+        (also <project>/.qwen/skills/ in the workspace)
 
     Gemini wraps skills inside an extension manifest and would need a generated
     gemini-extension.json — handled separately when we add that support.
@@ -151,6 +153,8 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/claude/skills"]
     if agent == "pi":
         return ["/config/.pi/agent/skills"]
+    if agent == "qwen":
+        return ["/qwen/skills"]
     if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff"):
         return ["/config/.agents/skills"]
     return []
@@ -451,7 +455,9 @@ def run(
             manager.pull_image(image, auto_clean=bool(config.get("auto_clean", True)))
         except DockerClientError as exc:
             if manager.image_id(image) is not None and not pull:
-                warning(f"Failed to pull latest image '{image}' ({exc}). Using existing local image.")
+                warning(
+                    f"Failed to pull latest image '{image}' ({exc}). Using existing local image."
+                )
             else:
                 raise
 

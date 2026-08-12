@@ -97,6 +97,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "tau",
         "jcode",
         "freebuff",
+        "qwen",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -1571,6 +1572,50 @@ def test_ikwid_appends_args_for_copilot(monkeypatch, tmp_path: Path) -> None:
     assert captured["command"] == ["copilot", "--yolo"]
 
 
+def test_ikwid_appends_args_for_qwen(monkeypatch, tmp_path: Path) -> None:
+    """--ikwid appends --approval-mode=yolo to qwen command."""
+    captured: dict = {}
+
+    class _CapturingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            container = type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-qwen-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+            return container
+
+    cfg = _make_config()
+    cfg["agents"]["qwen"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    run_cmd.run(agent="qwen", workspace=tmp_path, detach=True, ikwid=True)
+
+    assert captured["command"] == ["qwen", "--approval-mode=yolo"]
+
+
 def test_ikwid_appends_args_for_devstral(monkeypatch, tmp_path: Path) -> None:
     """--ikwid resolves devstral launch command and appends --auto-approve."""
     captured: dict = {}
@@ -2296,5 +2341,3 @@ def test_run_explicit_pull_failure_raises(monkeypatch, tmp_path: Path) -> None:
 
     with pytest.raises(DockerClientError):
         run_cmd.run(agent="claude", workspace=tmp_path, pull=True, detach=True)
-
-

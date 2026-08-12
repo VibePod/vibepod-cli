@@ -184,6 +184,19 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # overrides HOME internally. We just mount to /freebuff.
         {"FREEBUFF_CONFIG_DIR": "/freebuff"},
     ),
+    "qwen": AgentSpec(
+        "qwen",
+        "qwenlm",
+        DEFAULT_IMAGES["qwen"],
+        "qwen",
+        ["qwen"],
+        "/qwen",
+        # The qwen container entrypoint symlinks ~/.qwen to the QWEN_CONFIG_DIR
+        # mount (/qwen) and overrides HOME internally. We just mount to /qwen.
+        {"QWEN_CONFIG_DIR": "/qwen"},
+        ikwid_args=["--approval-mode=yolo"],
+        headless_prefix=["-p"],
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

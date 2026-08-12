@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 import typer
 from typer.testing import CliRunner
@@ -110,6 +113,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["auggie"].headless_prefix == ["--print"]
     assert AGENT_SPECS["tau"].headless_prefix == ["-p"]
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
+    assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -243,6 +247,16 @@ def test_task_create_auggie_uses_print_flag(monkeypatch, tmp_path, tmp_task_stor
     task_cmd.task_create(agent="auggie", prompt="run tests", workspace=tmp_path)
 
     assert stub.run_kwargs["command"] == ["auggie", "--print", "run tests"]
+
+
+def test_task_create_qwen_uses_prompt_flag(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="qwen", prompt="run tests", workspace=tmp_path)
+
+    assert stub.run_kwargs["command"] == ["qwen", "-p", "run tests"]
 
 
 def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
@@ -1125,4 +1139,3 @@ def test_task_create_auto_pull_failure_fallback_to_local_image(
     assert "Failed to pull latest image" in warnings[0]
     assert "Using existing local image" in warnings[0]
     assert stub.run_kwargs is not None
-

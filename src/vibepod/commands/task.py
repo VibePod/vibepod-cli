@@ -582,7 +582,9 @@ def task_create(
             manager.pull_image(image, auto_clean=bool(config.get("auto_clean", True)))
         except DockerClientError as exc:
             if manager.image_id(image) is not None and not pull:
-                warning(f"Failed to pull latest image '{image}' ({exc}). Using existing local image.")
+                warning(
+                    f"Failed to pull latest image '{image}' ({exc}). Using existing local image."
+                )
             else:
                 raise
 
