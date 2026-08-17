@@ -807,14 +807,14 @@ Freebuff is a free AI coding agent built on the Codebuff platform. Its npm
 package is a thin Node launcher that downloads a compiled glibc binary on
 first run, so the `vibepod/freebuff` image is glibc-based (Debian Node), not
 Alpine. Credentials and configuration are persisted under
-`~/.config/vibepod/agents/freebuff/`, mounted at `/config` inside the
-container, where Freebuff finds them as `~/.config/manicode/`:
+`~/.config/vibepod/agents/freebuff/`, mounted at `/freebuff` inside the
+container, where the image symlinks `~/.config/manicode` to `/freebuff`:
 
 | Path in container | Contents |
 |---|---|
-| `/config/.config/manicode/settings.json` | Freebuff settings |
-| `/config/.config/manicode/analytics-id.json` | Analytics ID |
-| `/config/.config/manicode/projects/<cwd>/chats/<ts>/log.jsonl` | Chat history |
+| `/freebuff/settings.json` | Freebuff settings |
+| `/freebuff/analytics-id.json` | Analytics ID |
+| `/freebuff/projects/<cwd>/chats/<ts>/log.jsonl` | Chat history |
 
 **Authentication.** Freebuff authenticates through its own interactive login
 flow:
