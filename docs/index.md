@@ -26,6 +26,8 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 | `agy` (Antigravity) | Google | `vp n` |
 | `tau` | Hugging Face | `vp t` |
 | `jcode` | 1jehuang | `vp j` |
+| `freebuff` | CodebuffAI | `vp fb` |
+| `qwen` | Qwen (Alibaba) | `vp q` |
 
 ## Next Steps
 

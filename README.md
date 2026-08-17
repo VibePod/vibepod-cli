@@ -21,7 +21,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen & more
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image ([docs](https://vibepod.dev/docs/overlays/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
@@ -72,6 +72,8 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `auggie` | Not supported |
 | `tau` | Not supported |
 | `jcode` | Not supported |
+| `freebuff` | Not supported |
+| `qwen` | `--approval-mode=yolo` |
 
 ![VibePod CLI preview](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/preview.png)
 
@@ -89,6 +91,8 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/agy.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/agy.png" alt="Antigravity CLI" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/tau.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/tau.png" alt="Tau" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/jcode.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/jcode.png" alt="Jcode" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/freebuff.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/freebuff.png" alt="Freebuff" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/qwen.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/qwen.png" alt="Qwen Code" width="180" /></a>
 </p>
 
 ## Current Status
@@ -137,6 +141,8 @@ Current defaults:
 - `agy` -> `vibepod/agy:latest`
 - `tau` -> `vibepod/tau:latest`
 - `jcode` -> `vibepod/jcode:latest`
+- `freebuff` -> `vibepod/freebuff:latest`
+- `qwen` -> `vibepod/qwen:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
@@ -157,6 +163,8 @@ VP_IMAGE_PI=vibepod/pi:latest vp run pi
 VP_IMAGE_AGY=vibepod/agy:latest vp run agy
 VP_IMAGE_TAU=vibepod/tau:latest vp run tau
 VP_IMAGE_JCODE=vibepod/jcode:latest vp run jcode
+VP_IMAGE_FREEBUFF=vibepod/freebuff:latest vp run freebuff
+VP_IMAGE_QWEN=vibepod/qwen:latest vp run qwen
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list
 ```

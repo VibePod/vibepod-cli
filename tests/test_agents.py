@@ -89,6 +89,32 @@ def test_jcode_spec_matches_container_contract() -> None:
     assert spec.headless_prefix == ["run"]
 
 
+def test_freebuff_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("freebuff")
+    assert spec.id == "freebuff"
+    assert spec.provider == "codebuffai"
+    assert spec.image == DEFAULT_IMAGES["freebuff"]
+    assert spec.config_subdir == "freebuff"
+    assert spec.command == ["freebuff"]
+    assert spec.config_mount_path == "/freebuff"
+    assert spec.extra_env["FREEBUFF_CONFIG_DIR"] == "/freebuff"
+    assert spec.ikwid_args is None
+    assert spec.headless_prefix is None
+
+
+def test_qwen_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("qwen")
+    assert spec.id == "qwen"
+    assert spec.provider == "qwenlm"
+    assert spec.image == DEFAULT_IMAGES["qwen"]
+    assert spec.config_subdir == "qwen"
+    assert spec.command == ["qwen"]
+    assert spec.config_mount_path == "/qwen"
+    assert spec.extra_env["QWEN_CONFIG_DIR"] == "/qwen"
+    assert spec.ikwid_args == ["--approval-mode=yolo"]
+    assert spec.headless_prefix == ["-p"]
+
+
 def test_get_agent_spec_unknown() -> None:
     with pytest.raises(ValueError):
         get_agent_spec("unknown")
@@ -103,6 +129,8 @@ def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
         assert resolve_agent_name(f" {agent.upper()} ") == agent
     assert resolve_agent_name("vibe") == "devstral"
     assert resolve_agent_name("VIBE") == "devstral"
+    assert resolve_agent_name("qwen-cli") == "qwen"
+    assert resolve_agent_name("QWEN-CLI") == "qwen"
     assert resolve_agent_name("unknown") is None
 
 
@@ -142,7 +170,7 @@ def test_gemini_spec_runs_via_node_wrapper() -> None:
 
 
 def test_unsupported_agents_have_no_ikwid_args() -> None:
-    for agent in ("opencode", "auggie", "tau", "jcode"):
+    for agent in ("opencode", "auggie", "tau", "jcode", "freebuff"):
         spec = get_agent_spec(agent)
         assert spec.ikwid_args is None, f"{agent} should not have ikwid_args"
 
@@ -192,6 +220,8 @@ def test_agents_without_llm_env_map() -> None:
         "agy",
         "tau",
         "jcode",
+        "freebuff",
+        "qwen",
     ):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"

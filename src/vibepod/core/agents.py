@@ -172,6 +172,31 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         {"HOME": "/config", "JCODE_NO_AUTO_UPDATE": "1"},
         headless_prefix=["run"],
     ),
+    "freebuff": AgentSpec(
+        "freebuff",
+        "codebuffai",
+        DEFAULT_IMAGES["freebuff"],
+        "freebuff",
+        ["freebuff"],
+        "/freebuff",
+        # The freebuff container entrypoint handles symlinking /freebuff
+        # to the correct internal config paths (~/.config/manicode) and
+        # overrides HOME internally. We just mount to /freebuff.
+        {"FREEBUFF_CONFIG_DIR": "/freebuff"},
+    ),
+    "qwen": AgentSpec(
+        "qwen",
+        "qwenlm",
+        DEFAULT_IMAGES["qwen"],
+        "qwen",
+        ["qwen"],
+        "/qwen",
+        # The qwen container entrypoint symlinks ~/.qwen to the QWEN_CONFIG_DIR
+        # mount (/qwen) and overrides HOME internally. We just mount to /qwen.
+        {"QWEN_CONFIG_DIR": "/qwen"},
+        ikwid_args=["--approval-mode=yolo"],
+        headless_prefix=["-p"],
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

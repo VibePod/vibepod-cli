@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 import typer
 from typer.testing import CliRunner
@@ -110,6 +113,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["auggie"].headless_prefix == ["--print"]
     assert AGENT_SPECS["tau"].headless_prefix == ["-p"]
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
+    assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -243,6 +247,16 @@ def test_task_create_auggie_uses_print_flag(monkeypatch, tmp_path, tmp_task_stor
     task_cmd.task_create(agent="auggie", prompt="run tests", workspace=tmp_path)
 
     assert stub.run_kwargs["command"] == ["auggie", "--print", "run tests"]
+
+
+def test_task_create_qwen_uses_prompt_flag(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="qwen", prompt="run tests", workspace=tmp_path)
+
+    assert stub.run_kwargs["command"] == ["qwen", "-p", "run tests"]
 
 
 def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
@@ -1094,8 +1108,34 @@ def test_task_create_preserves_host_user_for_non_podman(
 
     task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
 
-    assert stub.run_kwargs is not None
     assert stub.run_kwargs["userns_mode"] is None
     assert stub.run_kwargs["user"] == "1234:5678"
     assert stub.run_kwargs["env"]["USER_UID"] == "1234"
     assert stub.run_kwargs["env"]["USER_GID"] == "5678"
+
+
+def test_task_create_auto_pull_failure_fallback_to_local_image(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tmp_task_store: Any,
+) -> None:
+    class _FailingPullDockerManager(_CapturingDockerManager):
+        def pull_image(self, image: str, auto_clean: bool = True) -> None:
+            raise task_cmd.DockerClientError(f"Failed to pull image {image}: 404 Not Found")
+
+        def image_id(self, image: str) -> str | None:
+            return "sha256:123456789"
+
+    stub = _FailingPullDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", lambda: {**_make_config(), "auto_pull": True})
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    warnings: list[str] = []
+    monkeypatch.setattr(task_cmd, "warning", lambda msg: warnings.append(msg))
+
+    task_cmd.task_create(agent="claude", prompt="do task", workspace=tmp_path)
+
+    assert len(warnings) == 1
+    assert "Failed to pull latest image" in warnings[0]
+    assert "Using existing local image" in warnings[0]
+    assert stub.run_kwargs is not None

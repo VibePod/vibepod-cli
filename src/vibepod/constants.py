@@ -30,6 +30,8 @@ SUPPORTED_AGENTS = (
     "agy",
     "tau",
     "jcode",
+    "freebuff",
+    "qwen",
 )
 
 AGENT_SHORTCUTS: dict[str, str] = {
@@ -43,10 +45,16 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "n": "agy",
     "t": "tau",
     "j": "jcode",
+    "fb": "freebuff",
+    "q": "qwen",
 }
 
 AGENT_ALIASES: dict[str, str] = {
     "vibe": "devstral",
+    # The issue that added this agent calls it "qwen-cli"; the runtime
+    # binary and image are `qwen` (Qwen Code, npm @qwen-code/qwen-code),
+    # so `qwen` is the canonical id and `qwen-cli` is accepted as an alias.
+    "qwen-cli": "qwen",
 }
 
 IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
@@ -62,6 +70,8 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_AGY",
     "VP_IMAGE_TAU",
     "VP_IMAGE_JCODE",
+    "VP_IMAGE_FREEBUFF",
+    "VP_IMAGE_QWEN",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
     "VP_SKILLS_ENGINE_IMAGE",
@@ -128,6 +138,14 @@ def get_default_images() -> dict[str, str]:
         "jcode": os.environ.get(
             "VP_IMAGE_JCODE",
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/jcode:latest",
+        ),
+        "freebuff": os.environ.get(
+            "VP_IMAGE_FREEBUFF",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/freebuff:latest",
+        ),
+        "qwen": os.environ.get(
+            "VP_IMAGE_QWEN",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/qwen:latest",
         ),
         "datasette": os.environ.get(
             "VP_DATASETTE_IMAGE",

@@ -17,8 +17,11 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `agy` (Antigravity) | Google | `vp n` | `vibepod/agy:latest` |
 | `tau` | Hugging Face | `vp t` | `vibepod/tau:latest` |
 | `jcode` | 1jehuang | `vp j` | `vibepod/jcode:latest` |
+| `freebuff` | CodebuffAI | `vp fb` | `vibepod/freebuff:latest` |
+| `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
 
-Alias note: `vp run vibe` resolves to `vp run devstral`.
+Alias note: `vp run vibe` resolves to `vp run devstral`, and `vp run qwen-cli`
+resolves to `vp run qwen`.
 
 ## First run & authentication
 
@@ -77,7 +80,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`). The CLI also supports the alias `vibe`, which resolves to `devstral`. Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`). The CLI also supports the aliases `vibe` (→ `devstral`) and `qwen-cli` (→ `qwen`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -205,6 +208,8 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `auggie` | Not supported |
 | `tau` | Not supported |
 | `jcode` | Not supported |
+| `freebuff` | Not supported |
+| `qwen` | `--approval-mode=yolo` |
 
 Example:
 
@@ -318,6 +323,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `auggie` | `auggie --print "<prompt>"` |
 | `tau` | `tau -p "<prompt>"` |
 | `jcode` | `jcode run "<prompt>"` |
+| `qwen` | `qwen -p "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` on their `AgentSpec`.
 
@@ -790,3 +796,121 @@ automatically.
 VibePod sets `JCODE_NO_AUTO_UPDATE=1` so the pinned binary in the image is
 never self-updated at runtime. Jcode has no auto-approval flag (its safety
 system asks for permission in-session), so `--ikwid` is not supported for it.
+
+### Freebuff (CodebuffAI)
+
+```bash
+vp run freebuff   # or: vp fb
+```
+
+Freebuff is a free AI coding agent built on the Codebuff platform. Its npm
+package is a thin Node launcher that downloads a compiled glibc binary on
+first run, so the `vibepod/freebuff` image is glibc-based (Debian Node), not
+Alpine. Credentials and configuration are persisted under
+`~/.config/vibepod/agents/freebuff/`, mounted at `/freebuff` inside the
+container, where the image symlinks `~/.config/manicode` to `/freebuff`:
+
+| Path in container | Contents |
+|---|---|
+| `/freebuff/settings.json` | Freebuff settings |
+| `/freebuff/analytics-id.json` | Analytics ID |
+| `/freebuff/projects/<cwd>/chats/<ts>/log.jsonl` | Chat history |
+
+**Authentication.** Freebuff authenticates through its own interactive login
+flow:
+
+```bash
+vp run freebuff login
+```
+
+On first run without a saved session, Freebuff prints "Not authenticated" and
+prompts you to press ENTER to log in. Saved credentials survive container
+restarts because they live in the persisted mount.
+
+**Resuming a session.** Pass `--continue` (optionally with a conversation id)
+through the CLI:
+
+```bash
+vp run freebuff -- --continue
+vp run freebuff -- --continue <conversation-id>
+```
+
+Use `--` so VibePod does not parse the agent's own flags.
+
+**Headless / task mode.** Freebuff has no non-interactive print mode, so
+`vp task create freebuff ...` is not supported.
+
+**Skills.** Freebuff scans `~/.agents/skills/`, so skills installed via
+`vp skills` are mounted at `/config/.agents/skills/<id>` and picked up
+automatically.
+
+**IKWID mode.** Freebuff is a managed TUI with no auto-approval or
+permission-skip flag, so `--ikwid` is not supported for it.
+
+### Qwen Code (Qwen)
+
+```bash
+vp run qwen   # or: vp q
+vp run qwen-cli   # alias of qwen
+```
+
+Qwen Code is Alibaba's open-source terminal coding agent (npm
+`@qwen-code/qwen-code`, binary `qwen`, Node 22+). It is Claude-Code-inspired
+and supports OpenAI-, Anthropic- and Gemini-compatible endpoints, Qwen models,
+and any custom provider. Credentials and configuration are persisted under
+`~/.config/vibepod/agents/qwen/`, mounted at `/qwen` inside the container,
+where the image symlinks `~/.qwen` to `/qwen`:
+
+| Path in container | Contents |
+|---|---|
+| `/qwen/settings.json` | Settings, model providers, auth selection |
+| `/qwen/.env` | Env-file overrides (API keys, base URLs) |
+| `/qwen/skills/` | Personal skills (`SKILL.md` folders) |
+| `/qwen/` | Memory, session history, commands |
+
+**Authentication.** Run Qwen Code and use its `/auth` command to connect an
+Alibaba Cloud Coding Plan, a third-party API key, or a custom endpoint:
+
+```bash
+vp run qwen
+# then inside the session: /auth
+```
+
+Saved credentials survive container restarts because they live in the
+persisted mount. API keys can also be injected instead of `/auth`:
+
+```yaml
+agents:
+  qwen:
+    env:
+      OPENAI_API_KEY: sk-...
+      OPENAI_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+      OPENAI_MODEL: qwen3-coder-plus
+```
+
+Or per run: `vp run qwen -e OPENAI_API_KEY=sk-...`. Qwen Code honors the
+standard `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` (alias
+`QWEN_MODEL`), `ANTHROPIC_*` and `GEMINI_API_KEY` env vars for its provider
+protocols.
+
+**Non-interactive mode.** Qwen Code's headless mode works with both `vp run`
+and task mode:
+
+```bash
+vp run qwen -p "explain this repo"
+vp task create qwen "Summarize the README"
+```
+
+**Skills.** Qwen Code scans personal `~/.qwen/skills/` (symlinked to
+`/qwen/skills/`), so skills installed via `vp skills` are mounted at
+`/qwen/skills/<id>` and picked up automatically. Project-level skills in
+`<workspace>/.qwen/skills/` work without extra setup because the workspace is
+already mounted.
+
+**IKWID mode.** Qwen Code auto-approves all tool calls in YOLO mode, which
+`--ikwid` enables via `--approval-mode=yolo`:
+
+```bash
+vp run qwen --ikwid
+vp task create qwen "fix the failing test" --ikwid
+```

@@ -153,6 +153,36 @@ def test_jcode_shortcut_runs_jcode(monkeypatch) -> None:
     assert called["passthrough"] == []
 
 
+def test_freebuff_shortcut_runs_freebuff(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["fb"])
+    assert result.exit_code == 0
+    assert called["agent"] == "freebuff"
+    assert called["passthrough"] == []
+
+
+def test_qwen_shortcut_runs_qwen(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["q"])
+    assert result.exit_code == 0
+    assert called["agent"] == "qwen"
+    assert called["passthrough"] == []
+
+
 def test_copilot_shortcut_still_runs_copilot(monkeypatch) -> None:
     called: dict[str, object] = {"agent": None, "passthrough": None}
 
