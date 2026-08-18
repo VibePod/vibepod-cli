@@ -644,6 +644,91 @@ Pi has a per-project **trust/approval system**: before loading project-local ext
 - `--ikwid`: appends `--approve`, trusting project-local files for that run (see [IKWID mode](#ikwid-mode---ikwid)).
 - Non-interactive modes (`-p`, `--mode json`, `--mode rpc`) show no prompt and fall back to `defaultProjectTrust` in `/config/.pi/agent/settings.json` (`ask` | `always` | `never`). Pre-seed this file if you need unattended runs to trust projects automatically.
 
+#### Local models (Ollama, LM Studio, Lemonade, llama.cpp)
+
+Pi supports custom OpenAI-compatible providers through a
+[`models.json`](https://pi.dev/docs/latest/models) file in its agent directory.
+Inside the container that directory is `PI_CODING_AGENT_DIR`
+(`/config/.pi/agent/`), which is part of the persisted config mount — so you
+create the file **on the host** and it is picked up on every run:
+
+```bash
+vp config path
+# Global:  ~/.config/vibepod/config.yaml
+```
+
+The agent directory lives next to that config file:
+
+```text
+~/.config/vibepod/agents/pi/.pi/agent/models.json
+```
+
+Point each provider's `baseUrl` at `host.docker.internal` so the container can
+reach the server running on your host (VibePod maps this hostname on Linux,
+macOS, and Windows automatically):
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://host.docker.internal:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [
+        { "id": "qwen3.6:35b" },
+        { "id": "gemma4:12b" }
+      ]
+    },
+    "lmstudio": {
+      "baseUrl": "http://host.docker.internal:1234/v1",
+      "api": "openai-completions",
+      "apiKey": "lmstudio",
+      "models": [
+        { "id": "poolside/laguna-s-2.1" }
+      ]
+    },
+    "lemonade": {
+      "baseUrl": "http://host.docker.internal:13305/v1",
+      "api": "openai-completions",
+      "apiKey": "lemonade",
+      "models": [
+        { "id": "Devstral-Small-2507-GGUF:latest" }
+      ]
+    }
+  }
+}
+```
+
+The `api` / `baseUrl` / `models` fields are documented in Pi's
+[models](https://pi.dev/docs/latest/models) and
+[llama.cpp](https://pi.dev/docs/latest/llama-cpp) guides. The `apiKey` value is
+arbitrary for local servers that don't check it. Start Pi as usual
+(`vp run pi`) and pick the model with the `/model` command — providers from
+`models.json` appear alongside the built-in ones. The first provider entry
+determines the default model.
+
+!!! note "Linux: expose the server to Docker"
+    On Linux, `host.docker.internal` resolves to the Docker bridge gateway
+    (typically `172.17.0.1`), so a server bound to `127.0.0.1` — the default
+    for Ollama, LM Studio, and Lemonade — refuses connections from the
+    container. Bind it to `0.0.0.0` or to the bridge gateway IP, e.g.:
+
+    ```bash
+    OLLAMA_HOST=0.0.0.0 ollama serve
+    LEMONADE_HOST=0.0.0.0 lemonade-server serve
+    ```
+
+    In LM Studio, enable **Serve on Local Network** in the server settings.
+    For systemd-managed services, set the variable via
+    `sudo systemctl edit <service>` and restart. See
+    [Using OSS models](../llm.md#quick-start-with-ollama) for the full
+    Ollama systemd walkthrough and the security implications of binding to
+    `0.0.0.0`.
+
+    On macOS and Windows (Docker Desktop), `host.docker.internal` reaches the
+    host's loopback interface directly, so the default `127.0.0.1` binding
+    works without changes.
+
 ### Agy / Antigravity (Google)
 
 ```bash
