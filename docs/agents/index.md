@@ -704,8 +704,16 @@ The `api` / `baseUrl` / `models` fields are documented in Pi's
 [llama.cpp](https://pi.dev/docs/latest/llama-cpp) guides. The `apiKey` value is
 arbitrary for local servers that don't check it. Start Pi as usual
 (`vp run pi`) and pick the model with the `/model` command — providers from
-`models.json` appear alongside the built-in ones. The first provider entry
-determines the default model.
+`models.json` appear alongside the built-in ones, and the file is re-read
+every time you open `/model`, so you can edit it mid-session.
+
+Note that adding `models.json` does **not** change which model Pi starts
+with: the startup model comes from the `defaultModel` setting in
+`/config/.pi/agent/settings.json` (on the host:
+`~/.config/vibepod/agents/pi/.pi/agent/settings.json`). Select the local
+model via `/model`, or set `defaultModel` explicitly, so an existing
+configuration does not silently keep sending requests to a remote metered
+provider.
 
 !!! note "Linux: expose the server to Docker"
     On Linux, `host.docker.internal` resolves to the Docker bridge gateway
