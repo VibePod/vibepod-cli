@@ -679,6 +679,9 @@ class _PortCapturingManager:
     def networks_with_running_containers(self) -> list[str]:
         return []
 
+    def attach_interactive(self, container, logger=None):  # type: ignore[no-untyped-def]
+        return getattr(self, "attach_tail", b"")
+
     def is_rootless_podman(self) -> bool:
         return False
 
@@ -1244,6 +1247,9 @@ class _StubDockerManager:
 
     def networks_with_running_containers(self) -> list[str]:
         return []
+
+    def attach_interactive(self, container, logger=None):  # type: ignore[no-untyped-def]
+        return getattr(self, "attach_tail", b"")
 
 
 def _make_config(
@@ -2389,3 +2395,18 @@ def test_run_explicit_pull_failure_raises(monkeypatch, tmp_path: Path) -> None:
 
     with pytest.raises(DockerClientError):
         run_cmd.run(agent="claude", workspace=tmp_path, pull=True, detach=True)
+
+
+def test_run_prints_resume_hint_after_attach(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stub = _StubDockerManager()
+    stub.attach_tail = b"Resume this session with:\r\nclaude --resume abc-123\r\n"
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=False)
+
+    assert "vp run claude -- --resume abc-123" in capsys.readouterr().out

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import socket
 import threading
 import types
@@ -254,3 +255,87 @@ def test_attach_interactive_forwards_windows_console_input_without_termios(
         sock_writer.close()
 
     assert sent == b"h"
+
+
+def _attach_and_capture(
+    monkeypatch: pytest.MonkeyPatch,
+    payload_chunks: list[bytes],
+) -> tuple[bytes | None, bytes]:
+    sock_reader, sock_writer = socket.socketpair()
+
+    class _FakeSocketWrapper:
+        _sock = sock_reader
+
+        def close(self) -> None:
+            pass
+
+    class _FakeApi:
+        def attach_socket(self, container_id: str, params: dict[str, int]) -> _FakeSocketWrapper:
+            del container_id, params
+            return _FakeSocketWrapper()
+
+        def resize(self, container_id: str, height: int, width: int) -> None:
+            del container_id, height, width
+
+    manager = object.__new__(DockerManager)
+    manager.client = types.SimpleNamespace(api=_FakeApi())  # type: ignore[assignment]
+
+    class _FakeStdin:
+        def isatty(self) -> bool:
+            return False
+
+    fake_stdout = types.SimpleNamespace(buffer=io.BytesIO())
+    monkeypatch.setattr(docker_mod.sys, "stdin", _FakeStdin())
+    monkeypatch.setattr(docker_mod.sys, "stdout", fake_stdout)
+    monkeypatch.setattr(docker_mod, "msvcrt", None)
+
+    def _feed() -> None:
+        for chunk in payload_chunks:
+            sock_writer.sendall(chunk)
+        sock_writer.close()
+
+    feeder = threading.Thread(target=_feed, daemon=True)
+    feeder.start()
+    try:
+        result = manager.attach_interactive(types.SimpleNamespace(id="container-1"))
+    finally:
+        feeder.join(timeout=5)
+        sock_reader.close()
+    return result, fake_stdout.buffer.getvalue()
+
+
+def test_attach_interactive_returns_output_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = [b"transcript...\r\n", b"claude --resume abc-123\r\n"]
+    tail, written = _attach_and_capture(monkeypatch, payload)
+    assert tail == b"transcript...\r\nclaude --resume abc-123\r\n"
+    assert written == b"".join(payload)
+
+
+def test_attach_interactive_bounds_output_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+    marker = b"claude --resume abc-123\r\n"
+    payload = [b"x" * 8192 for _ in range(20)] + [marker]
+    tail, written = _attach_and_capture(monkeypatch, payload)
+    assert tail is not None
+    assert tail.endswith(marker)
+    assert len(tail) <= docker_mod.ATTACH_TAIL_LIMIT
+    assert len(written) == 20 * 8192 + len(marker)
+
+
+def test_attach_prints_resume_hint_after_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = _managed_container("vibepod-claude-hint")
+
+    class _Manager:
+        def get_container(self, name_or_id: str):
+            return target
+
+        def attach_interactive(self, container, logger=None):  # noqa: ARG002
+            return b"Resume this session with:\r\nclaude --resume abc-123\r\n"
+
+    monkeypatch.setattr(attach_cmd, "DockerManager", lambda: _Manager())
+
+    attach_cmd.attach(container="vibepod-claude-hint")
+
+    assert "vp run claude -- --resume abc-123" in capsys.readouterr().out

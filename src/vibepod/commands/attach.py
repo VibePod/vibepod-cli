@@ -8,6 +8,7 @@ import typer
 
 from vibepod.constants import CONTAINER_LABEL_MANAGED, EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.resume import show_resume_hint
 from vibepod.utils.console import error, info, warning
 
 
@@ -83,7 +84,8 @@ def attach(
         f"Close the terminal to leave it running, or stop it with `vp stop {target.name}`.",
     )
     try:
-        manager.attach_interactive(target)
+        output_tail = manager.attach_interactive(target)
     except DockerClientError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
+    show_resume_hint(agent, output_tail)
