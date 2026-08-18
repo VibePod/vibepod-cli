@@ -30,6 +30,71 @@ def test_version() -> None:
     assert "VibePod CLI" in result.stdout
 
 
+def _fake_manager(version_info: dict) -> object:
+    client = SimpleNamespace(version=lambda: version_info)
+    return SimpleNamespace(client=client)
+
+
+def test_version_reports_podman_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vibepod.commands import update as update_cmd
+
+    version_info = {
+        "Version": "4.9.3",
+        "Components": [{"Name": "Podman Engine", "Version": "4.9.3"}],
+    }
+    monkeypatch.setattr(update_cmd, "DockerManager", lambda: _fake_manager(version_info))
+
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert "Runtime:     Podman 4.9.3" in result.stdout
+
+
+def test_version_reports_docker_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vibepod.commands import update as update_cmd
+
+    version_info = {
+        "Version": "27.5.1",
+        "Platform": {"Name": "Docker Engine - Community"},
+    }
+    monkeypatch.setattr(update_cmd, "DockerManager", lambda: _fake_manager(version_info))
+
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert "Runtime:     Docker 27.5.1" in result.stdout
+
+
+def test_version_json_includes_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    from vibepod.commands import update as update_cmd
+
+    version_info = {
+        "Version": "4.9.3",
+        "Components": [{"Name": "Podman Engine", "Version": "4.9.3"}],
+    }
+    monkeypatch.setattr(update_cmd, "DockerManager", lambda: _fake_manager(version_info))
+
+    result = runner.invoke(app, ["version", "--json"])
+    assert result.exit_code == 0
+    info = json.loads(result.stdout)
+    assert info["runtime"] == "Podman"
+    assert info["docker"] == "4.9.3"
+
+
+def test_version_runtime_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vibepod.commands import update as update_cmd
+    from vibepod.core.docker import DockerClientError
+
+    def _raise() -> object:
+        raise DockerClientError("no engine")
+
+    monkeypatch.setattr(update_cmd, "DockerManager", _raise)
+
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert "Runtime:     unavailable" in result.stdout
+
+
 def test_python314_http_response_flush_filter_matches_closed_fp_error() -> None:
     response = SimpleNamespace(fp=SimpleNamespace(closed=True))
     exc = ValueError("I/O operation on closed file.")
