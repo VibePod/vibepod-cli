@@ -8,7 +8,12 @@ from typing import Annotated, Any
 import typer
 
 from vibepod import __version__
-from vibepod.core.docker import DockerClientError, DockerManager, _version_is_podman
+from vibepod.core.docker import (
+    DockerClientError,
+    DockerException,
+    DockerManager,
+    _version_is_podman,
+)
 
 
 def _runtime_info() -> tuple[str | None, str]:
@@ -16,7 +21,8 @@ def _runtime_info() -> tuple[str | None, str]:
     try:
         manager = DockerManager()
         version_info: dict[str, Any] = manager.client.version()
-    except DockerClientError:
+    except (DockerClientError, DockerException):
+        # DockerException covers the engine disconnecting between ping() and version().
         return None, "unavailable"
     name = "Podman" if _version_is_podman(version_info) else "Docker"
     return name, str(version_info.get("Version", "unknown"))

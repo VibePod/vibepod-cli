@@ -95,6 +95,21 @@ def test_version_runtime_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Runtime:     unavailable" in result.stdout
 
 
+def test_version_runtime_disconnects_after_init(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vibepod.commands import update as update_cmd
+    from vibepod.core.docker import DockerException
+
+    def _raise_version() -> dict:
+        raise DockerException("connection aborted")
+
+    client = SimpleNamespace(version=_raise_version)
+    monkeypatch.setattr(update_cmd, "DockerManager", lambda: SimpleNamespace(client=client))
+
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert "Runtime:     unavailable" in result.stdout
+
+
 def test_python314_http_response_flush_filter_matches_closed_fp_error() -> None:
     response = SimpleNamespace(fp=SimpleNamespace(closed=True))
     exc = ValueError("I/O operation on closed file.")
