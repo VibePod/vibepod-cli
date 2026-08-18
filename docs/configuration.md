@@ -189,6 +189,11 @@ These variables override the corresponding config keys without editing any file:
 | `VP_LLM_API_KEY` | `llm.api_key` | `VP_LLM_API_KEY=ollama` |
 | `VP_LLM_MODEL` | `llm.model` | `VP_LLM_MODEL=qwen3:14b` |
 | `VP_CONFIG_DIR` | *(config root)* | `VP_CONFIG_DIR=/custom/path` |
+| `VP_PROFILE` | `profile` | `VP_PROFILE=work` |
+
+The `profile` key selects the active [credential profile](profiles.md); the
+`--profile` flag on `vp run`, `vp task create`, and `vp doctor claude` takes
+precedence over both the variable and the config key.
 
 ### Image overrides
 

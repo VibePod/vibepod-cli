@@ -1,6 +1,6 @@
 # Agents
 
-VibePod manages each agent as a Docker or Podman container. Credentials and config are persisted to `~/.config/vibepod/agents/<agent>/` on your host and mounted into the container on every run, so you only need to authenticate once.
+VibePod manages each agent as a Docker or Podman container. Credentials and config are persisted on your host — at `~/.config/vibepod/agents/<agent>/` for the `default` profile — and mounted into the container on every run, so you only need to authenticate once. To keep several credential sets per agent (subscription vs. API key vs. Ollama, stored under `~/.config/vibepod/profiles/<name>/`), see [Credential Profiles](../profiles.md).
 
 ## Supported Agents
 

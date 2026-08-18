@@ -43,6 +43,7 @@ from vibepod.core.launch import (
     terminal_env_defaults,
     update_container_mapping,
 )
+from vibepod.core.profiles import resolve_profile
 from vibepod.core.tasks import (
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
@@ -319,6 +320,10 @@ def task_create_command(
             help="I Know What I'm Doing: enable auto-approval flags for supported agents",
         ),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+    ] = None,
 ) -> None:
     """Start an agent task in the background and print its id."""
     task_create(
@@ -334,6 +339,7 @@ def task_create_command(
         rebuild_overlay=rebuild_overlay,
         no_herdr=no_herdr,
         ikwid=ikwid,
+        profile=profile,
         passthrough_args=_context_args(ctx),
     )
 
@@ -390,6 +396,10 @@ def task_run_command(
             help="I Know What I'm Doing: enable auto-approval flags for supported agents",
         ),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+    ] = None,
 ) -> None:
     """Deprecated alias for `task create`."""
     task_create(
@@ -405,6 +415,7 @@ def task_run_command(
         rebuild_overlay=rebuild_overlay,
         no_herdr=no_herdr,
         ikwid=ikwid,
+        profile=profile,
         passthrough_args=_context_args(ctx),
         deprecated_alias=True,
     )
@@ -456,6 +467,10 @@ def task_create(
             help="I Know What I'm Doing: enable auto-approval flags for supported agents",
         ),
     ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+    ] = None,
     passthrough_args: list[str] | None = None,
     deprecated_alias: bool = False,
 ) -> None:
@@ -470,6 +485,11 @@ def task_create(
     timeout_seconds = _parse_task_timeout(timeout)
 
     config = get_config()
+    try:
+        active_profile = resolve_profile(profile, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     selected = resolve_agent_name(agent)
     if selected is None:
         error(f"Unknown agent '{agent}'.")
@@ -532,7 +552,7 @@ def task_create(
         and "CLAUDE_CODE_OAUTH_TOKEN" not in merged_env
         and "ANTHROPIC_API_KEY" not in merged_env
     ):
-        stored_token = read_claude_stored_token(agent_config_dir(selected))
+        stored_token = read_claude_stored_token(agent_config_dir(selected, active_profile))
         if stored_token:
             merged_env["CLAUDE_CODE_OAUTH_TOKEN"] = stored_token
             info("Using stored Claude OAuth token")
@@ -625,7 +645,7 @@ def task_create(
         + passthrough_args
     )
 
-    config_dir = agent_config_dir(selected)
+    config_dir = agent_config_dir(selected, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
 
     extra_volumes = agent_extra_volumes(selected, config_dir)

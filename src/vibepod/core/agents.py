@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from vibepod.constants import AGENT_ALIASES, AGENT_SHORTCUTS, DEFAULT_IMAGES, SUPPORTED_AGENTS
-from vibepod.core.config import get_config_root
+from vibepod.core.profiles import DEFAULT_PROFILE, profile_agents_root
 
 
 @dataclass(frozen=True)
@@ -229,6 +229,6 @@ def effective_agent_image(agent: str, config: dict[str, Any]) -> str:
     return str(config.get("agents", {}).get(agent, {}).get("image", spec.image))
 
 
-def agent_config_dir(agent: str) -> Path:
+def agent_config_dir(agent: str, profile: str = DEFAULT_PROFILE) -> Path:
     spec = get_agent_spec(agent)
-    return get_config_root() / "agents" / spec.config_subdir
+    return profile_agents_root(profile) / spec.config_subdir
