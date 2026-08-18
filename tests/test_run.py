@@ -421,6 +421,7 @@ def test_run_agent_supports_duplicate_host_mounts(tmp_path: Path) -> None:
     assert f"{config_dir}:/config:rw" in volumes
     assert f"{augment_dir}:/root/.augment:rw" in volumes
     assert f"{augment_dir}:/home/node/.augment:rw" in volumes
+    assert run_kwargs["extra_hosts"] == {"host.docker.internal": "host-gateway"}
 
 
 def test_run_agent_forwards_platform_and_user(tmp_path: Path) -> None:
@@ -647,6 +648,7 @@ def test_run_agent_uses_low_level_api_for_podman_keep_id(tmp_path: Path) -> None
         "auto_remove": True,
         "network_mode": "vibepod-network",
         "port_bindings": {"1456/tcp": 1455, "6000/udp": ["6000"], "9000": [None]},
+        "extra_hosts": {"host.docker.internal": "host-gateway"},
     }
     assert client.api.host_config is not None
     assert client.api.host_config["UsernsMode"] == "keep-id"
