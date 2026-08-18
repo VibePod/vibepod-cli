@@ -702,7 +702,10 @@ macOS, and Windows automatically):
 The `api` / `baseUrl` / `models` fields are documented in Pi's
 [models](https://pi.dev/docs/latest/models) and
 [llama.cpp](https://pi.dev/docs/latest/llama-cpp) guides. The `apiKey` value is
-arbitrary for local servers that don't check it. Start Pi as usual
+arbitrary for local servers that don't check it. Each model `id` must match an
+identifier your server actually exposes (`GET /v1/models` lists them) — the
+ids above are examples, replace them with the models you have installed.
+Start Pi as usual
 (`vp run pi`) and pick the model with the `/model` command — providers from
 `models.json` appear alongside the built-in ones, and the file is re-read
 every time you open `/model`, so you can edit it mid-session.
@@ -719,14 +722,19 @@ provider.
     On Linux, `host.docker.internal` resolves to the Docker bridge gateway
     (typically `172.17.0.1`), so a server bound to `127.0.0.1` — the default
     for Ollama, LM Studio, and Lemonade — refuses connections from the
-    container. Bind it to `0.0.0.0` or to the bridge gateway IP, e.g.:
+    container. Bind it to the bridge gateway IP (preferred when only VibePod
+    needs access) or to `0.0.0.0`, e.g.:
 
     ```bash
     OLLAMA_HOST=0.0.0.0 ollama serve
     LEMONADE_HOST=0.0.0.0 lemonade-server serve
     ```
 
-    In LM Studio, enable **Serve on Local Network** in the server settings.
+    In LM Studio, enable **Serve on Local Network** in the server settings,
+    and turn on **Require Authentication** there (then use the generated API
+    token as the provider's `apiKey` in `models.json`). Ollama and Lemonade
+    have no built-in authentication, so when binding those to `0.0.0.0`
+    restrict access with firewall rules instead.
     For systemd-managed services, set the variable via
     `sudo systemctl edit <service>` and restart. See
     [Using OSS models](../llm.md#quick-start-with-ollama) for the full
