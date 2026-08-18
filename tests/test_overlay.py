@@ -121,9 +121,12 @@ def test_overlay_hash_distinguishes_file_boundaries(tmp_path: Path) -> None:
     assert _hash("sha256:abc", dockerfile_a) != _hash("sha256:abc", dockerfile_b)
 
 
-def test_overlay_image_tag_embeds_agent_and_hash() -> None:
+def test_overlay_image_tag_is_fully_qualified() -> None:
+    # An unqualified name lets Podman normalize it differently at build
+    # (docker.io/...) and lookup (localhost/...); the explicit localhost
+    # registry makes the name literal for both Docker and Podman.
     assert overlay.overlay_image_tag("claude", "abc123def456") == (
-        "vibepod/overlay-claude:abc123def456"
+        "localhost/vibepod/overlay-claude:abc123def456"
     )
 
 
@@ -244,7 +247,7 @@ def test_apply_overlay_builds_and_returns_overlay_tag(tmp_path: Path) -> None:
     _make_overlay(tmp_path)
     manager = _FakeManager(image_ids={"base:latest": "sha256:base"})
     result = overlay.apply_overlay(manager, tmp_path, "claude", "base:latest")
-    assert result.startswith("vibepod/overlay-claude:")
+    assert result.startswith("localhost/vibepod/overlay-claude:")
     (built,) = manager.built
     assert built[0] == result
     assert built[1]["vibepod.managed"] == "true"

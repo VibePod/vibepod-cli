@@ -95,7 +95,16 @@ def overlay_hash(base_ref: str, context_tar: bytes) -> str:
 
 
 def overlay_image_tag(agent: str, digest: str) -> str:
-    return f"vibepod/overlay-{agent}:{digest}"
+    """Fully qualified local tag for the overlay image.
+
+    The explicit ``localhost/`` registry keeps the name literal under Podman,
+    which otherwise qualifies the unqualified name to ``docker.io/...`` at
+    build time but resolves it against ``localhost/`` on later lookups — so
+    the cached image is never found again (and the sweep in
+    ``remove_stale_overlays`` would even delete the build it should keep).
+    Docker treats the name as a plain literal either way.
+    """
+    return f"localhost/vibepod/overlay-{agent}:{digest}"
 
 
 def _normalize_member(member: tarfile.TarInfo) -> tarfile.TarInfo:

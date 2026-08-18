@@ -12,7 +12,9 @@ toolchains, CLIs — by committing a `FROM`-less Dockerfile fragment:
 
 On `vp run` (and `vp task create`), VibePod appends the fragment to the agent's
 base image and builds a workspace-local image tagged
-`vibepod/overlay-<agent>:<hash>`. The hash covers the base image, the fragment,
+`localhost/vibepod/overlay-<agent>:<hash>` (the explicit `localhost/` registry
+keeps Podman from resolving the name against `docker.io`). The hash covers the
+base image, the fragment,
 and every file in the overlay directory, so:
 
 - unchanged overlays never rebuild — the cached image is reused instantly
