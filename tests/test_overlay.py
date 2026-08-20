@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import tarfile
 from pathlib import Path
 
@@ -49,11 +50,26 @@ def test_find_overlay_dockerfile_ignores_directory_named_dockerfile(tmp_path: Pa
     assert overlay.find_overlay_dockerfile(tmp_path, "claude") is None
 
 
-def _hash(base_ref: str, dockerfile: Path, base_image: str = "base:latest") -> str:
+def _hash(
+    base_ref: str,
+    dockerfile: Path,
+    base_image: str = "base:latest",
+    key: str = "test-key",
+) -> str:
     """Hash a context the way apply_overlay does: over the snapshot tar."""
     return overlay.overlay_hash(
         base_ref,
         overlay.build_context_tar(base_image, dockerfile).getvalue(),
+        key,
+    )
+
+
+def _expected_tag(workspace: Path, dockerfile: Path, base_ref: str, agent: str = "claude") -> str:
+    """The tag apply_overlay must produce for this workspace and context."""
+    return overlay.overlay_image_tag(
+        agent,
+        overlay.project_slug(workspace),
+        _hash(base_ref, dockerfile, key=overlay._overlay_key(workspace, agent)),
     )
 
 
@@ -125,9 +141,48 @@ def test_overlay_image_tag_is_fully_qualified() -> None:
     # An unqualified name lets Podman normalize it differently at build
     # (docker.io/...) and lookup (localhost/...); the explicit localhost
     # registry makes the name literal for both Docker and Podman.
-    assert overlay.overlay_image_tag("claude", "abc123def456") == (
-        "localhost/vibepod/overlay-claude:abc123def456"
+    assert overlay.overlay_image_tag("claude", "my-app", "abc123def456") == (
+        "localhost/vibepod/overlay-claude-my-app:abc123def456"
     )
+    assert overlay.overlay_repository("claude", "my-app") == (
+        "localhost/vibepod/overlay-claude-my-app"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("vibepod-cli", "vibepod-cli"),
+        ("My_App", "my-app"),
+        ("weird!!name??", "weird-name"),
+        (".hidden", "hidden"),
+        ("...", "workspace"),
+        ("a" * 40, "a" * 24),
+        # Truncation must not leave the trailing dash a repository name forbids.
+        ("abcdefghijklmnopqrstuvw-xyz", "abcdefghijklmnopqrstuvw"),
+    ],
+)
+def test_slugify_is_repository_safe(name: str, expected: str) -> None:
+    # Strings, not real directories: names like "weird!!name??" cannot be
+    # created on Windows and "..." collapses into its parent there.
+    slug = overlay._slugify(name)
+    assert slug == expected
+    assert re.fullmatch(r"[a-z0-9]+([._-][a-z0-9]+)*", slug)
+
+
+def test_project_slug_uses_the_workspace_directory_name(tmp_path: Path) -> None:
+    workspace = tmp_path / "My_App"
+    workspace.mkdir()
+    assert overlay.project_slug(workspace) == "my-app"
+
+
+def test_project_slug_falls_back_for_nameless_workspace() -> None:
+    assert overlay.project_slug(Path(Path(os.sep).anchor)) == "workspace"
+
+
+def test_overlay_hash_differs_per_workspace_key(tmp_path: Path) -> None:
+    dockerfile = _make_overlay(tmp_path)
+    assert _hash("sha256:abc", dockerfile, key="a") != _hash("sha256:abc", dockerfile, key="b")
 
 
 def _read_tar(buffer: io.BytesIO) -> dict[str, bytes]:
@@ -247,10 +302,13 @@ def test_apply_overlay_builds_and_returns_overlay_tag(tmp_path: Path) -> None:
     _make_overlay(tmp_path)
     manager = _FakeManager(image_ids={"base:latest": "sha256:base"})
     result = overlay.apply_overlay(manager, tmp_path, "claude", "base:latest")
-    assert result.startswith("localhost/vibepod/overlay-claude:")
+    assert result.startswith(f"localhost/vibepod/overlay-claude-{overlay.project_slug(tmp_path)}:")
     (built,) = manager.built
     assert built[0] == result
     assert built[1]["vibepod.managed"] == "true"
+    # Image metadata travels; the workspace is identified by an opaque key, not
+    # by a host path carrying the user's name and directory layout.
+    assert not any("/" in value for value in built[1].values())
     assert built[3] is False
     assert manager.swept == [(built[1]["vibepod.overlay.key"], result)]
 
@@ -260,15 +318,19 @@ def test_apply_overlay_builds_the_snapshot_it_hashed(tmp_path: Path) -> None:
     _make_overlay(tmp_path)
     manager = _FakeManager(image_ids={"base:latest": "sha256:base"})
     result = overlay.apply_overlay(manager, tmp_path, "claude", "base:latest")
-    ((tag, _, context_tar, _),) = manager.built
-    digest = overlay.overlay_hash("sha256:base", context_tar.getvalue())
-    assert tag == overlay.overlay_image_tag("claude", digest) == result
+    ((tag, labels, context_tar, _),) = manager.built
+    digest = overlay.overlay_hash(
+        "sha256:base",
+        context_tar.getvalue(),
+        labels["vibepod.overlay.key"],
+    )
+    assert tag == overlay.overlay_image_tag("claude", overlay.project_slug(tmp_path), digest)
+    assert tag == result
 
 
 def test_apply_overlay_skips_build_when_image_exists(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    digest = _hash("sha256:base", dockerfile)
-    tag = overlay.overlay_image_tag("claude", digest)
+    tag = _expected_tag(tmp_path, dockerfile, "sha256:base")
     manager = _FakeManager(existing_images=[tag], image_ids={"base:latest": "sha256:base"})
     assert overlay.apply_overlay(manager, tmp_path, "claude", "base:latest") == tag
     assert manager.built == []
@@ -276,8 +338,7 @@ def test_apply_overlay_skips_build_when_image_exists(tmp_path: Path) -> None:
 
 def test_apply_overlay_rebuild_forces_uncached_build(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
-    digest = _hash("sha256:base", dockerfile)
-    tag = overlay.overlay_image_tag("claude", digest)
+    tag = _expected_tag(tmp_path, dockerfile, "sha256:base")
     manager = _FakeManager(existing_images=[tag], image_ids={"base:latest": "sha256:base"})
     assert overlay.apply_overlay(manager, tmp_path, "claude", "base:latest", rebuild=True) == tag
     ((built_tag, _, _, nocache),) = manager.built
@@ -289,7 +350,75 @@ def test_apply_overlay_hashes_tag_when_base_not_local(tmp_path: Path) -> None:
     dockerfile = _make_overlay(tmp_path)
     manager = _FakeManager()
     result = overlay.apply_overlay(manager, tmp_path, "claude", "base:latest")
-    assert result == overlay.overlay_image_tag("claude", _hash("base:latest", dockerfile))
+    assert result == _expected_tag(tmp_path, dockerfile, "base:latest")
+
+
+def test_apply_overlay_tag_names_the_project(tmp_path: Path) -> None:
+    workspace = tmp_path / "My Project"
+    _make_overlay(workspace)
+    result = overlay.apply_overlay(_FakeManager(), workspace, "claude", "base:latest")
+    assert result.startswith("localhost/vibepod/overlay-claude-my-project:")
+
+
+def test_apply_overlay_tags_differ_between_projects_with_identical_overlays(
+    tmp_path: Path,
+) -> None:
+    """Same agent, same base, byte-identical overlay: still one image per project.
+
+    A shared tag would leave the second project running an image labeled with
+    the first project's overlay key, so the first project's next sweep would
+    delete an image the second one still uses.
+    """
+    ws_a = tmp_path / "alpha"
+    ws_b = tmp_path / "beta"
+    _make_overlay(ws_a)
+    _make_overlay(ws_b)
+    tag_a = overlay.apply_overlay(_FakeManager(), ws_a, "claude", "base:latest")
+    tag_b = overlay.apply_overlay(_FakeManager(), ws_b, "claude", "base:latest")
+    assert tag_a != tag_b
+
+
+def test_apply_overlay_tags_differ_for_same_named_projects(tmp_path: Path) -> None:
+    """Two checkouts with the same directory name share a repository, not a tag."""
+    ws_a = tmp_path / "one" / "app"
+    ws_b = tmp_path / "two" / "app"
+    _make_overlay(ws_a)
+    _make_overlay(ws_b)
+    tag_a = overlay.apply_overlay(_FakeManager(), ws_a, "claude", "base:latest")
+    tag_b = overlay.apply_overlay(_FakeManager(), ws_b, "claude", "base:latest")
+    assert tag_a.rsplit(":", 1)[0] == tag_b.rsplit(":", 1)[0]
+    assert tag_a != tag_b
+
+
+def test_resolve_overlay_image_returns_none_without_overlay(tmp_path: Path) -> None:
+    assert overlay.resolve_overlay_image(_FakeManager(), tmp_path, "claude", "base:latest") is None
+
+
+def test_resolve_overlay_image_reports_built_state_without_building(tmp_path: Path) -> None:
+    dockerfile = _make_overlay(tmp_path)
+    tag = _expected_tag(tmp_path, dockerfile, "sha256:base")
+    manager = _FakeManager(image_ids={"base:latest": "sha256:base"})
+
+    pending = overlay.resolve_overlay_image(manager, tmp_path, "claude", "base:latest")
+    assert pending is not None
+    assert (pending.tag, pending.built, pending.dockerfile) == (tag, False, dockerfile)
+    assert pending.repository == tag.rsplit(":", 1)[0]
+    assert pending.base_local is True
+    assert manager.built == []
+
+    manager.existing.add(tag)
+    resolved = overlay.resolve_overlay_image(manager, tmp_path, "claude", "base:latest")
+    assert resolved is not None
+    assert resolved.built is True
+
+
+def test_resolve_overlay_image_flags_a_missing_base_image(tmp_path: Path) -> None:
+    """Without the base image locally the digest is provisional: `vp run` pulls first."""
+    _make_overlay(tmp_path)
+    resolved = overlay.resolve_overlay_image(_FakeManager(), tmp_path, "claude", "base:latest")
+    assert resolved is not None
+    assert resolved.base_local is False
+    assert resolved.repository == resolved.tag.rsplit(":", 1)[0]
 
 
 def test_apply_overlay_key_differs_per_workspace_and_agent(tmp_path: Path) -> None:
