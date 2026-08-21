@@ -35,9 +35,26 @@ def test_detects_codex_resume_last_hint() -> None:
     assert build_resume_hint("codex", output) == "vp run codex -- resume --last"
 
 
-def test_detects_pi_resume_hint() -> None:
-    output = "pi --resume session-2026-08-18.jsonl\n"
-    assert build_resume_hint("pi", output) == "vp run pi -- --resume session-2026-08-18.jsonl"
+def test_detects_pi_session_hint() -> None:
+    # Pi prints "To resume this session: pi --session <id>" on exit; its
+    # --resume flag is a bare session-picker toggle and never carries an id.
+    session = "0198a2c3-1111-7222-8333-444455556666"
+    output = f"To resume this session: pi --session {session}\n"
+    assert build_resume_hint("pi", output) == f"vp run pi -- --session {session}"
+
+
+def test_detects_pi_session_hint_with_session_dir() -> None:
+    output = "To resume this session: pi --session-dir /workspace/.pi-sessions --session my-id\n"
+    assert (
+        build_resume_hint("pi", output)
+        == "vp run pi -- --session-dir /workspace/.pi-sessions --session my-id"
+    )
+
+
+def test_pi_resume_flag_with_argument_is_not_a_hint() -> None:
+    # "pi --resume <word>" is a picker toggle plus a prompt word, not a
+    # resumable session reference — emitting it would be an incorrect command.
+    assert build_resume_hint("pi", "pi --resume session-2026-08-18.jsonl\n") is None
 
 
 def test_detects_pi_continue_hint() -> None:

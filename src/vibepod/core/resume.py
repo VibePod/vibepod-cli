@@ -39,6 +39,10 @@ def _with_id(prefix: str) -> Callable[[re.Match[str]], str]:
     return _format
 
 
+def _verbatim(match: re.Match[str]) -> str:
+    return match.group(1)
+
+
 # Per-agent resume hint patterns. Hints must appear on a single line: patterns
 # only allow spaces/tabs between tokens so unrelated text on following lines is
 # never mistaken for a session identifier. Each formatter rebuilds the agent's
@@ -58,8 +62,17 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
             _fixed("resume --last"),
         ),
     ),
+    # Pi prints "To resume this session: pi [--session-dir <dir>] --session
+    # <id>"; its -r/--resume and -c/--continue flags are bare toggles (session
+    # picker / last session) and never carry an identifier.
     "pi": (
-        (re.compile(rf"{_BOUNDARY}pi[ \t]+(?:-r|--resume)[ \t]+({_TOKEN})"), _with_id("--resume")),
+        (
+            re.compile(
+                rf"{_BOUNDARY}pi[ \t]+"
+                rf"((?:--session-dir[ \t]+/?{_TOKEN}[ \t]+)?--session[ \t]+{_TOKEN})",
+            ),
+            _verbatim,
+        ),
         (re.compile(rf"{_BOUNDARY}pi[ \t]+(?:-c|--continue)(?![\w-])"), _fixed("--continue")),
     ),
     "copilot": (
