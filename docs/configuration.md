@@ -150,6 +150,15 @@ agents:
     ports: []
     init: []
 
+  dsh:
+    enabled: true
+    image: vibepod/dsh:latest
+    env: {}
+    volumes: []
+    ports:
+      - "127.0.0.1:3080:3081"   # Web UI; container side must stay 3081
+    init: []
+
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
   enabled: false
@@ -214,6 +223,7 @@ Each agent image can be overridden individually:
 | `VP_IMAGE_JCODE` | jcode |
 | `VP_IMAGE_FREEBUFF` | freebuff |
 | `VP_IMAGE_QWEN` | qwen |
+| `VP_IMAGE_DSH` | dsh |
 | `VP_DATASETTE_IMAGE` | datasette (logs UI) |
 | `VP_PROXY_IMAGE` | proxy |
 | `VP_SKILLS_ENGINE_IMAGE` | skills-engine (used by `vp skills`) |
