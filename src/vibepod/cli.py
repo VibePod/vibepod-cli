@@ -66,6 +66,17 @@ def run_command(
         list[str] | None,
         typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
     ] = None,
+    publish: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-p",
+            "--publish",
+            help="Publish a container port in `docker run -p` syntax "
+            "(e.g. 127.0.0.1:3090:3081); replaces configured agents.<agent>.ports "
+            "for this run",
+            show_default=False,
+        ),
+    ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
     network: Annotated[
         str | None,
@@ -100,6 +111,7 @@ def run_command(
         no_herdr=no_herdr,
         detach=detach,
         env=env,
+        publish=publish,
         name=name,
         network=network,
         paste_images=paste_images,
@@ -155,6 +167,17 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             list[str] | None,
             typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
         ] = None,
+        publish: Annotated[
+            list[str] | None,
+            typer.Option(
+                "-p",
+                "--publish",
+                help="Publish a container port in `docker run -p` syntax "
+                "(e.g. 127.0.0.1:3090:3081); replaces configured agents.<agent>.ports "
+                "for this run",
+                show_default=False,
+            ),
+        ] = None,
         name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
         network: Annotated[
             str | None,
@@ -191,6 +214,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             no_herdr=no_herdr,
             detach=detach,
             env=env,
+            publish=publish,
             name=name,
             network=network,
             paste_images=paste_images,

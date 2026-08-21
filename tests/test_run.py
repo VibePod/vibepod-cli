@@ -6,6 +6,7 @@ import builtins
 import importlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -798,6 +799,56 @@ def test_run_rejects_invalid_configured_ports(monkeypatch, _tmp_config_root) -> 
 
     assert result.exit_code != 0
     assert "agents.claude.ports" in result.output
+    assert stub.run_kwargs is None
+
+
+def test_run_publish_flag_replaces_configured_ports(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", ["8000:8000"]))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "claude",
+            "-w",
+            str(workspace),
+            "--detach",
+            "-p",
+            "127.0.0.1:3090:3081",
+            "-p",
+            "6000:6000/udp",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["ports"] == {
+        "3081": [("127.0.0.1", "3090")],
+        "6000/udp": ["6000"],
+    }
+
+
+def test_run_publish_flag_rejects_invalid_entry(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "-p", "70000:80"],
+    )
+
+    assert result.exit_code != 0
+    # Rich's option highlighter may inject color escapes inside "--publish"
+    # (e.g. on CI, where color is forced), so match on the de-styled text.
+    plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--publish" in plain_output
     assert stub.run_kwargs is None
 
 
