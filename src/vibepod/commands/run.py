@@ -147,6 +147,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
       - tau      reads ~/.agents/skills/ (also ~/.tau/skills/)
       - jcode    reads ~/.agents/skills/ (also ~/.jcode/skills/)
       - freebuff reads ~/.agents/skills/ (also ~/.freebuff/skills/)
+      - dsh      reads ~/.agents/skills/            → /config/.agents/skills/
       - qwen     reads ~/.qwen/skills/, which the image symlinks to /qwen/skills
         (also <project>/.qwen/skills/ in the workspace)
 
@@ -160,7 +161,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/config/.pi/agent/skills"]
     if agent == "qwen":
         return ["/qwen/skills"]
-    if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff"):
+    if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh"):
         return ["/config/.agents/skills"]
     return []
 
@@ -230,6 +231,39 @@ def _skills_mounts_for_agent(agent: str, workspace: Path) -> list[tuple[str, str
         for base in targets:
             mounts.append((str(host_path), f"{base}/{skill_id}", "ro"))
     return mounts
+
+
+def _web_ui_url(container_port: int | None, ports: dict[str, Any] | None) -> str | None:
+    """Host URL for a published Web UI port.
+
+    Accepts both the inspected `NetworkSettings.Ports` shape (`HostIp`/`HostPort`
+    dicts — preferred, since it carries daemon-assigned ephemeral ports) and the
+    requested docker-py bindings shape (tuples/strings).
+    """
+    if not container_port or not ports:
+        return None
+    for key, binds in ports.items():
+        if str(key).split("/", 1)[0] != str(container_port):
+            continue
+        for bind in binds if isinstance(binds, list) else [binds]:
+            if isinstance(bind, dict):
+                host, host_port = bind.get("HostIp", ""), bind.get("HostPort", "")
+            elif isinstance(bind, tuple):
+                host, host_port = bind
+            else:
+                host, host_port = "", bind
+            if not host_port or str(host_port) == "0":
+                # Ephemeral binding in the requested shape: the daemon picks
+                # the host port, so it isn't knowable from this dict.
+                continue
+            host = str(host or "")
+            if not host or host in ("0.0.0.0", "::"):
+                host = "127.0.0.1"
+            elif ":" in host:
+                # IPv6 literals must be bracketed to form a valid URL authority.
+                host = f"[{host}]"
+            return f"http://{host}:{host_port}"
+    return None
 
 
 def _compose_file_present(workspace: Path) -> bool:
@@ -392,6 +426,12 @@ def run(
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
+    if spec.preview:
+        warning(
+            f"{selected_agent} is a developer preview; upstream warns of "
+            "compatibility-breaking changes. The default image pins an exact "
+            "harness version.",
+        )
     codex_oauth_login = _is_codex_oauth_login(selected_agent, passthrough_args)
     init_commands = _agent_init_commands(selected_agent, agent_cfg)
     merged_env = {
@@ -668,6 +708,15 @@ def run(
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
         raise typer.Exit(1)
+
+    # Prefer the inspected bindings (they resolve ephemeral 0-port publishes to
+    # the daemon-assigned port); fall back to the requested bindings when the
+    # inspect payload has no Ports section.
+    inspected_ports = (container.attrs.get("NetworkSettings") or {}).get("Ports") or None
+    web_url = _web_ui_url(spec.web_container_port, inspected_ports or agent_ports)
+    if web_url:
+        success(f"{selected_agent} Web UI → {web_url}")
+        info("Sessions persist in the agent config dir.")
 
     if extra_network and extra_network != network_name:
         try:

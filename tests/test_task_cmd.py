@@ -1139,3 +1139,67 @@ def test_task_create_auto_pull_failure_fallback_to_local_image(
     assert "Failed to pull latest image" in warnings[0]
     assert "Using existing local image" in warnings[0]
     assert stub.run_kwargs is not None
+
+
+# ---------------------------------------------------------------------------
+# AgentSpec.headless_command wiring (dsh)
+# ---------------------------------------------------------------------------
+
+
+def test_headless_command_set_for_dsh() -> None:
+    assert AGENT_SPECS["dsh"].headless_prefix is None
+    assert AGENT_SPECS["dsh"].headless_command == ["dsh", "--profile", "headless"]
+
+
+def test_task_create_dsh_uses_headless_profile(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    warnings: list[str] = []
+    monkeypatch.setattr(task_cmd, "warning", lambda msg: warnings.append(msg))
+
+    task_cmd.task_create(agent="dsh", prompt="run tests", workspace=tmp_path)
+
+    assert stub.run_kwargs["command"] == ["dsh", "--profile", "headless", "run tests"]
+    assert any("developer preview" in m for m in warnings)
+
+
+def test_task_create_dsh_skips_web_port_publish(monkeypatch, tmp_path, tmp_task_store) -> None:
+    """Headless dsh tasks must not publish the Web UI port or start the forwarder.
+
+    A concurrently running `vp run dsh` holds host 3080; publishing it from a
+    task container would fail with port-already-allocated.
+    """
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["dsh"] = {"env": {}, "init": [], "ports": ["127.0.0.1:3080:3081"]}
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="dsh", prompt="run tests", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["ports"] is None
+    assert "VIBEPOD_WEB_FORWARD_PORT" not in stub.run_kwargs["env"]
+
+
+def test_task_create_dsh_keeps_user_extra_ports(monkeypatch, tmp_path, tmp_task_store) -> None:
+    """Only the web port binding is dropped; user-configured extras survive."""
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["dsh"] = {
+        "env": {},
+        "init": [],
+        "ports": ["127.0.0.1:9999:9999", "127.0.0.1:3080:3081"],
+    }
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="dsh", prompt="run tests", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    ports = stub.run_kwargs["ports"]
+    assert ports is not None
+    assert all(key.split("/", 1)[0] != "3081" for key in ports)
+    assert any(key.split("/", 1)[0] == "9999" for key in ports)

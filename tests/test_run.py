@@ -99,6 +99,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "jcode",
         "freebuff",
         "qwen",
+        "dsh",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -2327,9 +2328,10 @@ def test_run_sets_default_term_when_host_term_missing(monkeypatch, tmp_path: Pat
 # ---------------------------------------------------------------------------
 
 
-def _make_capturing_docker_manager():
+def _make_capturing_docker_manager(container_attrs: dict | None = None):
     """Return a Docker manager stub that records run_agent kwargs."""
     captured: dict = {}
+    attrs = container_attrs or {"NetworkSettings": {"Networks": {}}}
 
     class _CapturingDockerManager:
         def ensure_network(self, name: str) -> None:
@@ -2353,7 +2355,7 @@ def _make_capturing_docker_manager():
                     "name": "vibepod-claude-test",
                     "id": "abc123",
                     "status": "running",
-                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "attrs": attrs,
                     "reload": lambda self: None,
                     "labels": {},
                     "logs": lambda self, **kw: b"",
@@ -2482,3 +2484,115 @@ def test_run_prints_resume_hint_after_attach(
     run_cmd.run(agent="claude", workspace=tmp_path, detach=False)
 
     assert "vp run claude -- --resume abc-123" in capsys.readouterr().out
+
+
+def test_skills_mounts_for_dsh_use_agents_skills_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    skill_dir = local_root / "installed" / "example"
+    skill_dir.mkdir(parents=True)
+    user_root.mkdir()
+    (local_root / "skills-lock.json").write_text(
+        json.dumps({"skills": {"example": {"path": "installed/example"}}}),
+        encoding="utf-8",
+    )
+    (user_root / "skills-lock.json").write_text(json.dumps({"skills": {}}), encoding="utf-8")
+
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+
+    assert run_cmd._skills_mounts_for_agent("dsh", tmp_path) == [
+        (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro"),
+    ]
+
+
+def test_web_ui_url_reads_published_binding() -> None:
+    ports = {"3081/tcp": [("127.0.0.1", "3080")]}
+    assert run_cmd._web_ui_url(3081, ports) == "http://127.0.0.1:3080"
+
+
+def test_web_ui_url_handles_bare_port_key_and_single_binding() -> None:
+    assert run_cmd._web_ui_url(3081, {"3081": "3080"}) == "http://127.0.0.1:3080"
+
+
+def test_web_ui_url_none_when_unpublished() -> None:
+    assert run_cmd._web_ui_url(3081, {}) is None
+    assert run_cmd._web_ui_url(None, {"3081/tcp": [("127.0.0.1", "3080")]}) is None
+
+
+def test_web_ui_url_none_for_ephemeral_host_ports() -> None:
+    # `"0:3081"`-style config is valid (daemon assigns an ephemeral port), but
+    # the host port isn't knowable from the bindings dict — print nothing.
+    assert run_cmd._web_ui_url(3081, {"3081": [None]}) is None
+    assert run_cmd._web_ui_url(3081, {"3081": ["0"]}) is None
+
+
+def test_web_ui_url_maps_wildcard_bind_address_to_loopback() -> None:
+    ports = {"3081": [("0.0.0.0", "3080")]}
+    assert run_cmd._web_ui_url(3081, ports) == "http://127.0.0.1:3080"
+
+
+def test_web_ui_url_parses_inspected_docker_bindings() -> None:
+    # docker inspect NetworkSettings.Ports shape: HostIp/HostPort dicts. An
+    # ephemeral "0" request resolves to a real daemon-assigned port here.
+    ports = {"3081/tcp": [{"HostIp": "0.0.0.0", "HostPort": "53828"}]}
+    assert run_cmd._web_ui_url(3081, ports) == "http://127.0.0.1:53828"
+    assert run_cmd._web_ui_url(3081, {"3081/tcp": [{"HostIp": "", "HostPort": ""}]}) is None
+
+
+def test_web_ui_url_brackets_ipv6_hosts() -> None:
+    assert run_cmd._web_ui_url(3081, {"3081": [("::1", "3080")]}) == "http://[::1]:3080"
+    ports = {"3081/tcp": [{"HostIp": "::1", "HostPort": "3080"}]}
+    assert run_cmd._web_ui_url(3081, ports) == "http://[::1]:3080"
+    # Wildcard IPv6 stays mapped to loopback, unbracketed.
+    assert run_cmd._web_ui_url(3081, {"3081": [("::", "3080")]}) == "http://127.0.0.1:3080"
+
+
+def test_run_dsh_web_ui_url_prefers_inspected_ephemeral_binding(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """An ephemeral 0-port publish prints the daemon-assigned port from inspect."""
+    _CapturingDockerManager, _ = _make_capturing_docker_manager(
+        container_attrs={
+            "NetworkSettings": {
+                "Networks": {},
+                "Ports": {"3081/tcp": [{"HostIp": "127.0.0.1", "HostPort": "53828"}]},
+            },
+        },
+    )
+
+    cfg = _make_config()
+    cfg["agents"]["dsh"] = {"env": {}, "init": [], "ports": ["127.0.0.1:0:3081"]}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    successes: list[str] = []
+    monkeypatch.setattr(run_cmd, "success", lambda msg: successes.append(msg))
+
+    run_cmd.run(agent="dsh", workspace=tmp_path, detach=True)
+
+    assert any("http://127.0.0.1:53828" in msg for msg in successes)
+
+
+def test_run_dsh_prints_preview_warning_and_web_ui_url(monkeypatch, tmp_path: Path) -> None:
+    """`vp run dsh` warns about developer-preview status and prints the Web UI URL."""
+    _CapturingDockerManager, _ = _make_capturing_docker_manager()
+
+    cfg = _make_config()
+    cfg["agents"]["dsh"] = {"env": {}, "init": [], "ports": ["127.0.0.1:3080:3081"]}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
+
+    warnings: list[str] = []
+    successes: list[str] = []
+    monkeypatch.setattr(run_cmd, "warning", lambda msg: warnings.append(msg))
+    monkeypatch.setattr(run_cmd, "success", lambda msg: successes.append(msg))
+
+    run_cmd.run(agent="dsh", workspace=tmp_path, detach=True)
+
+    assert any("developer preview" in msg for msg in warnings)
+    assert any("http://127.0.0.1:3080" in msg for msg in successes)

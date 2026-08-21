@@ -19,9 +19,84 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `jcode` | 1jehuang | `vp j` | `vibepod/jcode:latest` |
 | `freebuff` | CodebuffAI | `vp fb` | `vibepod/freebuff:latest` |
 | `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
+| `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
 
-Alias note: `vp run vibe` resolves to `vp run devstral`, and `vp run qwen-cli`
-resolves to `vp run qwen`.
+Alias note: `vp run vibe` resolves to `vp run devstral`, `vp run qwen-cli`
+resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
+resolve to `vp run dsh`.
+
+## DeepSeek Harness (`dsh`) — Web UI agent
+
+dsh is Web-UI-first: `vp run dsh` starts the harness's browser UI and prints
+its URL (default `http://127.0.0.1:3080`, published loopback-only on the
+host). The terminal stays attached to the container logs; Ctrl+C stops it.
+Sessions, profiles, plugins, and credentials persist in the agent config dir
+(`~/.config/vibepod/agents/dsh/`, mounted as the container's home).
+
+> **Developer preview:** upstream warns of compatibility-breaking changes.
+> The default `vibepod/dsh` image pins an exact harness (npm) version — the
+> `:latest` docker tag refers to the image build, not the harness inside.
+> VibePod prints a preview notice on every run.
+
+**First-run setup (one time):** the Web UI needs a workspace and a model
+before the first session; both persist in the agent config dir.
+
+1. Open the printed URL and click the workspace path in the top bar (or
+   **Choose workspace**). Navigate to `/workspace` — the project mount — via
+   the root breadcrumb or the path editor, and select it. Don't use the
+   new-folder input: `/workspace` already exists, and the input only accepts a
+   single folder name. Every project is mounted at `/workspace`, so this
+   registration carries over to all of them.
+2. Configure a model under **Settings → Models** (see below).
+
+**Auth:** enter a DeepSeek API key in the Web UI (Settings → Models) — it
+persists across restarts — or pass it from the host:
+
+```bash
+vp run dsh -e DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY
+```
+
+**Other providers:** no DeepSeek account is required. Any OpenAI-compatible
+endpoint works — in **Settings → Models** pick the `openai` provider, set a
+custom base URL (e.g. a local [Ollama](https://ollama.com/) server), fill in
+any non-empty token if the endpoint doesn't check one, and enter the model
+name manually.
+
+**Headless one-shot** (uses dsh's `headless` profile, no server, prints the
+final answer):
+
+```bash
+vp task create dsh "summarize this repository"
+```
+
+**Changing the host port:** override the published port in your config; the
+container-side port stays `3081` (the image's internal forwarder):
+
+```yaml
+agents:
+  dsh:
+    ports:
+      - "127.0.0.1:3090:3081"
+```
+
+For a one-off run, the [`-p/--publish` flag](../configuration.md#publishing-ports)
+replaces the configured list instead:
+
+```bash
+vp run dsh -p 127.0.0.1:3090:3081
+```
+
+A host port of `0` (e.g. `127.0.0.1:0:3081`) lets the Docker daemon pick a
+free port — useful for running dsh in several projects at once; the printed
+Web UI URL shows the assigned port.
+
+dsh's browser-trust fence expects the canonical authority; on a non-default
+host port also pass `vp run dsh -- --trusted-host 127.0.0.1:3090` (with the
+actual port when the daemon assigned one).
+
+**Customizing:** dsh composes profiles from patch layers. Edit
+`~/.config/vibepod/agents/dsh/.dsh/cordis.patch.yml` on the host — changes
+hot-reload into the running server.
 
 ## First run & authentication
 
@@ -80,7 +155,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`). The CLI also supports the aliases `vibe` (→ `devstral`) and `qwen-cli` (→ `qwen`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -210,6 +285,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `jcode` | Not supported |
 | `freebuff` | Not supported |
 | `qwen` | `--approval-mode=yolo` |
+| `dsh` | Not supported |
 
 Example:
 
@@ -328,8 +404,9 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `tau` | `tau -p "<prompt>"` |
 | `jcode` | `jcode run "<prompt>"` |
 | `qwen` | `qwen -p "<prompt>"` |
+| `dsh` | `dsh --profile headless "<prompt>"` |
 
-Other agents error with a clear message; support can be added by setting `headless_prefix` on their `AgentSpec`.
+Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
 ### Managing tasks
 

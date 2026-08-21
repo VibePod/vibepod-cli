@@ -21,6 +21,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_JCODE",
         "VP_IMAGE_FREEBUFF",
         "VP_IMAGE_QWEN",
+        "VP_IMAGE_DSH",
         "VP_DATASETTE_IMAGE",
         "VP_PROXY_IMAGE",
     ):
@@ -41,6 +42,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["jcode"] == "vibepod/jcode:latest"
     assert images["freebuff"] == "vibepod/freebuff:latest"
     assert images["qwen"] == "vibepod/qwen:latest"
+    assert images["dsh"] == "vibepod/dsh:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -91,3 +93,11 @@ def test_qwen_image_override(monkeypatch) -> None:
     images = get_default_images()
 
     assert images["qwen"] == "example/qwen:dev"
+
+
+def test_dsh_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_DSH", "example/dsh:dev")
+
+    images = get_default_images()
+
+    assert images["dsh"] == "example/dsh:dev"

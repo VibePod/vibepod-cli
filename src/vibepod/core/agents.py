@@ -25,6 +25,15 @@ class AgentSpec:
     llm_env_map: dict[str, str | list[str]] | None = None
     llm_model_args: list[str] | None = None
     headless_prefix: list[str] | None = None
+    # headless_command replaces `command` entirely for `vp task` when the
+    # agent's one-shot invocation is not `command + headless_prefix` (dsh's
+    # interactive command is `dsh web`, its one-shot is `dsh --profile headless`).
+    # preview marks developer-preview agents; run/task print a warning.
+    # web_container_port names the container port serving a Web UI so run can
+    # print the published URL after start.
+    headless_command: list[str] | None = None
+    preview: bool = False
+    web_container_port: int | None = None
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -196,6 +205,27 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         {"QWEN_CONFIG_DIR": "/qwen"},
         ikwid_args=["--approval-mode=yolo"],
         headless_prefix=["-p"],
+    ),
+    "dsh": AgentSpec(
+        "dsh",
+        "deepseek",
+        DEFAULT_IMAGES["dsh"],
+        "dsh",
+        # dsh is Web-UI-first: `dsh web` serves http://127.0.0.1:3080 in-container
+        # (it intentionally rejects --host 0.0.0.0), and the image entrypoint runs
+        # a socat forwarder on VIBEPOD_WEB_FORWARD_PORT so Docker can publish it.
+        # --no-open: the container has no browser; the user opens the printed URL.
+        ["dsh", "web", "--no-open"],
+        "/config",
+        # dsh keeps all user data under $DSH_HOME (~/.dsh), so HOME on the
+        # persisted mount is the whole persistence contract.
+        # NODE_USE_ENV_PROXY: dsh calls DeepSeek via Node's global fetch, which
+        # ignores HTTP(S)_PROXY unless this flag is set (Node >= 22.21) — without
+        # it the traffic bypasses the vibepod-proxy mitm container.
+        {"HOME": "/config", "VIBEPOD_WEB_FORWARD_PORT": "3081", "NODE_USE_ENV_PROXY": "1"},
+        headless_command=["dsh", "--profile", "headless"],
+        preview=True,
+        web_container_port=3081,
     ),
 }
 

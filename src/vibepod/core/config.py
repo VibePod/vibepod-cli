@@ -153,6 +153,19 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
+            "dsh": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["dsh"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                # dsh's Web UI: host 127.0.0.1:3080 -> the image's socat forwarder
+                # on 3081 -> the loopback-bound server on 3080. Loopback-only on
+                # the host so the UI is never LAN-exposed; override
+                # agents.dsh.ports in config.yaml on collision.
+                "ports": ["127.0.0.1:3080:3081"],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,
