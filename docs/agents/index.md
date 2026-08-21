@@ -79,8 +79,20 @@ agents:
       - "127.0.0.1:3090:3081"
 ```
 
+For a one-off run, the [`-p/--publish` flag](../configuration.md#publishing-ports)
+replaces the configured list instead:
+
+```bash
+vp run dsh -p 127.0.0.1:3090:3081
+```
+
+A host port of `0` (e.g. `127.0.0.1:0:3081`) lets the Docker daemon pick a
+free port — useful for running dsh in several projects at once; the printed
+Web UI URL shows the assigned port.
+
 dsh's browser-trust fence expects the canonical authority; on a non-default
-host port also pass `vp run dsh -- --trusted-host 127.0.0.1:3090`.
+host port also pass `vp run dsh -- --trusted-host 127.0.0.1:3090` (with the
+actual port when the daemon assigned one).
 
 **Customizing:** dsh composes profiles from patch layers. Edit
 `~/.config/vibepod/agents/dsh/.dsh/cordis.patch.yml` on the host — changes
