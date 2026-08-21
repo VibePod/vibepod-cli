@@ -22,7 +22,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, Dsh & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh & more
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
