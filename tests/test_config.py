@@ -120,6 +120,52 @@ def test_config_init_with_agent_fails_when_agent_already_configured(
     assert loaded["agents"]["claude"]["enabled"] is True
 
 
+def test_config_path_shows_config_dir_and_proxy_db(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["config", "path"])
+    assert result.exit_code == 0
+    config_root = tmp_path.resolve()
+    assert f"Config:  {config_root}" in result.stdout
+    assert f"Global:  {config_root / 'config.yaml'}" in result.stdout
+    assert f"Project: {config_root / '.vibepod' / 'config.yaml'}" in result.stdout
+    assert f"Logs:    {config_root / 'logs.db'}" in result.stdout
+    assert f"Proxy:   {config_root / 'proxy' / 'proxy.db'}" in result.stdout
+
+
+def test_config_path_reports_configured_proxy_db(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    global_config = tmp_path / "config.yaml"
+    global_config.write_text(
+        f"proxy:\n  db_path: {tmp_path / 'custom' / 'proxy.db'}\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["config", "path"])
+    assert result.exit_code == 0
+    assert f"Proxy:   {tmp_path.resolve() / 'custom' / 'proxy.db'}" in result.stdout
+
+
+def test_config_path_global_only_prints_single_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["config", "path", "--global"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(tmp_path.resolve() / "config.yaml")
+
+
+def test_config_path_project_only_prints_single_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["config", "path", "--project"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(tmp_path / ".vibepod" / "config.yaml")
+
+
 def test_default_config_exposes_agent_init(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
     config = get_config()
