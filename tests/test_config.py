@@ -183,7 +183,9 @@ def test_default_config_exposes_agent_ports(monkeypatch, tmp_path: Path) -> None
     assert isinstance(agents, dict)
 
     for agent in SUPPORTED_AGENTS:
-        assert agents[agent]["ports"] == []
+        # dsh is web-first: its Web UI port is published by default.
+        expected = ["127.0.0.1:3080:3081"] if agent == "dsh" else []
+        assert agents[agent]["ports"] == expected
 
 
 def test_default_config_exposes_agent_auto_pull(monkeypatch, tmp_path: Path) -> None:
@@ -194,6 +196,17 @@ def test_default_config_exposes_agent_auto_pull(monkeypatch, tmp_path: Path) -> 
 
     for agent in SUPPORTED_AGENTS:
         assert agents[agent]["auto_pull"] is None
+
+
+def test_default_config_dsh_publishes_web_port_loopback_only(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+
+    assert config["agents"]["dsh"]["ports"] == ["127.0.0.1:3080:3081"]
+    assert config["agents"]["dsh"]["enabled"] is True
 
 
 def test_per_agent_auto_pull_override(monkeypatch, tmp_path: Path) -> None:
