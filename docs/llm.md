@@ -11,6 +11,13 @@ VibePod can connect agents to external LLM servers that expose OpenAI- or Anthro
 
 Other agents do not yet have LLM mapping and will not receive any LLM configuration.
 
+Some agents configure local models through their own native mechanism instead:
+
+- **pi** — custom providers via `models.json`, see [Pi: Local models](agents/index.md#local-models-ollama-lm-studio-lemonade-llamacpp)
+- **tau** — custom providers via `catalog.toml`, see [Tau](agents/index.md#tau-hugging-face)
+- **jcode** — supports Ollama, LM Studio, and custom OpenAI-compatible endpoints via `config.toml`, see [Jcode](agents/index.md#jcode-1jehuang)
+- **qwen** — any OpenAI-compatible endpoint via `OPENAI_BASE_URL` / `OPENAI_MODEL`, see [Qwen Code](agents/index.md#qwen-code-qwen)
+
 ## Quick start with Ollama
 
 ### 1. Start Ollama and pull a model

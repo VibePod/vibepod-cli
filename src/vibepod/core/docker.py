@@ -607,6 +607,7 @@ class DockerManager:
                     auto_remove=auto_remove,
                     network_mode=network,
                     port_bindings=ports,
+                    extra_hosts={"host.docker.internal": "host-gateway"},
                 )
                 # docker-py validates userns_mode against Docker's enum and rejects
                 # Podman's `keep-id`, so set the Docker-compatible HostConfig field
@@ -654,6 +655,11 @@ class DockerManager:
                 "volumes": volumes,
                 "working_dir": "/workspace",
                 "network": network,
+                # Docker Desktop resolves host.docker.internal natively, but Docker
+                # Engine on Linux and Podman only do so with an explicit
+                # host-gateway mapping. Local LLM servers (Ollama, LM Studio, ...)
+                # are documented against this hostname, so map it unconditionally.
+                "extra_hosts": {"host.docker.internal": "host-gateway"},
             }
             if ports:
                 # Maps "<container_port>/tcp" -> host_port. Used to publish the
