@@ -401,11 +401,14 @@ def run(
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
     }
-    agent_ports: dict[str, Any] | None = _agent_port_bindings(selected_agent, agent_cfg) or None
+    # The flag replaces the resolved config list, mirroring the config chain's
+    # list-replace semantics (defaults -> global -> project -> CLI), so the
+    # replaced config list is never parsed or validated when the flag is given.
+    agent_ports: dict[str, Any] | None
     if publish:
-        # The flag replaces the resolved config list, mirroring the config
-        # chain's list-replace semantics (defaults -> global -> project -> CLI).
         agent_ports = _publish_port_bindings(publish, source="--publish") or None
+    else:
+        agent_ports = _agent_port_bindings(selected_agent, agent_cfg) or None
     if codex_oauth_login:
         # Tell the codex image to start the loopback forwarder, and publish it to
         # the host on the port Codex's redirect URI expects.

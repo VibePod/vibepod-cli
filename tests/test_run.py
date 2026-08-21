@@ -832,6 +832,27 @@ def test_run_publish_flag_replaces_configured_ports(monkeypatch, _tmp_config_roo
     }
 
 
+def test_run_publish_flag_bypasses_invalid_configured_ports(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    """A valid --publish override must not evaluate a malformed config list it replaces."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", ["not-a-port"]))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "-p", "8000:8000"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["ports"] == {"8000": ["8000"]}
+
+
 def test_run_publish_flag_rejects_invalid_entry(monkeypatch, _tmp_config_root) -> None:
     workspace = _tmp_config_root / "workspace"
     workspace.mkdir()
