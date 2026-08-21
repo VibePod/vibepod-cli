@@ -12,14 +12,27 @@ toolchains, CLIs — by committing a `FROM`-less Dockerfile fragment:
 
 On `vp run` (and `vp task create`), VibePod appends the fragment to the agent's
 base image and builds a workspace-local image tagged
-`localhost/vibepod/overlay-<agent>:<hash>` (the explicit `localhost/` registry
-keeps Podman from resolving the name against `docker.io`). The hash covers the
-base image, the fragment,
-and every file in the overlay directory, so:
+`localhost/vibepod/overlay-<agent>-<project>:<hash>` (the explicit `localhost/`
+registry keeps Podman from resolving the name against `docker.io`). `<project>`
+is the workspace directory name, lowercased and reduced to characters a
+repository name allows; the hash covers the base image, the fragment, every
+file in the overlay directory, and the workspace identity, so:
 
+- every project gets its own image — running ten projects through the same
+  agent gives ten readable rows in `docker images`, not ten identical names
 - unchanged overlays never rebuild — the cached image is reused instantly
 - switching branches with different overlays just switches images
 - pulling a newer base image rebuilds the overlay on top of it
+
+```console
+$ docker images | grep vibepod/overlay
+localhost/vibepod/overlay-claude-vibepod-cli   f1e2d3c4b5a6
+localhost/vibepod/overlay-claude-my-app        9a8b7c6d5e4f
+localhost/vibepod/overlay-qwen-my-app          4c5d6e7f8a9b
+```
+
+Two projects that happen to share a directory name share the repository name
+but never the tag: the workspace path is part of the hash.
 
 The overlay directory is the docker build context, so the fragment can `COPY`
 files committed next to it:
@@ -49,6 +62,11 @@ machine or may point outside the committed project.
 
 ## Controls
 
+- `vp list` — shows a **Project Overlays** table for the current project: the
+  overlay image each agent resolves to, and whether it is `built`, `not built`,
+  `disabled`, or still waiting on its base image (`base not pulled` — the hash
+  follows the base image id, so until that image is local only the repository
+  name is known)
 - `vp run <agent> --no-overlay` — skip the overlay for one run
 - `vp run <agent> --rebuild-overlay` — force a rebuild, bypassing docker's
   layer cache so every instruction re-runs

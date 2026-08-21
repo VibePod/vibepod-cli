@@ -79,6 +79,11 @@ def _overlay_setting(workspace_path: Path, agent: str, agent_cfg: dict[str, Any]
     return agent_cfg.get("overlay")
 
 
+def overlay_enabled(workspace_path: Path, agent: str, agent_cfg: dict[str, Any]) -> bool:
+    """True when config lets *agent* use *workspace_path*'s overlay."""
+    return _overlay_setting(workspace_path, agent, agent_cfg) is not False
+
+
 def apply_overlay_if_enabled(
     *,
     manager: DockerManager,
@@ -90,7 +95,7 @@ def apply_overlay_if_enabled(
     rebuild_overlay: bool,
 ) -> str:
     """Swap in the project overlay image unless disabled by flag or config."""
-    if no_overlay or _overlay_setting(workspace_path, agent, agent_cfg) is False:
+    if no_overlay or not overlay_enabled(workspace_path, agent, agent_cfg):
         return image
     try:
         return overlay.apply_overlay(manager, workspace_path, agent, image, rebuild=rebuild_overlay)
