@@ -32,6 +32,7 @@ SUPPORTED_AGENTS = (
     "jcode",
     "freebuff",
     "qwen",
+    "dsh",
 )
 
 AGENT_SHORTCUTS: dict[str, str] = {
@@ -47,6 +48,7 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "j": "jcode",
     "fb": "freebuff",
     "q": "qwen",
+    "ds": "dsh",
 }
 
 AGENT_ALIASES: dict[str, str] = {
@@ -55,6 +57,8 @@ AGENT_ALIASES: dict[str, str] = {
     # binary and image are `qwen` (Qwen Code, npm @qwen-code/qwen-code),
     # so `qwen` is the canonical id and `qwen-cli` is accepted as an alias.
     "qwen-cli": "qwen",
+    "deepseek": "dsh",
+    "deepseek-harness": "dsh",
 }
 
 IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
@@ -72,6 +76,7 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_JCODE",
     "VP_IMAGE_FREEBUFF",
     "VP_IMAGE_QWEN",
+    "VP_IMAGE_DSH",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
     "VP_SKILLS_ENGINE_IMAGE",
@@ -146,6 +151,10 @@ def get_default_images() -> dict[str, str]:
         "qwen": os.environ.get(
             "VP_IMAGE_QWEN",
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/qwen:latest",
+        ),
+        "dsh": os.environ.get(
+            "VP_IMAGE_DSH",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/dsh:latest",
         ),
         "datasette": os.environ.get(
             "VP_DATASETTE_IMAGE",
