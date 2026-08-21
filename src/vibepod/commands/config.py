@@ -17,7 +17,12 @@ from vibepod.core.allowed_dirs import (
     load_allowed_dirs,
     remove_allowed_dir,
 )
-from vibepod.core.config import get_config, get_global_config_path, get_project_config_path
+from vibepod.core.config import (
+    get_config,
+    get_config_root,
+    get_global_config_path,
+    get_project_config_path,
+)
 from vibepod.utils.console import console, error, success
 
 app = typer.Typer(help="Manage configuration")
@@ -129,7 +134,7 @@ def path(
         typer.Option("--project", help="Show project config path only"),
     ] = False,
 ) -> None:
-    """Show config and logs paths."""
+    """Show configuration, logs, and proxy database paths."""
     global_path = get_global_config_path()
     project_path = get_project_config_path()
 
@@ -144,14 +149,22 @@ def path(
         print(project_path)
         return
 
+    config = get_config()
+    config_root = get_config_root()
     logs_path = Path(
-        str(get_config().get("logging", {}).get("db_path", "~/.config/vibepod/logs.db")),
+        str(config.get("logging", {}).get("db_path", "~/.config/vibepod/logs.db")),
     )
     logs_path = logs_path.expanduser().resolve()
+    proxy_db_path = Path(
+        str(config.get("proxy", {}).get("db_path", "~/.config/vibepod/proxy/proxy.db")),
+    )
+    proxy_db_path = proxy_db_path.expanduser().resolve()
 
+    print(f"Config:  {config_root}")
     print(f"Global:  {global_path}")
     print(f"Project: {project_path}")
     print(f"Logs:    {logs_path}")
+    print(f"Proxy:   {proxy_db_path}")
 
 
 @app.command("allow-dir")
