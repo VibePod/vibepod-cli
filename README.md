@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://vibepod.dev/docs/"><img alt="Docs" src="https://img.shields.io/badge/docs-vibepod.dev-blue" /></a>
   <a href="https://pypi.org/project/vibepod/"><img alt="PyPI" src="https://img.shields.io/pypi/v/vibepod" /></a>
+  <a href="https://anaconda.org/conda-forge/vibepod"><img alt="conda-forge" src="https://img.shields.io/conda/vn/conda-forge/vibepod" /></a>
   <a href="https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml"><img alt="Docs Build" src="https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml/badge.svg" /></a>
   <img alt="License" src="https://img.shields.io/github/license/VibePod/vibepod-cli" />
@@ -28,7 +29,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 - 🐑 **Herdr aware** — `vp run` inside a [herdr](https://herdr.dev/) pane reports agent state automatically
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
 - 🔒 **Privacy-first** — all metrics collected and stored locally, never sent to the cloud
-- 📦 **Simple install** — `pip install vibepod`
+- 📦 **Simple install** — via pip, Homebrew, or conda-forge
 
 ## Installation
 
@@ -36,6 +37,21 @@ VibePod is available on [PyPI](https://pypi.org/project/vibepod/):
 
 ```bash
 pip install vibepod
+```
+
+with [Homebrew](https://github.com/VibePod/homebrew-vibepod):
+
+```bash
+brew install vibepod/vibepod/vibepod
+```
+
+and on [conda-forge](https://anaconda.org/conda-forge/vibepod) for conda,
+mamba, and pixi users:
+
+```bash
+conda install -c conda-forge vibepod
+mamba install vibepod
+pixi global install vibepod
 ```
 
 ## Quick Start

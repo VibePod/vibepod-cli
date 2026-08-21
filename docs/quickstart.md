@@ -92,9 +92,31 @@ export DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.P
 
 ## Install
 
-```bash
-pip install vibepod
-```
+=== "pip"
+
+    ```bash
+    pip install vibepod
+    ```
+
+=== "Homebrew"
+
+    ```bash
+    brew install vibepod/vibepod/vibepod
+    ```
+
+=== "conda / mamba"
+
+    ```bash
+    conda install -c conda-forge vibepod
+    # or
+    mamba install vibepod
+    ```
+
+=== "pixi"
+
+    ```bash
+    pixi global install vibepod
+    ```
 
 Verify the installation:
 
