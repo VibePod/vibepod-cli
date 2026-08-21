@@ -109,7 +109,7 @@ export DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.P
     ```bash
     conda install -c conda-forge vibepod
     # or
-    mamba install vibepod
+    mamba install -c conda-forge vibepod
     ```
 
 === "pixi"

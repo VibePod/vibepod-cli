@@ -50,7 +50,7 @@ mamba, and pixi users:
 
 ```bash
 conda install -c conda-forge vibepod
-mamba install vibepod
+mamba install -c conda-forge vibepod
 pixi global install vibepod
 ```
 
