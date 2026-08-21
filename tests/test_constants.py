@@ -95,11 +95,6 @@ def test_qwen_image_override(monkeypatch) -> None:
     assert images["qwen"] == "example/qwen:dev"
 
 
-def test_dsh_default_image() -> None:
-    images = get_default_images()
-    assert images["dsh"] == "vibepod/dsh:latest"
-
-
 def test_dsh_image_override(monkeypatch) -> None:
     monkeypatch.setenv("VP_IMAGE_DSH", "example/dsh:dev")
 

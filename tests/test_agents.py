@@ -115,6 +115,35 @@ def test_qwen_spec_matches_container_contract() -> None:
     assert spec.headless_prefix == ["-p"]
 
 
+def test_dsh_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("dsh")
+    assert spec.id == "dsh"
+    assert spec.provider == "deepseek"
+    assert spec.image == DEFAULT_IMAGES["dsh"]
+    assert spec.config_subdir == "dsh"
+    assert spec.command == ["dsh", "web", "--no-open"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env["HOME"] == "/config"
+    assert spec.extra_env["VIBEPOD_WEB_FORWARD_PORT"] == "3081"
+    assert spec.extra_env["NODE_USE_ENV_PROXY"] == "1"
+    assert spec.ikwid_args is None
+    assert spec.headless_prefix is None
+    assert spec.headless_command == ["dsh", "--profile", "headless"]
+    assert spec.preview is True
+    assert spec.web_container_port == 3081
+
+
+def test_non_preview_agents_default_to_no_preview() -> None:
+    assert get_agent_spec("claude").preview is False
+    assert get_agent_spec("qwen").preview is False
+
+
+def test_resolve_agent_name_dsh_aliases() -> None:
+    assert resolve_agent_name("ds") == "dsh"
+    assert resolve_agent_name("deepseek") == "dsh"
+    assert resolve_agent_name("DEEPSEEK-HARNESS") == "dsh"
+
+
 def test_get_agent_spec_unknown() -> None:
     with pytest.raises(ValueError):
         get_agent_spec("unknown")
@@ -222,6 +251,7 @@ def test_agents_without_llm_env_map() -> None:
         "jcode",
         "freebuff",
         "qwen",
+        "dsh",
     ):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
