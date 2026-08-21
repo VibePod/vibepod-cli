@@ -89,6 +89,7 @@ from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
 
@@ -702,9 +703,10 @@ def run(
     )
 
     exit_reason = "normal"
+    output_tail = b""
     warning("Attached to container. Use Ctrl+C to stop.")
     try:
-        manager.attach_interactive(container, logger=logger)
+        output_tail = manager.attach_interactive(container, logger=logger)
     except KeyboardInterrupt:
         exit_reason = "keyboard_interrupt"
         info("Stopping container...")
@@ -721,6 +723,9 @@ def run(
 
     if selected_agent == "claude" and "setup-token" in passthrough_args and exit_reason == "normal":
         _capture_claude_setup_token(config_dir)
+
+    if exit_reason == "normal":
+        show_resume_hint(selected_agent, output_tail)
 
 
 def _read_masked_line(prompt: str) -> str:

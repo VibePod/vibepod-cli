@@ -69,6 +69,10 @@ _PODMAN_HINT = (
 #: Image namespace owned by vibepod; the only one auto_clean ever sweeps.
 IMAGE_NAMESPACE = "vibepod"
 
+# How much trailing container output attach_interactive keeps for post-exit
+# inspection (resume hints appear in the last few lines of a session).
+ATTACH_TAIL_LIMIT = 64 * 1024
+
 
 def _run_podman(podman: str, args: list[str]) -> str | None:
     """Run a Podman subcommand, returning its trimmed stdout on success."""
@@ -852,8 +856,13 @@ class DockerManager:
 
         return self.client.containers.run(**run_kwargs)
 
-    def attach_interactive(self, container: Any, logger: Any = None) -> None:
-        """Attach local stdin/stdout to a running container TTY."""
+    def attach_interactive(self, container: Any, logger: Any = None) -> bytes:
+        """Attach local stdin/stdout to a running container TTY.
+
+        Returns the tail (last ``ATTACH_TAIL_LIMIT`` bytes) of the container
+        output, so callers can inspect it after the session ends (e.g. for
+        agent resume hints).
+        """
 
         def resize_tty() -> None:
             size = shutil.get_terminal_size(fallback=(120, 40))
@@ -879,6 +888,7 @@ class DockerManager:
         sock = getattr(sock_wrapper, "_sock", sock_wrapper)
         resize_tty()
 
+        output_tail = bytearray()
         stdin_fd = None
         old_tty = None
         old_winch_handler = None
@@ -920,6 +930,9 @@ class DockerManager:
                         break
                     sys.stdout.buffer.write(data)
                     sys.stdout.buffer.flush()
+                    output_tail.extend(data)
+                    if len(output_tail) > ATTACH_TAIL_LIMIT:
+                        del output_tail[:-ATTACH_TAIL_LIMIT]
 
                 if stdin_fd is not None and sys.stdin in ready:
                     user_data = os.read(stdin_fd, 1024)
@@ -941,3 +954,4 @@ class DockerManager:
                 signal.signal(sigwinch, old_winch_handler)
             if stdin_fd is not None and old_tty is not None and termios is not None:
                 termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tty)
+        return bytes(output_tail)

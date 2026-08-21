@@ -406,6 +406,30 @@ vp attach
 
 `vp attach` only works for containers that are already running and managed by VibePod. When you are done, close the terminal to leave it running, or stop it explicitly with `vp stop <container>`, `vp stop <agent>`, or `vp stop --all`.
 
+## Resume hints after a session ends
+
+Several agents print their own resume instruction when they exit — Claude, for
+example:
+
+```text
+Resume this session with:
+claude --resume 39bf1a93-ea1f-4b0a-a894-0a662e5a1d4e
+```
+
+When VibePod recognizes such a hint in the session output (supported for
+Claude, Codex, Pi, Copilot, Jcode, and Freebuff), it prints the equivalent
+VibePod command after the agent exits:
+
+```text
+Resume this session with:
+  vp run claude -- --resume 39bf1a93-ea1f-4b0a-a894-0a662e5a1d4e
+```
+
+The suggested command wraps the agent's own resume arguments in passthrough
+form (after `--`), so it works because each agent's session state lives in the
+persisted config mount. If no hint is recognized, exiting behaves as before and
+nothing extra is printed.
+
 ## Connecting to a Docker Compose network
 
 When your workspace contains a `docker-compose.yml` or `compose.yml`, VibePod detects it and offers to connect the agent container to an existing network so it can reach your running services.
