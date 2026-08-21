@@ -55,7 +55,7 @@ machine or may point outside the committed project.
 - `agents.<agent>.init` re-runs shell commands on **every** start — good for
   tiny setup, slow for package installs.
 - A custom image (`agents.<agent>.image`, see
-  [Customizing agent images](agents/index.md#overriding-the-image)) is fully
+  [Customizing agent images](../agents/index.md#overriding-the-image)) is fully
   manual: write a complete Dockerfile, build, tag, configure.
 - An overlay sits in between: persistent like a custom image, zero-ceremony
   like `init`.
@@ -75,3 +75,9 @@ machine or may point outside the committed project.
 
 Superseded overlay images for the same project and agent are removed
 automatically after each successful build.
+
+## Recipes
+
+Ready-to-copy fragments for common needs — apt packages, Python requirements,
+the pixi package manager, a PDF/OCR toolchain — live on the
+[recipes page](recipes.md).
