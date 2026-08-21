@@ -131,17 +131,13 @@ def test_dsh_spec_matches_container_contract() -> None:
     assert spec.headless_command == ["dsh", "--profile", "headless"]
     assert spec.preview is True
     assert spec.web_container_port == 3081
+    assert int(spec.extra_env["VIBEPOD_WEB_FORWARD_PORT"]) == spec.web_container_port
 
 
-def test_non_preview_agents_default_to_no_preview() -> None:
-    assert get_agent_spec("claude").preview is False
-    assert get_agent_spec("qwen").preview is False
-
-
-def test_resolve_agent_name_dsh_aliases() -> None:
-    assert resolve_agent_name("ds") == "dsh"
-    assert resolve_agent_name("deepseek") == "dsh"
-    assert resolve_agent_name("DEEPSEEK-HARNESS") == "dsh"
+def test_only_dsh_is_preview() -> None:
+    for agent in SUPPORTED_AGENTS:
+        spec = get_agent_spec(agent)
+        assert spec.preview is (agent == "dsh"), f"{agent} preview flag unexpected"
 
 
 def test_get_agent_spec_unknown() -> None:
@@ -160,6 +156,8 @@ def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
     assert resolve_agent_name("VIBE") == "devstral"
     assert resolve_agent_name("qwen-cli") == "qwen"
     assert resolve_agent_name("QWEN-CLI") == "qwen"
+    assert resolve_agent_name("deepseek") == "dsh"
+    assert resolve_agent_name("DEEPSEEK-HARNESS") == "dsh"
     assert resolve_agent_name("unknown") is None
 
 

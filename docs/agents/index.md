@@ -329,7 +329,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `jcode` | `jcode run "<prompt>"` |
 | `qwen` | `qwen -p "<prompt>"` |
 
-Other agents error with a clear message; support can be added by setting `headless_prefix` on their `AgentSpec`.
+Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
 ### Managing tasks
 

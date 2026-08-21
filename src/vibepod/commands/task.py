@@ -20,6 +20,7 @@ from vibepod import __version__
 from vibepod.commands.stop import _release_herdr_entries
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.agents import (
+    AGENT_SPECS,
     agent_config_dir,
     effective_agent_image,
     get_agent_spec,
@@ -496,12 +497,22 @@ def task_create(
         raise typer.Exit(1)
 
     spec = get_agent_spec(selected)
-    if not spec.headless_prefix:
+    if not spec.headless_prefix and not spec.headless_command:
+        supported = ", ".join(
+            agent
+            for agent, agent_spec in AGENT_SPECS.items()
+            if agent_spec.headless_prefix or agent_spec.headless_command
+        )
         error(
-            f"Agent '{selected}' does not yet support headless task mode. "
-            "Supported in v1: claude, codex, auggie.",
+            f"Agent '{selected}' does not yet support headless task mode. Supported: {supported}.",
         )
         raise typer.Exit(1)
+
+    if spec.preview:
+        warning(
+            f"{selected} is a developer preview; upstream warns of "
+            "compatibility-breaking changes. The image pins an exact version.",
+        )
 
     workspace_path = workspace.expanduser().resolve()
     if not workspace_path.exists() or not workspace_path.is_dir():
@@ -536,6 +547,15 @@ def task_create(
     agent_cfg = config.get("agents", {}).get(selected, {})
     init_commands = agent_init_commands(selected, agent_cfg)
     agent_ports = agent_port_bindings(selected, agent_cfg) or None
+    if agent_ports and spec.web_container_port is not None:
+        # The headless profile serves no web UI; publishing the web port would
+        # collide with a concurrently running `vp run <agent>` (or a second
+        # concurrent task) already holding the host port. Drop only the web
+        # port binding — user-configured extra ports stay published.
+        web_port = str(spec.web_container_port)
+        agent_ports = {
+            key: value for key, value in agent_ports.items() if key.split("/", 1)[0] != web_port
+        } or None
     merged_env = {
         **host_identity_env(),
         **terminal_env_defaults(),
@@ -543,6 +563,10 @@ def task_create(
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **parse_env_pairs(env or []),
     }
+    if spec.headless_command:
+        # No web UI in one-shot mode: without this the image entrypoint would
+        # start a pointless socat forwarder for the (unpublished) web port.
+        merged_env.pop("VIBEPOD_WEB_FORWARD_PORT", None)
 
     if selected == "codex" and "CODEX_API_KEY" not in merged_env and "OPENAI_API_KEY" in merged_env:
         merged_env["CODEX_API_KEY"] = merged_env["OPENAI_API_KEY"]
@@ -637,13 +661,18 @@ def task_create(
         else:
             warning(f"--ikwid has no effect for agent '{selected}' (no auto-approve flag defined)")
 
-    command = (
-        list(base_command or [])
-        + ikwid_prefix
-        + list(spec.headless_prefix)
-        + [prompt]
-        + passthrough_args
-    )
+    if spec.headless_command:
+        # The one-shot invocation replaces the interactive command outright
+        # (dsh runs `dsh web` interactively but `dsh --profile headless` one-shot).
+        command = list(spec.headless_command) + ikwid_prefix + [prompt] + passthrough_args
+    else:
+        command = (
+            list(base_command or [])
+            + ikwid_prefix
+            + list(spec.headless_prefix or [])
+            + [prompt]
+            + passthrough_args
+        )
 
     config_dir = agent_config_dir(selected, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
