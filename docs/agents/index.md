@@ -34,8 +34,9 @@ Sessions, profiles, plugins, and credentials persist in the agent config dir
 (`~/.config/vibepod/agents/dsh/`, mounted as the container's home).
 
 > **Developer preview:** upstream warns of compatibility-breaking changes.
-> The `vibepod/dsh` image pins an exact version; VibePod prints a preview
-> notice on every run.
+> The default `vibepod/dsh` image pins an exact harness (npm) version — the
+> `:latest` docker tag refers to the image build, not the harness inside.
+> VibePod prints a preview notice on every run.
 
 **First-run setup (one time):** the Web UI needs a workspace and a model
 before the first session; both persist in the agent config dir.

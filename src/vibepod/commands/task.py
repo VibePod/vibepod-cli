@@ -511,7 +511,8 @@ def task_create(
     if spec.preview:
         warning(
             f"{selected} is a developer preview; upstream warns of "
-            "compatibility-breaking changes. The image pins an exact version.",
+            "compatibility-breaking changes. The default image pins an exact "
+            "harness version.",
         )
 
     workspace_path = workspace.expanduser().resolve()
