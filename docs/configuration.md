@@ -292,6 +292,12 @@ agents:
 
 Like other agent keys, a project-level `ports` list replaces the global one for that agent. The list applies to both `vp run` and `vp task` containers; note that two containers cannot publish the same host port at the same time, so a fixed host port limits you to one such container per agent.
 
+For a one-off override, `vp run` (and the agent alias commands) accept a repeatable `-p/--publish` flag with the same syntax. When given, it replaces the resolved config list for that run — the last level of the defaults → global → project → CLI chain:
+
+```bash
+vp run claude -p 127.0.0.1:3090:3081 -p 6000:6000/udp
+```
+
 ## The built-in proxy
 
 VibePod starts a `vibepod-proxy` container alongside every agent. It acts as an HTTP(S) MITM proxy and logs all outbound requests to a SQLite database viewable in the Datasette UI (`vp logs start`).

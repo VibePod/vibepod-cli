@@ -74,6 +74,9 @@ from vibepod.core.launch import (
     prepare_x11_auth as _prepare_x11_auth,
 )
 from vibepod.core.launch import (
+    publish_port_bindings as _publish_port_bindings,
+)
+from vibepod.core.launch import (
     read_claude_stored_token as _read_claude_stored_token,
 )
 from vibepod.core.launch import (
@@ -294,6 +297,17 @@ def run(
         list[str] | None,
         typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
     ] = None,
+    publish: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-p",
+            "--publish",
+            help="Publish a container port in `docker run -p` syntax "
+            "(e.g. 127.0.0.1:3090:3081); replaces configured agents.<agent>.ports "
+            "for this run",
+            show_default=False,
+        ),
+    ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
     network: Annotated[
         str | None,
@@ -387,7 +401,14 @@ def run(
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
     }
-    agent_ports: dict[str, Any] | None = _agent_port_bindings(selected_agent, agent_cfg) or None
+    # The flag replaces the resolved config list, mirroring the config chain's
+    # list-replace semantics (defaults -> global -> project -> CLI), so the
+    # replaced config list is never parsed or validated when the flag is given.
+    agent_ports: dict[str, Any] | None
+    if publish:
+        agent_ports = _publish_port_bindings(publish, source="--publish") or None
+    else:
+        agent_ports = _agent_port_bindings(selected_agent, agent_cfg) or None
     if codex_oauth_login:
         # Tell the codex image to start the loopback forwarder, and publish it to
         # the host on the port Codex's redirect URI expects.

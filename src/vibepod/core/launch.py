@@ -134,7 +134,7 @@ def agent_init_commands(agent: str, agent_cfg: dict[str, Any]) -> list[str]:
     return commands
 
 
-def _check_publish_port(value: Any, *, minimum: int, agent: str, index: int, entry: str) -> None:
+def _check_publish_port(value: Any, *, minimum: int, source: str, index: int, entry: str) -> None:
     """Reject port numbers docker-py's syntax-only parser lets through.
 
     Catches YAML 1.1 sexagesimal surprises: an unquoted `3000:30` loads as the
@@ -145,17 +145,44 @@ def _check_publish_port(value: Any, *, minimum: int, agent: str, index: int, ent
     text = str(value)
     if text.isdigit() and not minimum <= int(text) <= 65535:
         raise typer.BadParameter(
-            f"Invalid agents.{agent}.ports[{index}] value '{entry}': "
+            f"Invalid {source}[{index}] value '{entry}': "
             f"port {text} is out of range {minimum}-65535.",
         )
 
 
-def agent_port_bindings(agent: str, agent_cfg: dict[str, Any]) -> dict[str, Any]:
-    """Read and validate per-agent published ports from config.
+def publish_port_bindings(items: list[Any], *, source: str) -> dict[str, Any]:
+    """Validate published-port entries and return docker-py port-bindings form.
 
     Entries use `docker run -p` syntax (`8000:8000`, `127.0.0.1:8080:80`,
-    `6000:6000/udp`, ...) and are returned in docker-py port-bindings form.
+    `6000:6000/udp`, ...); `source` names the origin in error messages
+    (`agents.<agent>.ports` or `--publish`).
     """
+    bindings: dict[str, Any] = {}
+    for index, item in enumerate(items, start=1):
+        if isinstance(item, bool) or not isinstance(item, (str, int)):
+            raise typer.BadParameter(
+                f"Invalid {source}[{index}] value, expected a string like '8000:8000'.",
+            )
+        entry = str(item).strip()
+        try:
+            parsed = build_port_bindings([entry])
+        except ValueError as exc:
+            raise typer.BadParameter(
+                f"Invalid {source}[{index}] value '{entry}': {exc}",
+            ) from exc
+        for internal, binds in parsed.items():
+            container_port = internal.split("/", 1)[0]
+            _check_publish_port(container_port, minimum=1, source=source, index=index, entry=entry)
+            for bind in binds:
+                host_port = bind[1] if isinstance(bind, tuple) else bind
+                # Host port 0 is valid: the daemon assigns an ephemeral port.
+                _check_publish_port(host_port, minimum=0, source=source, index=index, entry=entry)
+            bindings.setdefault(internal, []).extend(binds)
+    return bindings
+
+
+def agent_port_bindings(agent: str, agent_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Read and validate per-agent published ports from config."""
     raw_ports = agent_cfg.get("ports", [])
     if raw_ports is None:
         return {}
@@ -170,28 +197,7 @@ def agent_port_bindings(agent: str, agent_cfg: dict[str, Any]) -> dict[str, Any]
             "expected a string like '8000:8000' or a list of them.",
         )
 
-    bindings: dict[str, Any] = {}
-    for index, item in enumerate(items, start=1):
-        if isinstance(item, bool) or not isinstance(item, (str, int)):
-            raise typer.BadParameter(
-                f"Invalid agents.{agent}.ports[{index}] value, expected a string like '8000:8000'.",
-            )
-        entry = str(item).strip()
-        try:
-            parsed = build_port_bindings([entry])
-        except ValueError as exc:
-            raise typer.BadParameter(
-                f"Invalid agents.{agent}.ports[{index}] value '{entry}': {exc}",
-            ) from exc
-        for internal, binds in parsed.items():
-            container_port = internal.split("/", 1)[0]
-            _check_publish_port(container_port, minimum=1, agent=agent, index=index, entry=entry)
-            for bind in binds:
-                host_port = bind[1] if isinstance(bind, tuple) else bind
-                # Host port 0 is valid: the daemon assigns an ephemeral port.
-                _check_publish_port(host_port, minimum=0, agent=agent, index=index, entry=entry)
-            bindings.setdefault(internal, []).extend(binds)
-    return bindings
+    return publish_port_bindings(items, source=f"agents.{agent}.ports")
 
 
 def init_entrypoint(init_commands: list[str]) -> list[str]:

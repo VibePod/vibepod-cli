@@ -326,6 +326,28 @@ def test_run_command_forwards_overlay_flags(monkeypatch) -> None:
     assert called["passthrough"] == []
 
 
+def test_run_and_alias_forward_publish_flag(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["publish"] = kwargs.get("publish")
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["run", "claude", "-p", "127.0.0.1:3090:3081"])
+    assert result.exit_code == 0
+    assert called["publish"] == ["127.0.0.1:3090:3081"]
+    assert called["passthrough"] == []
+
+    result = runner.invoke(app, ["claude", "-p", "8000:8000", "--publish", "6000:6000/udp"])
+    assert result.exit_code == 0
+    assert called["agent"] == "claude"
+    assert called["publish"] == ["8000:8000", "6000:6000/udp"]
+    assert called["passthrough"] == []
+
+
 def test_alias_forwards_overlay_flags(monkeypatch) -> None:
     called: dict[str, object] = {}
 
