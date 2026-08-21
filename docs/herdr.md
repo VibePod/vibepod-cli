@@ -67,5 +67,5 @@ API: send a `pane.report_agent` JSON request over the unix socket at
   that can run inside the container. Tau instead uses its installed Python
   runtime. Homebrew-on-Linux and musl-linked host binaries may not run in stock
   images; direct socket integrations avoid that dependency. For custom agents
-  without a compatible runtime, add one via an [overlay](overlays.md).
+  without a compatible runtime, add one via an [overlay](overlays/index.md).
 - `vp doctor herdr [agent]` diagnoses the whole chain from inside a pane.
