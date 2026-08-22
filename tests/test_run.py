@@ -2596,3 +2596,108 @@ def test_run_dsh_prints_preview_warning_and_web_ui_url(monkeypatch, tmp_path: Pa
 
     assert any("developer preview" in msg for msg in warnings)
     assert any("http://127.0.0.1:3080" in msg for msg in successes)
+
+
+def test_run_materializes_proxy_filter_file(monkeypatch, tmp_path: Path) -> None:
+    """Configured filter rules must reach the proxy even without vp proxy start."""
+    filter_calls: list[dict] = []
+
+    class _ProxyDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
+            pass
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            return type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+
+    config = _make_config()
+    config["proxy"] = {
+        "enabled": True,
+        "image": "vibepod/proxy:0.1",
+        "db_path": str(tmp_path / "proxy" / "proxy.db"),
+    }
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", _ProxyDockerManager)
+    monkeypatch.setattr(run_cmd, "write_filter_file", lambda cfg: filter_calls.append(cfg))
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    assert filter_calls == [config]
+
+
+def test_run_recreates_proxy_when_image_updated(monkeypatch, tmp_path: Path) -> None:
+    """A pulled newer proxy image must replace the running pre-update container."""
+    events: list[str] = []
+
+    class _OldProxyContainer:
+        def remove(self, force: bool = False) -> None:
+            events.append("proxy.remove")
+
+    class _UpdatingDockerManager:
+        def ensure_network(self, name: str) -> None:
+            pass
+
+        def networks_with_running_containers(self) -> list[str]:
+            return []
+
+        def pull_image(self, image: str, auto_clean: bool = False) -> None:
+            pass
+
+        def pull_if_newer(self, image: str, auto_clean: bool = False) -> bool:
+            events.append("pull_if_newer")
+            return True
+
+        def find_proxy(self) -> object:
+            return _OldProxyContainer()
+
+        def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
+            events.append("ensure_proxy")
+
+        def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            return type(
+                "_Container",
+                (),
+                {
+                    "name": "vibepod-claude-test",
+                    "id": "abc123",
+                    "status": "running",
+                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "reload": lambda self: None,
+                    "labels": {},
+                    "logs": lambda self, **kw: b"",
+                },
+            )()
+
+    config = _make_config()
+    config["proxy"] = {
+        "enabled": True,
+        "image": "vibepod/proxy:latest",
+        "db_path": str(tmp_path / "proxy" / "proxy.db"),
+    }
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", _UpdatingDockerManager)
+    monkeypatch.setattr(run_cmd, "write_filter_file", lambda cfg: None)
+
+    run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
+
+    assert events == ["pull_if_newer", "proxy.remove", "ensure_proxy"]
