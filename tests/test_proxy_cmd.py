@@ -41,6 +41,11 @@ class _FakeManager:
 def _patch_common(monkeypatch, events: list[str], config: dict, updated: bool = True) -> None:
     monkeypatch.setattr(proxy_cmd, "DockerManager", lambda: _FakeManager(events, updated))
     monkeypatch.setattr(proxy_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(
+        proxy_cmd,
+        "write_filter_file",
+        lambda config: events.append("write_filter_file"),
+    )
 
 
 def test_proxy_start_recreates_container_before_cleanup(monkeypatch) -> None:
@@ -54,6 +59,7 @@ def test_proxy_start_recreates_container_before_cleanup(monkeypatch) -> None:
         "ensure_network",
         "pull_if_newer(auto_clean=False)",
         "container.remove",
+        "write_filter_file",
         "ensure_proxy",
         "clean_untagged_images",
     ]
@@ -68,6 +74,7 @@ def test_proxy_start_keeps_container_without_update(monkeypatch) -> None:
     assert events == [
         "ensure_network",
         "pull_if_newer(auto_clean=False)",
+        "write_filter_file",
         "ensure_proxy",
         "clean_untagged_images",
     ]
@@ -83,5 +90,6 @@ def test_proxy_start_skips_cleanup_without_auto_clean(monkeypatch) -> None:
         "ensure_network",
         "pull_if_newer(auto_clean=False)",
         "container.remove",
+        "write_filter_file",
         "ensure_proxy",
     ]
