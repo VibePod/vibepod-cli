@@ -92,6 +92,7 @@ from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.proxy_filter import write_filter_file
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
@@ -640,7 +641,20 @@ def run(
         )
 
         if _is_latest_tag(proxy_image):
-            manager.pull_if_newer(proxy_image, auto_clean=bool(config.get("auto_clean", True)))
+            updated = manager.pull_if_newer(
+                proxy_image,
+                auto_clean=bool(config.get("auto_clean", True)),
+            )
+            if updated:
+                # ensure_proxy reuses a running container; replace it so the
+                # freshly pulled image (and its features) actually serve.
+                existing_proxy = manager.find_proxy()
+                if existing_proxy:
+                    existing_proxy.remove(force=True)
+
+        # Materialize filter rules for the proxy; `vp proxy start` is not the
+        # only path that brings the proxy up.
+        write_filter_file(config)
 
         manager.ensure_proxy(
             image=proxy_image,

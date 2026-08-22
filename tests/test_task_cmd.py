@@ -1203,3 +1203,25 @@ def test_task_create_dsh_keeps_user_extra_ports(monkeypatch, tmp_path, tmp_task_
     assert ports is not None
     assert all(key.split("/", 1)[0] != "3081" for key in ports)
     assert any(key.split("/", 1)[0] == "9999" for key in ports)
+
+
+def test_task_create_materializes_proxy_filter_file(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """Configured filter rules must reach the proxy even without vp proxy start."""
+    filter_calls: list[dict] = []
+    config = _make_config()
+    config["proxy"] = {
+        "enabled": True,
+        "image": "vibepod/proxy:0.1",
+        "db_path": str(tmp_path / "proxy" / "proxy.db"),
+    }
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(task_cmd, "DockerManager", _CapturingDockerManager)
+    monkeypatch.setattr(task_cmd, "write_filter_file", lambda cfg: filter_calls.append(cfg))
+
+    task_cmd.task_create(agent="claude", prompt="hi", workspace=tmp_path)
+
+    assert filter_calls == [config]
