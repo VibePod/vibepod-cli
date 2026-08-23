@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from vibepod.core.config import _load_yaml, get_global_config_path
+from vibepod.core.profiles import DEFAULT_PROFILE, profiles_root
 from vibepod.utils.console import warning
 
 VALID_MODES = ("open", "allow", "deny")
@@ -90,14 +91,79 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def write_filter_file(config: dict[str, Any]) -> Path:
+def profile_filter_path(profile: str) -> Path | None:
+    """Per-profile filter file; None for the default profile (uses the global config)."""
+    if profile == DEFAULT_PROFILE:
+        return None
+    return profiles_root() / profile / "filter.yaml"
+
+
+def _load_profile_filter(profile: str) -> dict[str, Any] | None:
+    """Return the profile's raw filter mapping, or None when it has no own filter."""
+    path = profile_filter_path(profile)
+    if path is None or not path.exists():
+        return None
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        warning(f"Profile filter at {path} is not a YAML mapping; ignoring it")
+        return None
+    return data
+
+
+def effective_filter_settings(
+    config: dict[str, Any],
+    profile: str = DEFAULT_PROFILE,
+) -> dict[str, Any]:
+    """Filter settings for *profile*: its filter.yaml when present, else the config.
+
+    An explicit VP_PROXY_FILTER_MODE always wins, matching its precedence over
+    the config files.
+    """
+    override = _load_profile_filter(profile)
+    if override is None:
+        return get_filter_settings(config)
+    settings = get_filter_settings({"proxy": {"filter": override}})
+    env_mode = os.environ.get("VP_PROXY_FILTER_MODE", "").strip().lower()
+    if env_mode in VALID_MODES:
+        settings["mode"] = env_mode
+    return settings
+
+
+def update_profile_filter(
+    profile: str,
+    mutate: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    """Apply *mutate* to the profile's filter settings and save them.
+
+    The default profile keeps its settings in the global config.yaml; named
+    profiles get a filter.yaml in their profile dir, seeded from the global
+    settings on first write.
+    """
+    path = profile_filter_path(profile)
+    if path is None:
+        return update_global_filter(mutate)
+    data: dict[str, Any]
+    if path.exists():
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = raw if isinstance(raw, dict) else {}
+    else:
+        data = get_filter_settings(_load_yaml(get_global_config_path()))
+    mutate(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(path, yaml.safe_dump(data, sort_keys=False))
+    return data
+
+
+def write_filter_file(config: dict[str, Any], profile: str = DEFAULT_PROFILE) -> Path:
     """Materialize filter settings into the proxy data dir (hot-reloaded by the proxy)."""
-    raw_mode = raw_configured_mode(config)
-    if raw_mode.strip().lower() not in VALID_MODES:
-        warning(f"Invalid proxy.filter.mode '{raw_mode}' in config; treating as 'open'")
+    if _load_profile_filter(profile) is None:
+        raw_mode = raw_configured_mode(config)
+        if raw_mode.strip().lower() not in VALID_MODES:
+            warning(f"Invalid proxy.filter.mode '{raw_mode}' in config; treating as 'open'")
     path = get_filter_file_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_text(path, json.dumps(get_filter_settings(config), indent=2) + "\n")
+    settings = effective_filter_settings(config, profile)
+    _atomic_write_text(path, json.dumps(settings, indent=2) + "\n")
     return path
 
 

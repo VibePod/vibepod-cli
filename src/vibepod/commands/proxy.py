@@ -10,12 +10,14 @@ import typer
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
+from vibepod.core.profiles import DEFAULT_PROFILE, resolve_profile
 from vibepod.core.proxy_filter import (
     VALID_MODES,
-    get_filter_settings,
+    effective_filter_settings,
     normalize_pattern,
+    profile_filter_path,
     raw_configured_mode,
-    update_global_filter,
+    update_profile_filter,
     write_filter_file,
 )
 from vibepod.utils.console import error, info, success, warning
@@ -30,8 +32,33 @@ filter_app.add_typer(deny_app, name="deny")
 app.add_typer(filter_app, name="filter")
 
 
+_PROFILE_OPTION = typer.Option(
+    "--profile",
+    help="Profile whose filter to manage (default: the active profile)",
+)
+
+
+def _target_profile(flag: str | None) -> str:
+    try:
+        return resolve_profile(flag, get_config())
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+
 def _sync_filter_file() -> None:
-    write_filter_file(get_config())
+    """Rematerialize filter.json for the active profile (the one the proxy serves)."""
+    config = get_config()
+    try:
+        active = resolve_profile(None, config)
+    except ValueError:
+        active = DEFAULT_PROFILE
+    write_filter_file(config, active)
+
+
+def _uses_profile_file(profile: str) -> bool:
+    path = profile_filter_path(profile)
+    return path is not None and path.exists()
 
 
 def _normalized(entry: object) -> str:
@@ -48,11 +75,18 @@ def _warn_invalid_configured_mode(config: dict[str, Any]) -> None:
 
 
 @filter_app.command("status")
-def filter_status() -> None:
+def filter_status(
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
     """Show filter mode, lists, and proxy state."""
     config = get_config()
-    settings = get_filter_settings(config)
-    _warn_invalid_configured_mode(config)
+    target = _target_profile(profile)
+    settings = effective_filter_settings(config, target)
+    if _uses_profile_file(target):
+        info(f"Profile: {target} (profile-specific filter)")
+    else:
+        info(f"Profile: {target} (global filter settings)")
+        _warn_invalid_configured_mode(config)
     info(f"Mode: {settings['mode']}")
     info(f"Allow list ({len(settings['allow'])}): {', '.join(settings['allow']) or '—'}")
     info(f"Deny list ({len(settings['deny'])}): {', '.join(settings['deny']) or '—'}")
@@ -72,29 +106,32 @@ def filter_status() -> None:
 @filter_app.command("mode")
 def filter_mode(
     value: Annotated[str, typer.Argument(help="open, allow, or deny")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
 ) -> None:
     """Set the filter mode (open = no filtering)."""
     normalized = value.strip().lower()
     if normalized not in VALID_MODES:
         error(f"Unknown mode '{value}'. Valid modes: {', '.join(VALID_MODES)}")
         raise typer.Exit(1)
-    update_global_filter(lambda f: f.update(mode=normalized))
+    target = _target_profile(profile)
+    update_profile_filter(target, lambda f: f.update(mode=normalized))
     _sync_filter_file()
-    success(f"Proxy filter mode set to '{normalized}'")
-    effective = get_filter_settings(get_config())
+    success(f"Proxy filter mode set to '{normalized}' for profile '{target}'")
+    effective = effective_filter_settings(get_config(), target)
     if effective["mode"] != normalized:
         warning(
             f"Effective mode stays '{effective['mode']}' — {_OVERRIDE_HINT}",
         )
 
 
-def _list_add(list_name: str, host: str) -> None:
+def _list_add(list_name: str, host: str, profile: str | None) -> None:
     try:
         pattern = normalize_pattern(host)
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
 
+    target = _target_profile(profile)
     added = True
 
     def mutate(filter_cfg: dict[str, Any]) -> None:
@@ -109,26 +146,27 @@ def _list_add(list_name: str, host: str) -> None:
             return
         entries.append(pattern)
 
-    update_global_filter(mutate)
+    update_profile_filter(target, mutate)
     if not added:
         warning(f"'{pattern}' is already in the {list_name} list")
         return
     _sync_filter_file()
-    success(f"Added '{pattern}' to the {list_name} list")
-    if pattern not in get_filter_settings(get_config())[list_name]:
+    success(f"Added '{pattern}' to the {list_name} list of profile '{target}'")
+    if pattern not in effective_filter_settings(get_config(), target)[list_name]:
         warning(
             f"'{pattern}' saved globally but absent from the effective "
             f"{list_name} list — {_OVERRIDE_HINT}",
         )
 
 
-def _list_remove(list_name: str, host: str) -> None:
+def _list_remove(list_name: str, host: str, profile: str | None) -> None:
     try:
         pattern = normalize_pattern(host)
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
 
+    target = _target_profile(profile)
     removed = False
 
     def mutate(filter_cfg: dict[str, Any]) -> None:
@@ -141,13 +179,13 @@ def _list_remove(list_name: str, host: str) -> None:
             filter_cfg[list_name] = kept
             removed = True
 
-    update_global_filter(mutate)
+    update_profile_filter(target, mutate)
     if not removed:
         warning(f"'{pattern}' is not in the {list_name} list")
         return
     _sync_filter_file()
-    success(f"Removed '{pattern}' from the {list_name} list")
-    if pattern in get_filter_settings(get_config())[list_name]:
+    success(f"Removed '{pattern}' from the {list_name} list of profile '{target}'")
+    if pattern in effective_filter_settings(get_config(), target)[list_name]:
         warning(
             f"'{pattern}' removed globally but still in the effective "
             f"{list_name} list — {_OVERRIDE_HINT}",
@@ -155,27 +193,39 @@ def _list_remove(list_name: str, host: str) -> None:
 
 
 @allow_app.command("add")
-def allow_add(host: Annotated[str, typer.Argument(help="Host pattern")]) -> None:
+def allow_add(
+    host: Annotated[str, typer.Argument(help="Host pattern")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
     """Add a host pattern to the allow list."""
-    _list_add("allow", host)
+    _list_add("allow", host, profile)
 
 
 @allow_app.command("remove")
-def allow_remove(host: Annotated[str, typer.Argument(help="Host pattern")]) -> None:
+def allow_remove(
+    host: Annotated[str, typer.Argument(help="Host pattern")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
     """Remove a host pattern from the allow list."""
-    _list_remove("allow", host)
+    _list_remove("allow", host, profile)
 
 
 @deny_app.command("add")
-def deny_add(host: Annotated[str, typer.Argument(help="Host pattern")]) -> None:
+def deny_add(
+    host: Annotated[str, typer.Argument(help="Host pattern")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
     """Add a host pattern to the deny list."""
-    _list_add("deny", host)
+    _list_add("deny", host, profile)
 
 
 @deny_app.command("remove")
-def deny_remove(host: Annotated[str, typer.Argument(help="Host pattern")]) -> None:
+def deny_remove(
+    host: Annotated[str, typer.Argument(help="Host pattern")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
     """Remove a host pattern from the deny list."""
-    _list_remove("deny", host)
+    _list_remove("deny", host, profile)
 
 
 @app.command("start")
@@ -219,7 +269,7 @@ def proxy_start() -> None:
     # Materialize filter rules so the proxy picks them up (and hand-edits to
     # config.yaml are synced on start); write_filter_file warns on an invalid
     # configured mode.
-    write_filter_file(config)
+    _sync_filter_file()
 
     info("Starting proxy")
     manager.ensure_proxy(

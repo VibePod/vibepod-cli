@@ -358,7 +358,14 @@ Changes apply immediately — the running proxy hot-reloads the rules, no
 restart needed. Blocked requests return `403` (HTTPS tunnels are refused at
 `CONNECT`) and are logged with `blocked = 1` in the proxy database.
 
-The `vp proxy filter` commands write the **global** config. A project-level
-`.vibepod/config.yaml` filter section or `VP_PROXY_FILTER_MODE` takes
-precedence over the global values; when that masks a change the command warns
-and the materialized rules keep the effective (overriding) settings.
+The `vp proxy filter` commands act on the **active profile**. For the
+`default` profile they write the global config; for a named profile they write
+`profiles/<name>/filter.yaml` (seeded from the global settings on first
+write), so switching profiles also switches the filter mode and lists. Pass
+`--profile <name>` to manage another profile's filter without switching.
+
+A project-level `.vibepod/config.yaml` filter section or
+`VP_PROXY_FILTER_MODE` takes precedence over the global values (for a profile
+with its own `filter.yaml`, only `VP_PROXY_FILTER_MODE` still overrides the
+mode); when that masks a change the command warns and the materialized rules
+keep the effective (overriding) settings.

@@ -731,7 +731,7 @@ def task_create(
 
         # Materialize filter rules for the proxy; `vp proxy start` is not the
         # only path that brings the proxy up.
-        write_filter_file(config)
+        write_filter_file(config, active_profile)
 
         actual_ca_dir = proxy_ca_dir or proxy_db_path.parent / "mitmproxy"
         manager.ensure_proxy(

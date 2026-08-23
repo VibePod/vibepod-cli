@@ -159,3 +159,60 @@ def test_status_warns_on_invalid_configured_mode(config_dir: Path) -> None:
     assert result.exit_code == 0
     assert "strict" in result.stdout
     assert "open" in result.stdout
+
+
+# --- per-profile filter commands ---
+
+
+@pytest.fixture()
+def work_profile(config_dir: Path) -> Path:
+    (config_dir / "profiles" / "work" / "agents").mkdir(parents=True)
+    return config_dir
+
+
+def _work_filter(config_dir: Path) -> dict:
+    return yaml.safe_load((config_dir / "profiles" / "work" / "filter.yaml").read_text())
+
+
+def test_filter_mode_with_profile_writes_profile_file(work_profile: Path) -> None:
+    result = runner.invoke(app, ["proxy", "filter", "mode", "allow", "--profile", "work"])
+    assert result.exit_code == 0
+    assert _work_filter(work_profile)["mode"] == "allow"
+    # Global config and the materialized file of the active (default) profile stay put.
+    assert "filter" not in _config_yaml(work_profile).get("proxy", {})
+    assert _filter_json(work_profile)["mode"] == "open"
+
+
+def test_filter_mode_targets_active_profile(work_profile: Path) -> None:
+    config = _config_yaml(work_profile)
+    config["profile"] = "work"
+    (work_profile / "config.yaml").write_text(yaml.safe_dump(config))
+
+    result = runner.invoke(app, ["proxy", "filter", "mode", "allow"])
+    assert result.exit_code == 0
+    assert _work_filter(work_profile)["mode"] == "allow"
+    assert _filter_json(work_profile)["mode"] == "allow"
+
+
+def test_allow_add_with_profile(work_profile: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["proxy", "filter", "allow", "add", "api.anthropic.com", "--profile", "work"],
+    )
+    assert result.exit_code == 0
+    assert _work_filter(work_profile)["allow"] == ["api.anthropic.com"]
+
+
+def test_filter_status_with_profile_shows_profile_settings(work_profile: Path) -> None:
+    (work_profile / "profiles" / "work" / "filter.yaml").write_text(
+        yaml.safe_dump({"mode": "deny", "allow": [], "deny": ["example.com"]}),
+    )
+    result = runner.invoke(app, ["proxy", "filter", "status", "--profile", "work"])
+    assert result.exit_code == 0
+    assert "deny" in result.output
+    assert "example.com" in result.output
+
+
+def test_filter_with_unknown_profile_errors(work_profile: Path) -> None:
+    result = runner.invoke(app, ["proxy", "filter", "mode", "allow", "--profile", "nope"])
+    assert result.exit_code == 1

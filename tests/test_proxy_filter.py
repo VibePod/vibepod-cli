@@ -156,3 +156,96 @@ def test_atomic_write_preserves_symlinked_config(monkeypatch, tmp_path: Path) ->
     data = yaml.safe_load(target.read_text())
     assert data["default_agent"] == "gemini"
     assert data["proxy"]["filter"]["mode"] == "allow"
+
+
+# --- per-profile filter settings ---
+
+
+@pytest.fixture()
+def profile_env(monkeypatch, tmp_path: Path) -> Path:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("VP_PROXY_FILTER_MODE", raising=False)
+    (tmp_path / "profiles" / "work" / "agents").mkdir(parents=True)
+    return tmp_path
+
+
+def test_profile_filter_path_default_is_none(profile_env: Path) -> None:
+    assert pf.profile_filter_path("default") is None
+
+
+def test_profile_filter_path_named_profile(profile_env: Path) -> None:
+    assert pf.profile_filter_path("work") == profile_env / "profiles" / "work" / "filter.yaml"
+
+
+def test_effective_settings_fall_back_to_global_without_profile_file(profile_env: Path) -> None:
+    config = {"proxy": {"filter": {"mode": "deny", "deny": ["example.com"]}}}
+    settings = pf.effective_filter_settings(config, "work")
+    assert settings == {"mode": "deny", "allow": [], "deny": ["example.com"]}
+
+
+def test_effective_settings_use_profile_file_when_present(profile_env: Path) -> None:
+    (profile_env / "profiles" / "work" / "filter.yaml").write_text(
+        yaml.safe_dump({"mode": "allow", "allow": ["api.anthropic.com"], "deny": []}),
+    )
+    config = {"proxy": {"filter": {"mode": "deny", "deny": ["example.com"]}}}
+    settings = pf.effective_filter_settings(config, "work")
+    assert settings == {"mode": "allow", "allow": ["api.anthropic.com"], "deny": []}
+
+
+def test_effective_settings_default_profile_ignores_profile_files(profile_env: Path) -> None:
+    config = {"proxy": {"filter": {"mode": "deny", "deny": ["example.com"]}}}
+    assert pf.effective_filter_settings(config, "default") == {
+        "mode": "deny",
+        "allow": [],
+        "deny": ["example.com"],
+    }
+
+
+def test_env_mode_override_beats_profile_file(profile_env: Path, monkeypatch) -> None:
+    (profile_env / "profiles" / "work" / "filter.yaml").write_text(
+        yaml.safe_dump({"mode": "allow", "allow": ["api.anthropic.com"]}),
+    )
+    monkeypatch.setenv("VP_PROXY_FILTER_MODE", "open")
+    assert pf.effective_filter_settings({}, "work")["mode"] == "open"
+
+
+def test_update_profile_filter_seeds_from_global_config(profile_env: Path) -> None:
+    (profile_env / "config.yaml").write_text(
+        yaml.safe_dump({"proxy": {"filter": {"mode": "deny", "deny": ["example.com"]}}}),
+    )
+    pf.update_profile_filter("work", lambda f: f.update(mode="allow"))
+    data = yaml.safe_load((profile_env / "profiles" / "work" / "filter.yaml").read_text())
+    assert data["mode"] == "allow"
+    assert data["deny"] == ["example.com"]
+
+
+def test_update_profile_filter_mutates_existing_file(profile_env: Path) -> None:
+    path = profile_env / "profiles" / "work" / "filter.yaml"
+    path.write_text(yaml.safe_dump({"mode": "allow", "allow": ["a.com"], "deny": []}))
+    pf.update_profile_filter("work", lambda f: f["allow"].append("b.com"))
+    data = yaml.safe_load(path.read_text())
+    assert data["allow"] == ["a.com", "b.com"]
+
+
+def test_update_profile_filter_default_updates_global(profile_env: Path) -> None:
+    pf.update_profile_filter("default", lambda f: f.update(mode="deny"))
+    data = yaml.safe_load((profile_env / "config.yaml").read_text())
+    assert data["proxy"]["filter"]["mode"] == "deny"
+
+
+def test_write_filter_file_materializes_profile_settings(profile_env: Path) -> None:
+    (profile_env / "profiles" / "work" / "filter.yaml").write_text(
+        yaml.safe_dump({"mode": "allow", "allow": ["api.anthropic.com"], "deny": []}),
+    )
+    config = {
+        "proxy": {
+            "db_path": str(profile_env / "proxy" / "proxy.db"),
+            "filter": {"mode": "deny", "deny": ["example.com"]},
+        },
+    }
+    path = pf.write_filter_file(config, profile="work")
+    assert json.loads(path.read_text()) == {
+        "mode": "allow",
+        "allow": ["api.anthropic.com"],
+        "deny": [],
+    }

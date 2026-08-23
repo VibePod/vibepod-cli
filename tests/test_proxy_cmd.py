@@ -44,7 +44,7 @@ def _patch_common(monkeypatch, events: list[str], config: dict, updated: bool = 
     monkeypatch.setattr(
         proxy_cmd,
         "write_filter_file",
-        lambda config: events.append("write_filter_file"),
+        lambda config, profile=None: events.append("write_filter_file"),
     )
 
 

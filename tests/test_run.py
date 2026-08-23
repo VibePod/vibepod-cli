@@ -2638,7 +2638,11 @@ def test_run_materializes_proxy_filter_file(monkeypatch, tmp_path: Path) -> None
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", _ProxyDockerManager)
-    monkeypatch.setattr(run_cmd, "write_filter_file", lambda cfg: filter_calls.append(cfg))
+    monkeypatch.setattr(
+        run_cmd,
+        "write_filter_file",
+        lambda cfg, profile=None: filter_calls.append(cfg),
+    )
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
@@ -2696,7 +2700,7 @@ def test_run_recreates_proxy_when_image_updated(monkeypatch, tmp_path: Path) -> 
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", _UpdatingDockerManager)
-    monkeypatch.setattr(run_cmd, "write_filter_file", lambda cfg: None)
+    monkeypatch.setattr(run_cmd, "write_filter_file", lambda cfg, profile=None: None)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 

@@ -654,7 +654,7 @@ def run(
 
         # Materialize filter rules for the proxy; `vp proxy start` is not the
         # only path that brings the proxy up.
-        write_filter_file(config)
+        write_filter_file(config, active_profile)
 
         manager.ensure_proxy(
             image=proxy_image,

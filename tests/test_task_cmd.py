@@ -1220,7 +1220,11 @@ def test_task_create_materializes_proxy_filter_file(
     }
     monkeypatch.setattr(task_cmd, "get_config", lambda: config)
     monkeypatch.setattr(task_cmd, "DockerManager", _CapturingDockerManager)
-    monkeypatch.setattr(task_cmd, "write_filter_file", lambda cfg: filter_calls.append(cfg))
+    monkeypatch.setattr(
+        task_cmd,
+        "write_filter_file",
+        lambda cfg, profile=None: filter_calls.append(cfg),
+    )
 
     task_cmd.task_create(agent="claude", prompt="hi", workspace=tmp_path)
 

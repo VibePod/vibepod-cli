@@ -4,11 +4,12 @@ Profiles let you keep multiple credential sets per agent and switch between them
 at run time — for example a Claude subscription login, a separate API-key setup,
 and an environment prepared for Ollama.
 
-A profile only switches the **credential directories** that get mounted into the
-agent container. Everything else (skills, allowed directories, proxy, logging)
-stays shared. Environment variables such as `ANTHROPIC_API_KEY` are still
-configured via `agents.<agent>.env` or `-e` flags — combine them with a profile
-via a project config (see below).
+A profile switches the **credential directories** that get mounted into the
+agent container and, when the profile has its own filter settings, the
+**proxy allow/deny filter** (see below). Everything else (skills, allowed
+directories, proxy, logging) stays shared. Environment variables such as
+`ANTHROPIC_API_KEY` are still configured via `agents.<agent>.env` or `-e`
+flags — combine them with a profile via a project config (see below).
 
 ## Layout
 
@@ -16,6 +17,7 @@ via a project config (see below).
 ~/.config/vibepod/
   agents/<agent>/                    # the built-in "default" profile
   profiles/<name>/agents/<agent>/    # named profiles
+  profiles/<name>/filter.yaml        # optional per-profile proxy filter
 ```
 
 Your existing credentials in `~/.config/vibepod/agents/` are the `default`
@@ -68,3 +70,22 @@ agents:
 
 Referencing a profile that does not exist is a hard error — create it first
 with `vp profile create <name>`.
+
+## Per-profile proxy filter
+
+Each named profile can carry its own proxy filter mode and allow/deny lists in
+`profiles/<name>/filter.yaml`. The `vp proxy filter` commands act on the
+active profile, or on an explicit one via `--profile`:
+
+```bash
+vp proxy filter mode allow --profile work
+vp proxy filter allow add api.anthropic.com --profile work
+vp proxy filter status --profile work
+```
+
+The file is created on first write, seeded from the global filter settings.
+A profile without `filter.yaml` uses the global `proxy.filter` config. On
+`vp run`, `vp task create`, and `vp proxy start` the active profile's filter
+is materialized for the proxy, so switching profiles switches the agent
+credentials *and* the filter policy. The `default` profile keeps its filter in
+the global config, as before.
