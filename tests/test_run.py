@@ -2615,6 +2615,9 @@ def test_run_materializes_source_policy_and_wires_identity(monkeypatch, tmp_path
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
             captured["proxy"] = kwargs
 
+        def clean_untagged_images(self) -> int:
+            return 0
+
         def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
             captured["run"] = kwargs
             return type(
@@ -2643,7 +2646,7 @@ def test_run_materializes_source_policy_and_wires_identity(monkeypatch, tmp_path
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", _ProxyDockerManager)
-    monkeypatch.setattr(run_cmd, "new_policy_id", lambda: "1" * 32)
+    monkeypatch.setattr("vibepod.core.proxy_identity.new_policy_id", lambda: "1" * 32)
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
@@ -2684,6 +2687,12 @@ def test_run_recreates_proxy_when_image_updated(monkeypatch, tmp_path: Path) -> 
             events.append("pull_if_newer")
             return True
 
+        def require_proxy_policy_schema(self, image: object, required: str = "2") -> None:
+            pass
+
+        def clean_untagged_images(self) -> int:
+            return 0
+
         def find_proxy(self) -> object:
             return _OldProxyContainer()
 
@@ -2713,9 +2722,7 @@ def test_run_recreates_proxy_when_image_updated(monkeypatch, tmp_path: Path) -> 
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", _UpdatingDockerManager)
-    monkeypatch.setattr(run_cmd, "materialize_policy_bases", lambda cfg, profile: [])
-    monkeypatch.setattr(run_cmd, "materialize_container_policy", lambda *args, **kwargs: None)
-    monkeypatch.setattr(run_cmd, "new_policy_id", lambda: "3" * 32)
+    monkeypatch.setattr(run_cmd, "_materialize_launch_policy", lambda *args, **kwargs: "3" * 32)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 

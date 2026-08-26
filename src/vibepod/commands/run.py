@@ -56,6 +56,9 @@ from vibepod.core.launch import (
     apply_overlay_if_enabled,
 )
 from vibepod.core.launch import (
+    apply_proxy_env as _apply_proxy_env,
+)
+from vibepod.core.launch import (
     get_container_ip as _get_container_ip,
 )
 from vibepod.core.launch import (
@@ -68,13 +71,16 @@ from vibepod.core.launch import (
     init_entrypoint as _init_entrypoint,
 )
 from vibepod.core.launch import (
-    managed_proxy_policy_ids as _managed_proxy_policy_ids,
+    materialize_launch_policy as _materialize_launch_policy,
 )
 from vibepod.core.launch import (
     parse_env_pairs as _parse_env_pairs,
 )
 from vibepod.core.launch import (
     prepare_x11_auth as _prepare_x11_auth,
+)
+from vibepod.core.launch import (
+    provision_proxy as _provision_proxy,
 )
 from vibepod.core.launch import (
     publish_port_bindings as _publish_port_bindings,
@@ -95,13 +101,7 @@ from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
 from vibepod.core.profiles import resolve_profile
-from vibepod.core.proxy_filter import (
-    cleanup_orphan_policies,
-    materialize_container_policy,
-    materialize_policy_bases,
-    remove_container_policy,
-)
-from vibepod.core.proxy_identity import identified_proxy_url, new_policy_id
+from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
@@ -650,37 +650,24 @@ def run(
             .resolve()
         )
 
-        if _is_latest_tag(proxy_image):
-            updated = manager.pull_if_newer(
-                proxy_image,
+        try:
+            _provision_proxy(
+                manager,
+                image=proxy_image,
+                db_path=proxy_db_path,
+                ca_dir=proxy_ca_dir or proxy_db_path.parent / "mitmproxy",
+                network=network_name,
                 auto_clean=bool(config.get("auto_clean", True)),
             )
-            if updated:
-                # ensure_proxy reuses a running container; replace it so the
-                # freshly pulled image (and its features) actually serve.
-                existing_proxy = manager.find_proxy()
-                if existing_proxy:
-                    existing_proxy.remove(force=True)
-
-        manager.ensure_proxy(
-            image=proxy_image,
-            db_path=proxy_db_path,
-            ca_dir=proxy_ca_dir or proxy_db_path.parent / "mitmproxy",
-            network=network_name,
-            policy_schema="2",
-        )
-
-        materialize_policy_bases(config, active_profile)
-        referenced_policy_ids = _managed_proxy_policy_ids(manager)
-        if referenced_policy_ids is not None:
-            cleanup_orphan_policies(config, referenced_policy_ids)
-        proxy_policy_id = new_policy_id()
-        materialize_container_policy(
-            config,
-            profile=active_profile,
-            workspace=workspace_path,
-            policy_id=proxy_policy_id,
-        )
+            proxy_policy_id = _materialize_launch_policy(
+                manager,
+                config,
+                profile=active_profile,
+                workspace=workspace_path,
+            )
+        except (DockerClientError, ValueError) as exc:
+            error(str(exc))
+            raise typer.Exit(1) from exc
 
         if proxy_ca_path:
             ca_ready = False
@@ -693,20 +680,7 @@ def run(
             if not ca_ready:
                 warning(f"Proxy CA not found yet at {proxy_ca_path}")
 
-        proxy_url = identified_proxy_url(proxy_policy_id)
-        merged_env.setdefault("HTTP_PROXY", proxy_url)
-        merged_env.setdefault("HTTPS_PROXY", proxy_url)
-        if any(merged_env[key] != proxy_url for key in ("HTTP_PROXY", "HTTPS_PROXY")):
-            warning(
-                "Explicit HTTP_PROXY or HTTPS_PROXY overrides the identified VibePod proxy; "
-                "this launch may bypass its per-container filter policy.",
-            )
-        merged_env.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
-        _ca = "/etc/vibepod-proxy-ca/mitmproxy-ca-cert.pem"
-        merged_env.setdefault("NODE_EXTRA_CA_CERTS", _ca)
-        merged_env.setdefault("REQUESTS_CA_BUNDLE", _ca)
-        merged_env.setdefault("SSL_CERT_FILE", _ca)
-        merged_env.setdefault("CURL_CA_BUNDLE", _ca)
+        _apply_proxy_env(merged_env, proxy_policy_id)
 
         if proxy_ca_dir:
             extra_volumes.append((str(proxy_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
@@ -716,13 +690,9 @@ def run(
     if not rootless_podman and spec.run_as_host_user:
         container_user = _host_user()
     launch_labels = dict(herdr_labels)
+    launch_labels["vibepod.profile"] = active_profile
     if proxy_policy_id is not None:
-        launch_labels.update(
-            {
-                "vibepod.profile": active_profile,
-                "vibepod.proxy-policy": proxy_policy_id,
-            },
-        )
+        launch_labels["vibepod.proxy-policy"] = proxy_policy_id
     try:
         container = manager.run_agent(
             agent=selected_agent,

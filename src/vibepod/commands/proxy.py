@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -9,7 +11,8 @@ import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
+from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.launch import provision_proxy
 from vibepod.core.profiles import DEFAULT_PROFILE, resolve_profile
 from vibepod.core.proxy_filter import (
     VALID_MODES,
@@ -40,6 +43,16 @@ _PROFILE_OPTION = typer.Option(
 def _target_profile(flag: str | None) -> str:
     try:
         return resolve_profile(flag, get_config())
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@contextlib.contextmanager
+def _clean_config_errors() -> Iterator[None]:
+    """Surface invalid config/env (e.g. VP_PROXY_FILTER_MODE) as a clean exit."""
+    try:
+        yield
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
@@ -76,7 +89,8 @@ def filter_status(
     """Show filter mode, lists, and proxy state."""
     config = get_config()
     target = _target_profile(profile)
-    settings = effective_filter_settings(config, target)
+    with _clean_config_errors():
+        settings = effective_filter_settings(config, target)
     if _uses_profile_file(target):
         info(f"Profile: {target} (profile-specific filter)")
     else:
@@ -89,11 +103,12 @@ def filter_status(
     except DockerClientError:
         info("Proxy: unknown (Docker is not running)")
         return
+    # find_proxy already returns a container listed with a fresh status, so an
+    # extra reload() only risks a NotFound race if the proxy is removed midway.
     existing = manager.find_proxy()
     if existing is None:
         info("Proxy: not running")
     else:
-        existing.reload()
         info(f"Proxy: {existing.name} ({existing.status})")
 
 
@@ -108,10 +123,11 @@ def filter_mode(
         error(f"Unknown mode '{value}'. Valid modes: {', '.join(VALID_MODES)}")
         raise typer.Exit(1)
     target = _target_profile(profile)
-    update_profile_filter(target, lambda f: f.update(mode=normalized))
-    _sync_filter_file(target)
+    with _clean_config_errors():
+        update_profile_filter(target, lambda f: f.update(mode=normalized))
+        _sync_filter_file(target)
+        effective = effective_filter_settings(get_config(), target)
     success(f"Proxy filter mode set to '{normalized}' for profile '{target}'")
-    effective = effective_filter_settings(get_config(), target)
     if effective["mode"] != normalized:
         warning(
             f"Effective mode stays '{effective['mode']}' — {_OVERRIDE_HINT}",
@@ -140,13 +156,16 @@ def _list_add(list_name: str, host: str, profile: str | None) -> None:
             return
         entries.append(pattern)
 
-    update_profile_filter(target, mutate)
+    with _clean_config_errors():
+        update_profile_filter(target, mutate)
     if not added:
         warning(f"'{pattern}' is already in the {list_name} list")
         return
-    _sync_filter_file(target)
+    with _clean_config_errors():
+        _sync_filter_file(target)
+        effective_list = effective_filter_settings(get_config(), target)[list_name]
     success(f"Added '{pattern}' to the {list_name} list of profile '{target}'")
-    if pattern not in effective_filter_settings(get_config(), target)[list_name]:
+    if pattern not in effective_list:
         warning(
             f"'{pattern}' saved globally but absent from the effective "
             f"{list_name} list — {_OVERRIDE_HINT}",
@@ -173,13 +192,16 @@ def _list_remove(list_name: str, host: str, profile: str | None) -> None:
             filter_cfg[list_name] = kept
             removed = True
 
-    update_profile_filter(target, mutate)
+    with _clean_config_errors():
+        update_profile_filter(target, mutate)
     if not removed:
         warning(f"'{pattern}' is not in the {list_name} list")
         return
-    _sync_filter_file(target)
+    with _clean_config_errors():
+        _sync_filter_file(target)
+        effective_list = effective_filter_settings(get_config(), target)[list_name]
     success(f"Removed '{pattern}' from the {list_name} list of profile '{target}'")
-    if pattern in effective_filter_settings(get_config(), target)[list_name]:
+    if pattern in effective_list:
         warning(
             f"'{pattern}' removed globally but still in the effective "
             f"{list_name} list — {_OVERRIDE_HINT}",
@@ -249,32 +271,24 @@ def proxy_start() -> None:
 
     manager.ensure_network(network_name)
 
-    auto_clean = bool(config.get("auto_clean", True))
-    updated = False
-    if _is_latest_tag(proxy_image):
-        info("Checking for proxy image updates…")
-        updated = manager.pull_if_newer(proxy_image)
-        if updated:
-            info("New image available — restarting proxy")
-            existing = manager.find_proxy()
-            if existing:
-                existing.remove(force=True)
-
-    # Materialize the shared global and active-profile policy bases.
-    _sync_filter_file()
+    # Materialize the shared global and active-profile policy bases first; they
+    # live on disk independent of the proxy container's lifecycle.
+    with _clean_config_errors():
+        _sync_filter_file()
 
     info("Starting proxy")
-    manager.ensure_proxy(
-        image=proxy_image,
-        db_path=db_path,
-        ca_dir=ca_dir,
-        network=network_name,
-        policy_schema="2",
-    )
-    if auto_clean:
-        # Swept last: the replaced image is only removable once the proxy
-        # container that held it has been recreated on the new one.
-        manager.clean_untagged_images()
+    try:
+        provision_proxy(
+            manager,
+            image=proxy_image,
+            db_path=db_path,
+            ca_dir=ca_dir,
+            network=network_name,
+            auto_clean=bool(config.get("auto_clean", True)),
+        )
+    except DockerClientError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     success("Proxy is running")
 
 

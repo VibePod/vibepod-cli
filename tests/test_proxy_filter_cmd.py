@@ -157,8 +157,9 @@ def test_status_rejects_invalid_configured_mode(config_dir: Path) -> None:
     )
     result = runner.invoke(app, ["proxy", "filter", "status"])
     assert result.exit_code == 1
-    assert isinstance(result.exception, ValueError)
-    assert "strict" in str(result.exception)
+    # Invalid config is surfaced as a clean error, not a raw traceback.
+    assert not isinstance(result.exception, ValueError)
+    assert "strict" in result.output
 
 
 # --- per-profile filter commands ---

@@ -81,6 +81,9 @@ class _CapturingDockerManager:
     def ensure_proxy(self, **kwargs) -> None:
         pass
 
+    def clean_untagged_images(self) -> int:
+        return 0
+
     def resolve_launch_command(self, image: str, command: list[str] | None) -> list[str]:
         # Tests that exercise init commands or a None command can mock this;
         # the happy-path tests never hit it.
@@ -1223,7 +1226,7 @@ def test_task_create_materializes_source_policy_and_wires_identity(
     }
     monkeypatch.setattr(task_cmd, "get_config", lambda: config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
-    monkeypatch.setattr(task_cmd, "new_policy_id", lambda: "2" * 32)
+    monkeypatch.setattr("vibepod.core.proxy_identity.new_policy_id", lambda: "2" * 32)
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
 
     task_cmd.task_create(agent="claude", prompt="hi", workspace=tmp_path)

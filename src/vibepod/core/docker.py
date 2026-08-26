@@ -73,6 +73,9 @@ IMAGE_NAMESPACE = "vibepod"
 # inspection (resume hints appear in the last few lines of a session).
 ATTACH_TAIL_LIMIT = 64 * 1024
 PROXY_POLICY_SCHEMA_LABEL = "io.vibepod.proxy.policy-schema"
+# The per-source policy schema this CLI speaks; a proxy image must carry the
+# matching PROXY_POLICY_SCHEMA_LABEL value.
+PROXY_POLICY_SCHEMA = "2"
 
 
 def _run_podman(podman: str, args: list[str]) -> str | None:

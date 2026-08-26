@@ -10,6 +10,7 @@ import typer
 from vibepod.constants import SUPPORTED_AGENTS
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.launch import managed_proxy_policy_ids
 from vibepod.core.profiles import (
     DEFAULT_PROFILE,
     create_profile,
@@ -49,20 +50,12 @@ def _active_profile() -> str | None:
 def _cleanup_removed_profile_policy(config: dict[str, Any]) -> None:
     """Sweep only when the complete managed-container set is available."""
     try:
-        containers = DockerManager().list_managed(all_containers=True)
+        manager = DockerManager()
     except DockerClientError:
         return
-    policy_ids = {
-        policy_id
-        for container in containers
-        if isinstance(
-            policy_id := (getattr(container, "labels", {}) or {}).get(
-                "vibepod.proxy-policy",
-            ),
-            str,
-        )
-    }
-    cleanup_orphan_policies(config, policy_ids)
+    referenced = managed_proxy_policy_ids(manager)
+    if referenced is not None:
+        cleanup_orphan_policies(config, referenced)
 
 
 @app.command("list")
