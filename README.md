@@ -110,6 +110,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/jcode.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/jcode.png" alt="Jcode" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/freebuff.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/freebuff.png" alt="Freebuff" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/qwen.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/qwen.png" alt="Qwen Code" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/dsh.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/dsh.png" alt="DeepSeek Harness" width="180" /></a>
 </p>
 
 ## Current Status
