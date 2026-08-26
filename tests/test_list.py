@@ -79,7 +79,12 @@ def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
                 _FakeContainer(
                     "vibepod-claude-1",
                     "running",
-                    {"vibepod.agent": "claude", "vibepod.workspace": "/workspace/a"},
+                    {
+                        "vibepod.agent": "claude",
+                        "vibepod.workspace": "/workspace/a",
+                        "vibepod.profile": "work",
+                        "vibepod.proxy-policy": "1" * 32,
+                    },
                 ),
                 _FakeContainer(
                     "vibepod-claude-2",
@@ -94,6 +99,11 @@ def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
             ]
 
     monkeypatch.setattr(list_cmd, "DockerManager", _FakeDockerManager)
+    monkeypatch.setattr(
+        list_cmd,
+        "resolve_container_policy",
+        lambda config, policy_id: {"mode": "allow", "allow": [], "deny": []},
+    )
 
     result = runner.invoke(app, ["list", "--running", "--json"])
     assert result.exit_code == 0
@@ -104,7 +114,44 @@ def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
     assert len(rows) == 2
     assert [row["container"] for row in rows] == ["vibepod-claude-1", "vibepod-claude-2"]
     assert {row["context"] for row in rows} == {"/workspace/a", "/workspace/b"}
-    assert all(set(row) == {"agent", "container", "context"} for row in rows)
+    assert rows[0]["profile"] == "work"
+    assert rows[0]["proxy_mode"] == "allow"
+    assert rows[1]["profile"] == "-"
+    assert rows[1]["proxy_mode"] == "-"
+    assert all(
+        set(row) == {"agent", "container", "profile", "proxy_mode", "context"} for row in rows
+    )
+
+
+def test_list_running_table_includes_profile_and_proxy_mode(monkeypatch) -> None:
+    class _Container:
+        name = "vibepod-claude-1"
+        status = "running"
+        labels = {
+            "vibepod.agent": "claude",
+            "vibepod.workspace": "/workspace/a",
+            "vibepod.profile": "work",
+            "vibepod.proxy-policy": "1" * 32,
+        }
+
+    class _Manager:
+        def list_managed(self, all_containers: bool = True):  # noqa: ARG002
+            return [_Container()]
+
+    monkeypatch.setattr(list_cmd, "DockerManager", _Manager)
+    monkeypatch.setattr(
+        list_cmd,
+        "resolve_container_policy",
+        lambda config, policy_id: {"mode": "deny", "allow": [], "deny": []},
+    )
+
+    result = runner.invoke(app, ["list", "--running"])
+
+    assert result.exit_code == 0
+    assert "PROFILE" in result.stdout
+    assert "PROXY MODE" in result.stdout
+    assert "work" in result.stdout
+    assert "deny" in result.stdout
 
 
 def test_list_json_reports_project_overlay_image(monkeypatch, tmp_path: Path) -> None:

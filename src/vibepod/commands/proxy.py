@@ -14,11 +14,10 @@ from vibepod.core.profiles import DEFAULT_PROFILE, resolve_profile
 from vibepod.core.proxy_filter import (
     VALID_MODES,
     effective_filter_settings,
+    materialize_policy_bases,
     normalize_pattern,
     profile_filter_path,
-    raw_configured_mode,
     update_profile_filter,
-    write_filter_file,
 )
 from vibepod.utils.console import error, info, success, warning
 
@@ -46,14 +45,16 @@ def _target_profile(flag: str | None) -> str:
         raise typer.Exit(1) from exc
 
 
-def _sync_filter_file() -> None:
-    """Rematerialize filter.json for the active profile (the one the proxy serves)."""
+def _sync_filter_file(profile: str | None = None) -> None:
+    """Rematerialize the global and selected-profile schema-2 bases."""
     config = get_config()
-    try:
-        active = resolve_profile(None, config)
-    except ValueError:
-        active = DEFAULT_PROFILE
-    write_filter_file(config, active)
+    target = profile
+    if target is None:
+        try:
+            target = resolve_profile(None, config)
+        except ValueError:
+            target = DEFAULT_PROFILE
+    materialize_policy_bases(config, target)
 
 
 def _uses_profile_file(profile: str) -> bool:
@@ -68,12 +69,6 @@ def _normalized(entry: object) -> str:
 _OVERRIDE_HINT = "overridden by project config (.vibepod/config.yaml) or VP_PROXY_FILTER_MODE"
 
 
-def _warn_invalid_configured_mode(config: dict[str, Any]) -> None:
-    raw = raw_configured_mode(config)
-    if raw.strip().lower() not in VALID_MODES:
-        warning(f"Invalid proxy.filter.mode '{raw}' in config; treating as 'open'")
-
-
 @filter_app.command("status")
 def filter_status(
     profile: Annotated[str | None, _PROFILE_OPTION] = None,
@@ -86,7 +81,6 @@ def filter_status(
         info(f"Profile: {target} (profile-specific filter)")
     else:
         info(f"Profile: {target} (global filter settings)")
-        _warn_invalid_configured_mode(config)
     info(f"Mode: {settings['mode']}")
     info(f"Allow list ({len(settings['allow'])}): {', '.join(settings['allow']) or '—'}")
     info(f"Deny list ({len(settings['deny'])}): {', '.join(settings['deny']) or '—'}")
@@ -115,7 +109,7 @@ def filter_mode(
         raise typer.Exit(1)
     target = _target_profile(profile)
     update_profile_filter(target, lambda f: f.update(mode=normalized))
-    _sync_filter_file()
+    _sync_filter_file(target)
     success(f"Proxy filter mode set to '{normalized}' for profile '{target}'")
     effective = effective_filter_settings(get_config(), target)
     if effective["mode"] != normalized:
@@ -150,7 +144,7 @@ def _list_add(list_name: str, host: str, profile: str | None) -> None:
     if not added:
         warning(f"'{pattern}' is already in the {list_name} list")
         return
-    _sync_filter_file()
+    _sync_filter_file(target)
     success(f"Added '{pattern}' to the {list_name} list of profile '{target}'")
     if pattern not in effective_filter_settings(get_config(), target)[list_name]:
         warning(
@@ -183,7 +177,7 @@ def _list_remove(list_name: str, host: str, profile: str | None) -> None:
     if not removed:
         warning(f"'{pattern}' is not in the {list_name} list")
         return
-    _sync_filter_file()
+    _sync_filter_file(target)
     success(f"Removed '{pattern}' from the {list_name} list of profile '{target}'")
     if pattern in effective_filter_settings(get_config(), target)[list_name]:
         warning(
@@ -266,9 +260,7 @@ def proxy_start() -> None:
             if existing:
                 existing.remove(force=True)
 
-    # Materialize filter rules so the proxy picks them up (and hand-edits to
-    # config.yaml are synced on start); write_filter_file warns on an invalid
-    # configured mode.
+    # Materialize the shared global and active-profile policy bases.
     _sync_filter_file()
 
     info("Starting proxy")
@@ -277,6 +269,7 @@ def proxy_start() -> None:
         db_path=db_path,
         ca_dir=ca_dir,
         network=network_name,
+        policy_schema="2",
     )
     if auto_clean:
         # Swept last: the replaced image is only removable once the proxy

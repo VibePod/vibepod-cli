@@ -84,8 +84,18 @@ vp proxy filter status --profile work
 ```
 
 The file is created on first write, seeded from the global filter settings.
-A profile without `filter.yaml` uses the global `proxy.filter` config. On
-`vp run`, `vp task create`, and `vp proxy start` the active profile's filter
-is materialized for the proxy, so switching profiles switches the agent
-credentials *and* the filter policy. The `default` profile keeps its filter in
-the global config, as before.
+A profile without `filter.yaml` inherits the global `proxy.filter` config and
+then any project filter captured for that launch. An explicit profile file is
+a complete replacement for the global/project base. In both cases, the
+launch-time `VP_PROXY_FILTER_MODE` value wins last.
+
+The proxy keeps one materialized profile base and a small record for each
+container. Editing a profile filter hot-reloads every running container that
+uses it, while each container retains the project and environment overrides it
+started with. This means two agents using different profiles—or different
+projects with the same inherited profile—can safely share one proxy.
+
+`vp list` shows the selected profile and live effective proxy mode for each
+running container. Removing a profile deletes its credentials, but VibePod
+retains its materialized filter while any existing container (including a
+stopped container) still references it.

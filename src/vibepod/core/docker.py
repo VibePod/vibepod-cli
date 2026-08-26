@@ -72,6 +72,7 @@ IMAGE_NAMESPACE = "vibepod"
 # How much trailing container output attach_interactive keeps for post-exit
 # inspection (resume hints appear in the last few lines of a session).
 ATTACH_TAIL_LIMIT = 64 * 1024
+PROXY_POLICY_SCHEMA_LABEL = "io.vibepod.proxy.policy-schema"
 
 
 def _run_podman(podman: str, args: list[str]) -> str | None:
@@ -402,6 +403,27 @@ class DockerManager:
             # Covers NotFound and any transient daemon error: callers treat a
             # missing id as "no confirmed image", never as a failure to report.
             return None
+
+    def require_proxy_policy_schema(self, image: str | Any, required: str = "2") -> None:
+        """Require an exact per-source policy schema label on a proxy image."""
+        image_name = image if isinstance(image, str) else "the running proxy image"
+        try:
+            inspected = self.client.images.get(image) if isinstance(image, str) else image
+            attrs = inspected.attrs
+            config = attrs.get("Config", {}) if isinstance(attrs, dict) else {}
+            labels = config.get("Labels", {}) if isinstance(config, dict) else {}
+            actual = labels.get(PROXY_POLICY_SCHEMA_LABEL) if isinstance(labels, dict) else None
+        except (AttributeError, DockerException) as exc:
+            raise DockerClientError(
+                f"Proxy image {image_name} could not be inspected for policy schema {required}",
+            ) from exc
+        if actual != required:
+            shown = actual if isinstance(actual, str) and actual else "missing"
+            raise DockerClientError(
+                f"Proxy image {image_name} is incompatible: required policy schema {required}, "
+                f"found {shown}. Use an updated VibePod proxy image or add "
+                f"the label {PROXY_POLICY_SCHEMA_LABEL}={required} to a compatible custom image.",
+            )
 
     def build_image(
         self,
@@ -813,10 +835,19 @@ class DockerManager:
         )
         return containers[0] if containers else None
 
-    def ensure_proxy(self, image: str, db_path: Path, ca_dir: Path, network: str) -> Any:
+    def ensure_proxy(
+        self,
+        image: str,
+        db_path: Path,
+        ca_dir: Path,
+        network: str,
+        policy_schema: str | None = None,
+    ) -> Any:
         existing = self.find_proxy()
         if existing:
             if existing.status == "running":
+                if policy_schema is not None:
+                    self.require_proxy_policy_schema(existing.image, policy_schema)
                 return existing
             existing.remove(force=True)
 
@@ -825,6 +856,9 @@ class DockerManager:
                 self.client.images.get(image)
             except NotFound:
                 self.pull_image(image)
+
+        if policy_schema is not None:
+            self.require_proxy_policy_schema(image, policy_schema)
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         ca_dir.mkdir(parents=True, exist_ok=True)

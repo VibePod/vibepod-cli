@@ -14,6 +14,7 @@ from vibepod.core.agents import effective_agent_image, get_agent_shortcut
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager
 from vibepod.core.launch import overlay_enabled
+from vibepod.core.proxy_filter import resolve_container_policy
 from vibepod.utils.console import console, error
 
 
@@ -30,7 +31,7 @@ def _configured_agent_rows() -> list[dict[str, str]]:
     return rows
 
 
-def _running_rows(containers: list[Any]) -> list[dict[str, str]]:
+def _running_rows(containers: list[Any], config: dict[str, Any]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for container in containers:
         labels = getattr(container, "labels", {}) or {}
@@ -38,10 +39,22 @@ def _running_rows(containers: list[Any]) -> list[dict[str, str]]:
         status = getattr(container, "status", "-")
         if not agent or status != "running":
             continue
+        profile = labels.get("vibepod.profile", "-")
+        policy_id = labels.get("vibepod.proxy-policy")
+        proxy_mode = "-"
+        if policy_id:
+            try:
+                settings = resolve_container_policy(config, policy_id)
+                mode = settings.get("mode")
+                proxy_mode = mode if isinstance(mode, str) else "unavailable"
+            except (OSError, ValueError):
+                proxy_mode = "unavailable"
         rows.append(
             {
                 "agent": agent,
                 "container": getattr(container, "name", "-"),
+                "profile": profile,
+                "proxy_mode": proxy_mode,
                 "context": labels.get("vibepod.workspace", "-"),
             },
         )
@@ -124,7 +137,8 @@ def list_agents(
         manager = None
         containers = []
 
-    running_rows = _running_rows(containers)
+    config = get_config()
+    running_rows = _running_rows(containers, config)
     configured_rows = _configured_agent_rows()
     overlay_rows = [] if running else _overlay_rows(manager)
 
@@ -141,11 +155,19 @@ def list_agents(
     running_table = Table(title="Running Agents", title_justify="left")
     running_table.add_column("AGENT", style="cyan")
     running_table.add_column("CONTAINER", style="magenta")
+    running_table.add_column("PROFILE")
+    running_table.add_column("PROXY MODE")
     running_table.add_column("CONTEXT")
 
     if running_rows:
         for row in running_rows:
-            running_table.add_row(row["agent"], row["container"], row["context"])
+            running_table.add_row(
+                row["agent"],
+                row["container"],
+                row["profile"],
+                row["proxy_mode"],
+                row["context"],
+            )
         console.print(running_table)
     else:
         console.print("No running agents.")

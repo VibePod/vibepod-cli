@@ -126,7 +126,7 @@ def test_mode_warns_when_project_config_overrides(config_dir: Path) -> None:
 
     assert result.exit_code == 0
     assert "overridden" in result.stdout
-    assert _filter_json(config_dir)["mode"] == "deny"
+    assert _filter_json(config_dir)["mode"] == "allow"
 
 
 def test_mode_warns_when_env_overrides(config_dir: Path, monkeypatch) -> None:
@@ -136,7 +136,7 @@ def test_mode_warns_when_env_overrides(config_dir: Path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "overridden" in result.stdout
-    assert _filter_json(config_dir)["mode"] == "deny"
+    assert _filter_json(config_dir)["mode"] == "allow"
 
 
 def test_add_warns_when_project_config_overrides(config_dir: Path) -> None:
@@ -148,17 +148,17 @@ def test_add_warns_when_project_config_overrides(config_dir: Path) -> None:
 
     assert result.exit_code == 0
     assert "overridden" in result.stdout
-    assert _filter_json(config_dir)["allow"] == []
+    assert _filter_json(config_dir)["allow"] == ["a.com"]
 
 
-def test_status_warns_on_invalid_configured_mode(config_dir: Path) -> None:
+def test_status_rejects_invalid_configured_mode(config_dir: Path) -> None:
     (config_dir / "config.yaml").write_text(
         f"proxy:\n  db_path: {config_dir / 'proxy' / 'proxy.db'}\n  filter:\n    mode: strict\n",
     )
     result = runner.invoke(app, ["proxy", "filter", "status"])
-    assert result.exit_code == 0
-    assert "strict" in result.stdout
-    assert "open" in result.stdout
+    assert result.exit_code == 1
+    assert isinstance(result.exception, ValueError)
+    assert "strict" in str(result.exception)
 
 
 # --- per-profile filter commands ---
@@ -191,7 +191,11 @@ def test_filter_mode_targets_active_profile(work_profile: Path) -> None:
     result = runner.invoke(app, ["proxy", "filter", "mode", "allow"])
     assert result.exit_code == 0
     assert _work_filter(work_profile)["mode"] == "allow"
-    assert _filter_json(work_profile)["mode"] == "allow"
+    assert _filter_json(work_profile)["mode"] == "open"
+    materialized = json.loads(
+        (work_profile / "proxy" / "policies" / "profiles" / "work.json").read_text(),
+    )
+    assert materialized["mode"] == "allow"
 
 
 def test_allow_add_with_profile(work_profile: Path) -> None:

@@ -2598,9 +2598,9 @@ def test_run_dsh_prints_preview_warning_and_web_ui_url(monkeypatch, tmp_path: Pa
     assert any("http://127.0.0.1:3080" in msg for msg in successes)
 
 
-def test_run_materializes_proxy_filter_file(monkeypatch, tmp_path: Path) -> None:
-    """Configured filter rules must reach the proxy even without vp proxy start."""
-    filter_calls: list[dict] = []
+def test_run_materializes_source_policy_and_wires_identity(monkeypatch, tmp_path: Path) -> None:
+    """A proxied run receives a launch policy, identity, labels, and source binding."""
+    captured: dict[str, dict] = {}
 
     class _ProxyDockerManager:
         def ensure_network(self, name: str) -> None:
@@ -2613,9 +2613,10 @@ def test_run_materializes_proxy_filter_file(monkeypatch, tmp_path: Path) -> None
             pass
 
         def ensure_proxy(self, **kwargs) -> None:  # type: ignore[no-untyped-def]
-            pass
+            captured["proxy"] = kwargs
 
         def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
+            captured["run"] = kwargs
             return type(
                 "_Container",
                 (),
@@ -2623,7 +2624,11 @@ def test_run_materializes_proxy_filter_file(monkeypatch, tmp_path: Path) -> None
                     "name": "vibepod-claude-test",
                     "id": "abc123",
                     "status": "running",
-                    "attrs": {"NetworkSettings": {"Networks": {}}},
+                    "attrs": {
+                        "NetworkSettings": {
+                            "Networks": {"vibepod-network": {"IPAddress": "172.18.0.3"}},
+                        },
+                    },
                     "reload": lambda self: None,
                     "labels": {},
                     "logs": lambda self, **kw: b"",
@@ -2638,15 +2643,23 @@ def test_run_materializes_proxy_filter_file(monkeypatch, tmp_path: Path) -> None
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", _ProxyDockerManager)
-    monkeypatch.setattr(
-        run_cmd,
-        "write_filter_file",
-        lambda cfg, profile=None: filter_calls.append(cfg),
-    )
+    monkeypatch.setattr(run_cmd, "new_policy_id", lambda: "1" * 32)
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 
-    assert filter_calls == [config]
+    assert captured["proxy"]["policy_schema"] == "2"
+    assert captured["run"]["env"]["HTTP_PROXY"].startswith(f"http://vp-{'1' * 32}:")
+    assert captured["run"]["env"]["HTTPS_PROXY"] == captured["run"]["env"]["HTTP_PROXY"]
+    assert captured["run"]["extra_labels"]["vibepod.profile"] == "default"
+    assert captured["run"]["extra_labels"]["vibepod.proxy-policy"] == "1" * 32
+    record = json.loads(
+        (tmp_path / "proxy" / "policies" / "containers" / f"{'1' * 32}.json").read_text(),
+    )
+    assert record["profile"] == "default"
+    mapping = json.loads((tmp_path / "proxy" / "containers.json").read_text())
+    assert mapping["172.18.0.3"]["policy_id"] == "1" * 32
+    assert mapping["172.18.0.3"]["profile"] == "default"
 
 
 def test_run_recreates_proxy_when_image_updated(monkeypatch, tmp_path: Path) -> None:
@@ -2700,7 +2713,9 @@ def test_run_recreates_proxy_when_image_updated(monkeypatch, tmp_path: Path) -> 
     }
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", _UpdatingDockerManager)
-    monkeypatch.setattr(run_cmd, "write_filter_file", lambda cfg, profile=None: None)
+    monkeypatch.setattr(run_cmd, "materialize_policy_bases", lambda cfg, profile: [])
+    monkeypatch.setattr(run_cmd, "materialize_container_policy", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run_cmd, "new_policy_id", lambda: "3" * 32)
 
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True)
 

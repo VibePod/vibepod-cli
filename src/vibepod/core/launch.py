@@ -347,12 +347,36 @@ def get_container_ip(container: Any, network: str) -> str | None:
         return None
 
 
+def managed_proxy_policy_ids(manager: Any) -> set[str] | None:
+    """Return policy IDs on all existing managed containers, or None if unknowable."""
+    lister = getattr(manager, "list_managed", None)
+    if not callable(lister):
+        return None
+    try:
+        containers = lister(all_containers=True)
+    except DockerClientError:
+        return None
+    return {
+        policy_id
+        for container in containers
+        if isinstance(
+            policy_id := (getattr(container, "labels", {}) or {}).get(
+                "vibepod.proxy-policy",
+            ),
+            str,
+        )
+    }
+
+
 def update_container_mapping(
     mapping_path: Path,
     ip: str,
     container_id: str,
     container_name: str,
     agent: str,
+    *,
+    policy_id: str | None = None,
+    profile: str | None = None,
 ) -> bool:
     """Merge a new IP→container entry into containers.json atomically."""
     mapping: dict[str, dict[str, str]] = {}
@@ -363,12 +387,17 @@ def update_container_mapping(
             except (json.JSONDecodeError, OSError):
                 pass
 
-        mapping[ip] = {
+        entry = {
             "container_id": container_id,
             "container_name": container_name,
             "agent": agent,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
+        if policy_id is not None:
+            entry["policy_id"] = policy_id
+        if profile is not None:
+            entry["profile"] = profile
+        mapping[ip] = entry
 
         tmp_path = mapping_path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(mapping, indent=2))

@@ -354,9 +354,23 @@ vp proxy filter deny add example.com
 vp proxy filter mode open        # back to no filtering; lists are kept
 ```
 
-Changes apply immediately — the running proxy hot-reloads the rules, no
-restart needed. Blocked requests return `403` (HTTPS tunnels are refused at
-`CONNECT`) and are logged with `blocked = 1` in the proxy database.
+One shared proxy evaluates a separate policy for every VibePod agent container.
+Each launch receives an opaque policy identity and is also bound to its source
+container after startup. This prevents a later launch from replacing the rules
+of an already-running agent. Unidentified clients continue to use the global
+filter.
+
+Profile changes apply immediately to every running container using that
+profile—no proxy restart is needed. Project filter settings and
+`VP_PROXY_FILTER_MODE` are captured when each container starts, so changing
+either affects new launches only. The effective profile and live mode are shown
+by `vp list` in the `PROFILE` and `PROXY MODE` columns and in its JSON rows as
+`profile` and `proxy_mode`.
+
+Blocked requests return `403` (HTTPS tunnels are refused at `CONNECT`) and are
+logged with `blocked = 1` in the proxy database. Invalid policy configuration
+is rejected instead of silently falling back to `open`; an identified launch
+whose policy files are missing or malformed fails closed.
 
 The `vp proxy filter` commands act on the **active profile**. For the
 `default` profile they write the global config; for a named profile they write
@@ -367,5 +381,22 @@ write), so switching profiles also switches the filter mode and lists. Pass
 A project-level `.vibepod/config.yaml` filter section or
 `VP_PROXY_FILTER_MODE` takes precedence over the global values (for a profile
 with its own `filter.yaml`, only `VP_PROXY_FILTER_MODE` still overrides the
-mode); when that masks a change the command warns and the materialized rules
-keep the effective (overriding) settings.
+mode). Project and environment overrides are launch-specific and never replace
+the shared global fallback.
+
+Custom proxy images must implement per-source policies and expose this exact
+OCI image label:
+
+```dockerfile
+LABEL io.vibepod.proxy.policy-schema="2"
+```
+
+VibePod checks the configured image—and an already-running proxy—before
+launching a proxied agent. An image with a missing or different schema label is
+rejected with an upgrade error.
+
+!!! warning "Filtering is not a network sandbox"
+    The filter controls requests that use the injected proxy. A container can
+    override its proxy environment or attempt a direct connection unless a
+    separate network-control layer prevents that. VibePod warns when explicit
+    `HTTP_PROXY` or `HTTPS_PROXY` values bypass its identified proxy URL.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -1205,13 +1206,15 @@ def test_task_create_dsh_keeps_user_extra_ports(monkeypatch, tmp_path, tmp_task_
     assert any(key.split("/", 1)[0] == "9999" for key in ports)
 
 
-def test_task_create_materializes_proxy_filter_file(
+def test_task_create_materializes_source_policy_and_wires_identity(
     monkeypatch,
     tmp_path,
     tmp_task_store,
 ) -> None:
-    """Configured filter rules must reach the proxy even without vp proxy start."""
-    filter_calls: list[dict] = []
+    """A proxied task receives a launch policy, identity, labels, and schema check."""
+    stub = _CapturingDockerManager()
+    proxy_calls: list[dict] = []
+    stub.ensure_proxy = lambda **kwargs: proxy_calls.append(kwargs)  # type: ignore[method-assign]
     config = _make_config()
     config["proxy"] = {
         "enabled": True,
@@ -1219,13 +1222,18 @@ def test_task_create_materializes_proxy_filter_file(
         "db_path": str(tmp_path / "proxy" / "proxy.db"),
     }
     monkeypatch.setattr(task_cmd, "get_config", lambda: config)
-    monkeypatch.setattr(task_cmd, "DockerManager", _CapturingDockerManager)
-    monkeypatch.setattr(
-        task_cmd,
-        "write_filter_file",
-        lambda cfg, profile=None: filter_calls.append(cfg),
-    )
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(task_cmd, "new_policy_id", lambda: "2" * 32)
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
 
     task_cmd.task_create(agent="claude", prompt="hi", workspace=tmp_path)
 
-    assert filter_calls == [config]
+    assert proxy_calls[0]["policy_schema"] == "2"
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["env"]["HTTP_PROXY"].startswith(f"http://vp-{'2' * 32}:")
+    assert stub.run_kwargs["extra_labels"]["vibepod.profile"] == "default"
+    assert stub.run_kwargs["extra_labels"]["vibepod.proxy-policy"] == "2" * 32
+    record = json.loads(
+        (tmp_path / "proxy" / "policies" / "containers" / f"{'2' * 32}.json").read_text(),
+    )
+    assert record["profile"] == "default"

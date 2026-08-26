@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import yaml
 
 from vibepod.core import proxy_filter as pf
 from vibepod.core.config import get_config
+from vibepod.core.proxy_identity import identified_proxy_url, new_policy_id
 
 
 def test_normalize_pattern_lowercases_and_strips() -> None:
@@ -33,9 +35,16 @@ def test_get_filter_settings_defaults_open() -> None:
     assert pf.get_filter_settings({}) == {"mode": "open", "allow": [], "deny": []}
 
 
-def test_get_filter_settings_coerces_invalid_mode() -> None:
+def test_get_filter_settings_rejects_invalid_mode() -> None:
     config = {"proxy": {"filter": {"mode": "strict", "allow": ["a.com"], "deny": []}}}
-    assert pf.get_filter_settings(config)["mode"] == "open"
+    with pytest.raises(ValueError, match="strict"):
+        pf.get_filter_settings(config)
+
+
+def test_get_filter_settings_rejects_non_string_pattern() -> None:
+    config = {"proxy": {"filter": {"mode": "deny", "allow": [], "deny": [123]}}}
+    with pytest.raises(ValueError, match="strings"):
+        pf.get_filter_settings(config)
 
 
 def test_get_filter_settings_passes_valid_config() -> None:
@@ -128,19 +137,16 @@ def test_update_global_filter_refuses_non_mapping_config(monkeypatch, tmp_path: 
     assert yaml.safe_load((tmp_path / "config.yaml").read_text()) == ["just", "a", "list"]
 
 
-def test_write_filter_file_warns_on_invalid_mode(tmp_path: Path, capsys) -> None:
-    """Every startup path materializes; the fail-open coercion must be visible."""
+def test_write_filter_file_rejects_invalid_mode(tmp_path: Path) -> None:
     config = {
         "proxy": {
             "db_path": str(tmp_path / "proxy" / "proxy.db"),
             "filter": {"mode": "alow", "allow": [], "deny": []},
         },
     }
-    path = pf.write_filter_file(config)
-    assert json.loads(path.read_text())["mode"] == "open"
-    out = capsys.readouterr().out
-    assert "alow" in out
-    assert "open" in out
+    with pytest.raises(ValueError, match="alow"):
+        pf.write_filter_file(config)
+    assert not (tmp_path / "proxy" / "filter.json").exists()
 
 
 def test_atomic_write_preserves_symlinked_config(monkeypatch, tmp_path: Path) -> None:
@@ -249,3 +255,133 @@ def test_write_filter_file_materializes_profile_settings(profile_env: Path) -> N
         "allow": ["api.anthropic.com"],
         "deny": [],
     }
+
+
+def test_policy_identity_is_random_hex_and_builds_proxy_url() -> None:
+    first = new_policy_id()
+    second = new_policy_id()
+    assert first != second
+    assert re.fullmatch(r"[0-9a-f]{32}", first)
+    assert identified_proxy_url(first) == f"http://vp-{first}:vibepod@vibepod-proxy:8080"
+
+
+def test_materialize_container_policy_captures_project_and_environment(
+    profile_env: Path,
+    monkeypatch,
+) -> None:
+    workspace = profile_env / "project"
+    project_config = workspace / ".vibepod" / "config.yaml"
+    project_config.parent.mkdir(parents=True)
+    project_config.write_text("proxy:\n  filter:\n    mode: deny\n    deny: [example.com]\n")
+    monkeypatch.setenv("VP_PROXY_FILTER_MODE", "allow")
+    config = {
+        "proxy": {
+            "db_path": str(profile_env / "proxy" / "proxy.db"),
+            "filter": {"mode": "allow", "allow": ["api.anthropic.com"], "deny": []},
+        },
+    }
+    policy_id = "1" * 32
+
+    path = pf.materialize_container_policy(
+        config,
+        profile="work",
+        workspace=workspace,
+        policy_id=policy_id,
+    )
+
+    assert json.loads(path.read_text()) == {
+        "version": 2,
+        "policy_id": policy_id,
+        "profile": "work",
+        "project_filter": {"mode": "deny", "deny": ["example.com"]},
+        "env_mode": "allow",
+    }
+
+
+def test_materialized_profile_hot_reload_preserves_container_env_override(
+    profile_env: Path,
+    monkeypatch,
+) -> None:
+    profile_path = profile_env / "profiles" / "work" / "filter.yaml"
+    profile_path.write_text("mode: allow\nallow: [api.anthropic.com]\ndeny: []\n")
+    monkeypatch.setenv("VP_PROXY_FILTER_MODE", "deny")
+    config = {
+        "proxy": {
+            "db_path": str(profile_env / "proxy" / "proxy.db"),
+            "filter": {"mode": "open", "allow": [], "deny": []},
+        },
+    }
+    policy_id = "2" * 32
+    pf.materialize_policy_bases(config, "work")
+    pf.materialize_container_policy(
+        config,
+        profile="work",
+        workspace=profile_env,
+        policy_id=policy_id,
+    )
+    assert pf.resolve_container_policy(config, policy_id)["mode"] == "deny"
+
+    profile_path.write_text("mode: open\nallow: []\ndeny: []\n")
+    pf.materialize_policy_bases(config, "work")
+
+    assert pf.resolve_container_policy(config, policy_id) == {
+        "mode": "deny",
+        "allow": [],
+        "deny": [],
+    }
+
+
+def test_cleanup_orphan_policies_keeps_existing_container_and_referenced_profile(
+    profile_env: Path,
+) -> None:
+    config = {"proxy": {"db_path": str(profile_env / "proxy" / "proxy.db")}}
+    kept_id = "4" * 32
+    orphan_id = "5" * 32
+    containers_dir = profile_env / "proxy" / "policies" / "containers"
+    profiles_dir = profile_env / "proxy" / "policies" / "profiles"
+    containers_dir.mkdir(parents=True)
+    profiles_dir.mkdir(parents=True)
+    (containers_dir / f"{kept_id}.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "policy_id": kept_id,
+                "profile": "removed-work",
+                "project_filter": None,
+                "env_mode": None,
+            },
+        ),
+    )
+    (containers_dir / f"{orphan_id}.json").write_text("{}")
+    (profiles_dir / "removed-work.json").write_text("{}")
+    (profiles_dir / "unused.json").write_text("{}")
+
+    removed = pf.cleanup_orphan_policies(config, {kept_id})
+
+    assert removed == {"containers": 1, "profiles": 1}
+    assert (containers_dir / f"{kept_id}.json").exists()
+    assert not (containers_dir / f"{orphan_id}.json").exists()
+    assert (profiles_dir / "removed-work.json").exists()
+    assert not (profiles_dir / "unused.json").exists()
+
+
+def test_resolver_rejects_profile_path_traversal(profile_env: Path) -> None:
+    config = {"proxy": {"db_path": str(profile_env / "proxy" / "proxy.db")}}
+    policy_id = "7" * 32
+    pf.materialize_policy_bases(config, "default")
+    path = pf.container_policy_path(config, policy_id)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "policy_id": policy_id,
+                "profile": "../../outside",
+                "project_filter": None,
+                "env_mode": None,
+            },
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Invalid profile name"):
+        pf.resolve_container_policy(config, policy_id)
