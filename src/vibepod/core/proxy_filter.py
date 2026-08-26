@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 
 from vibepod.core.config import (
     _default_config,
@@ -24,6 +28,11 @@ from vibepod.core.proxy_identity import validate_policy_id
 
 POLICY_SCHEMA = 2
 VALID_MODES = ("open", "allow", "deny")
+
+# A launch writes its container policy record before its container exists, so a
+# concurrent cleanup must not delete a record younger than this window or it
+# would strand the still-starting agent with no policy (failing closed).
+_ORPHAN_GRACE_SECONDS = 60.0
 
 _PATTERN_RE = re.compile(
     r"^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$",
@@ -71,15 +80,6 @@ def get_filter_settings(config: dict[str, Any]) -> dict[str, Any]:
         "allow": _patterns(filter_cfg.get("allow", []), "allow"),
         "deny": _patterns(filter_cfg.get("deny", []), "deny"),
     }
-
-
-def raw_configured_mode(config: dict[str, Any]) -> str:
-    """Return the configured mode as written, before fail-open coercion."""
-    proxy_cfg = config.get("proxy", {})
-    filter_cfg = proxy_cfg.get("filter", {}) if isinstance(proxy_cfg, dict) else {}
-    if not isinstance(filter_cfg, dict):
-        return "open"
-    return str(filter_cfg.get("mode", "open"))
 
 
 def get_filter_file_path(config: dict[str, Any]) -> Path:
@@ -160,6 +160,10 @@ def update_profile_filter(
     data: dict[str, Any]
     if path.exists():
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if raw is not None and not isinstance(raw, dict):
+            raise ValueError(
+                f"Profile filter at {path} is not a YAML mapping; refusing to rewrite it",
+            )
         data = raw if isinstance(raw, dict) else {}
     else:
         data = get_filter_settings(_load_yaml(get_global_config_path()))
@@ -167,15 +171,6 @@ def update_profile_filter(
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_text(path, yaml.safe_dump(data, sort_keys=False))
     return data
-
-
-def write_filter_file(config: dict[str, Any], profile: str = DEFAULT_PROFILE) -> Path:
-    """Materialize filter settings into the proxy data dir (hot-reloaded by the proxy)."""
-    path = get_filter_file_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    settings = effective_filter_settings(config, profile)
-    _atomic_write_text(path, json.dumps(settings, indent=2) + "\n")
-    return path
 
 
 def _normalize_mode(raw: Any, source: str = "proxy.filter.mode") -> str:
@@ -237,8 +232,9 @@ def materialize_policy_bases(config: dict[str, Any], profile: str) -> list[Path]
     target = materialized_profile_path(config, profile)
     profile_filter = _load_profile_filter(profile)
     if profile_filter is None:
-        if target.exists():
-            target.unlink()
+        # No source filter.yaml: leave any existing materialized base in place.
+        # A still-running container may reference it, and reference-aware
+        # deletion is cleanup_orphan_policies' job, not this hot path's.
         return written
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -355,11 +351,21 @@ def cleanup_orphan_policies(
     removed_containers = 0
     referenced_profiles: set[str] = set()
     unknown_reference = False
+    now = time.time()
 
     if containers_dir.exists():
         for path in containers_dir.glob("*.json"):
             policy_id = path.stem
-            if policy_id not in referenced_policy_ids:
+            keep = policy_id in referenced_policy_ids
+            if not keep:
+                try:
+                    age = now - path.stat().st_mtime
+                except OSError:
+                    continue
+                # A record younger than the grace window may belong to a
+                # concurrent launch whose container has not been created yet.
+                keep = age < _ORPHAN_GRACE_SECONDS
+            if not keep:
                 path.unlink(missing_ok=True)
                 removed_containers += 1
                 continue
@@ -390,23 +396,41 @@ def cleanup_orphan_policies(
     return {"containers": removed_containers, "profiles": removed_profiles}
 
 
+def _roundtrip_yaml() -> YAML:
+    """A round-trip YAML handler that keeps comments, anchors, and quoting."""
+    handler = YAML()
+    handler.preserve_quotes = True
+    return handler
+
+
 def update_global_filter(mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
-    """Apply *mutate* to proxy.filter in the global config.yaml and save it."""
+    """Apply *mutate* to proxy.filter in the global config.yaml and save it.
+
+    The file is edited via a round-trip loader so a user's comments, anchors,
+    and formatting survive a filter change.
+    """
     path = get_global_config_path()
+    handler = _roundtrip_yaml()
+    data: Any = None
     if path.exists():
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if raw is not None and not isinstance(raw, dict):
-            raise ValueError(
-                f"Global config at {path} is not a YAML mapping; refusing to rewrite it",
-            )
-    data = _load_yaml(path)
-    proxy_cfg = data.setdefault("proxy", {})
+        text = path.read_text(encoding="utf-8")
+        if text.strip():
+            data = handler.load(text)
+            if not isinstance(data, dict):
+                raise ValueError(
+                    f"Global config at {path} is not a YAML mapping; refusing to rewrite it",
+                )
+    if data is None:
+        data = CommentedMap()
+    proxy_cfg = data.setdefault("proxy", CommentedMap())
     if not isinstance(proxy_cfg, dict):
         raise ValueError("Config key 'proxy' must be a mapping")
-    filter_cfg = proxy_cfg.setdefault("filter", {})
+    filter_cfg = proxy_cfg.setdefault("filter", CommentedMap())
     if not isinstance(filter_cfg, dict):
         raise ValueError("Config key 'proxy.filter' must be a mapping")
     mutate(filter_cfg)
     path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_text(path, yaml.safe_dump(data, sort_keys=False))
+    buffer = io.StringIO()
+    handler.dump(data, buffer)
+    _atomic_write_text(path, buffer.getvalue())
     return filter_cfg

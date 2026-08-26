@@ -20,6 +20,7 @@ dependencies = [
     "rich>=13.0.0",
     "docker>=7.0.0",
     "pyyaml>=6.0.0",
+    "ruamel.yaml>=0.18.0",
     "platformdirs>=4.0.0",
     "tomli>=2.0.1; python_version < '3.11'",
 ]

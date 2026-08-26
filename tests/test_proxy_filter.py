@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -56,22 +57,6 @@ def test_get_filter_settings_passes_valid_config() -> None:
     }
 
 
-def test_write_filter_file_materializes_next_to_db(tmp_path: Path) -> None:
-    config = {
-        "proxy": {
-            "db_path": str(tmp_path / "proxy" / "proxy.db"),
-            "filter": {"mode": "deny", "allow": [], "deny": ["example.com"]},
-        },
-    }
-    path = pf.write_filter_file(config)
-    assert path == tmp_path / "proxy" / "filter.json"
-    assert json.loads(path.read_text()) == {
-        "mode": "deny",
-        "allow": [],
-        "deny": ["example.com"],
-    }
-
-
 def test_update_global_filter_writes_config_yaml(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
     pf.update_global_filter(lambda f: f.update(mode="allow"))
@@ -89,6 +74,22 @@ def test_update_global_filter_preserves_other_keys(monkeypatch, tmp_path: Path) 
     assert data["proxy"]["filter"]["allow"] == ["a.com"]
 
 
+def test_update_global_filter_preserves_comments(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "# top-level note kept\n"
+        "default_agent: gemini  # inline note kept\n"
+        "proxy:\n"
+        "  filter:\n"
+        "    mode: open\n",
+    )
+    pf.update_global_filter(lambda f: f.update(mode="allow"))
+    text = (tmp_path / "config.yaml").read_text()
+    assert "# top-level note kept" in text
+    assert "# inline note kept" in text
+    assert yaml.safe_load(text)["proxy"]["filter"]["mode"] == "allow"
+
+
 def test_default_config_has_open_filter(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
     monkeypatch.chdir(tmp_path)
@@ -104,15 +105,14 @@ def test_env_overrides_filter_mode(monkeypatch, tmp_path: Path) -> None:
     assert config["proxy"]["filter"]["mode"] == "deny"
 
 
-def test_write_filter_file_is_atomic(monkeypatch, tmp_path: Path) -> None:
+def test_materialized_global_base_is_atomic(monkeypatch, tmp_path: Path) -> None:
     """No truncate-then-write: replace so hot-reload readers never see partials."""
-    config = {
-        "proxy": {
-            "db_path": str(tmp_path / "proxy" / "proxy.db"),
-            "filter": {"mode": "deny", "allow": [], "deny": ["example.com"]},
-        },
-    }
-    pf.write_filter_file(config)
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "proxy:\n  filter:\n    mode: deny\n    deny: [example.com]\n",
+    )
+    config = {"proxy": {"db_path": str(tmp_path / "proxy" / "proxy.db")}}
+    pf.materialize_policy_bases(config, "default")
 
     calls: list[tuple[Path, Path]] = []
     real_replace = pf.os.replace
@@ -122,7 +122,8 @@ def test_write_filter_file_is_atomic(monkeypatch, tmp_path: Path) -> None:
         real_replace(src, dst)
 
     monkeypatch.setattr(pf.os, "replace", spy_replace)
-    path = pf.write_filter_file(config)
+    pf.materialize_policy_bases(config, "default")
+    path = pf.get_filter_file_path(config).resolve()
     assert calls and calls[-1][1] == path
     assert json.loads(path.read_text())["mode"] == "deny"
     assert list(path.parent.glob(f".{path.name}.*")) == []
@@ -135,18 +136,6 @@ def test_update_global_filter_refuses_non_mapping_config(monkeypatch, tmp_path: 
     with pytest.raises(ValueError):
         pf.update_global_filter(lambda f: f.update(mode="allow"))
     assert yaml.safe_load((tmp_path / "config.yaml").read_text()) == ["just", "a", "list"]
-
-
-def test_write_filter_file_rejects_invalid_mode(tmp_path: Path) -> None:
-    config = {
-        "proxy": {
-            "db_path": str(tmp_path / "proxy" / "proxy.db"),
-            "filter": {"mode": "alow", "allow": [], "deny": []},
-        },
-    }
-    with pytest.raises(ValueError, match="alow"):
-        pf.write_filter_file(config)
-    assert not (tmp_path / "proxy" / "filter.json").exists()
 
 
 def test_atomic_write_preserves_symlinked_config(monkeypatch, tmp_path: Path) -> None:
@@ -237,24 +226,6 @@ def test_update_profile_filter_default_updates_global(profile_env: Path) -> None
     pf.update_profile_filter("default", lambda f: f.update(mode="deny"))
     data = yaml.safe_load((profile_env / "config.yaml").read_text())
     assert data["proxy"]["filter"]["mode"] == "deny"
-
-
-def test_write_filter_file_materializes_profile_settings(profile_env: Path) -> None:
-    (profile_env / "profiles" / "work" / "filter.yaml").write_text(
-        yaml.safe_dump({"mode": "allow", "allow": ["api.anthropic.com"], "deny": []}),
-    )
-    config = {
-        "proxy": {
-            "db_path": str(profile_env / "proxy" / "proxy.db"),
-            "filter": {"mode": "deny", "deny": ["example.com"]},
-        },
-    }
-    path = pf.write_filter_file(config, profile="work")
-    assert json.loads(path.read_text()) == {
-        "mode": "allow",
-        "allow": ["api.anthropic.com"],
-        "deny": [],
-    }
 
 
 def test_policy_identity_is_random_hex_and_builds_proxy_url() -> None:
@@ -352,7 +323,10 @@ def test_cleanup_orphan_policies_keeps_existing_container_and_referenced_profile
             },
         ),
     )
-    (containers_dir / f"{orphan_id}.json").write_text("{}")
+    orphan_path = containers_dir / f"{orphan_id}.json"
+    orphan_path.write_text("{}")
+    # A real orphan predates the grace window that protects in-flight launches.
+    _age(orphan_path)
     (profiles_dir / "removed-work.json").write_text("{}")
     (profiles_dir / "unused.json").write_text("{}")
 
@@ -363,6 +337,70 @@ def test_cleanup_orphan_policies_keeps_existing_container_and_referenced_profile
     assert not (containers_dir / f"{orphan_id}.json").exists()
     assert (profiles_dir / "removed-work.json").exists()
     assert not (profiles_dir / "unused.json").exists()
+
+
+def _age(path: Path, seconds: float = 3600.0) -> None:
+    """Backdate a file's mtime so grace-window logic treats it as settled."""
+    stat = path.stat()
+    os.utime(path, (stat.st_atime - seconds, stat.st_mtime - seconds))
+
+
+def test_update_profile_filter_refuses_non_mapping_file(profile_env: Path) -> None:
+    path = profile_env / "profiles" / "work" / "filter.yaml"
+    path.write_text("- a.com\n- b.com\n")
+    with pytest.raises(ValueError, match="mapping"):
+        pf.update_profile_filter("work", lambda f: f.update(mode="allow"))
+    assert path.read_text() == "- a.com\n- b.com\n"
+
+
+def test_materialize_policy_bases_retains_base_without_source_file(
+    profile_env: Path,
+) -> None:
+    """A removed profile's materialized base survives while a container references it."""
+    config = {"proxy": {"db_path": str(profile_env / "proxy" / "proxy.db")}}
+    base = pf.materialized_profile_path(config, "work")
+    base.parent.mkdir(parents=True)
+    base.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "profile": "work",
+                "mode": "allow",
+                "allow": ["api.anthropic.com"],
+                "deny": [],
+            },
+        ),
+    )
+    # 'work' has no filter.yaml (it was removed); re-materializing must not wipe it.
+    pf.materialize_policy_bases(config, "work")
+    assert base.exists()
+
+
+def test_cleanup_orphan_policies_retains_recent_unreferenced_record(
+    profile_env: Path,
+) -> None:
+    """A just-written record for a launch whose container isn't listed yet is kept."""
+    config = {"proxy": {"db_path": str(profile_env / "proxy" / "proxy.db")}}
+    fresh_id = "8" * 32
+    containers_dir = profile_env / "proxy" / "policies" / "containers"
+    containers_dir.mkdir(parents=True)
+    fresh_path = containers_dir / f"{fresh_id}.json"
+    fresh_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "policy_id": fresh_id,
+                "profile": "default",
+                "project_filter": None,
+                "env_mode": None,
+            },
+        ),
+    )
+
+    removed = pf.cleanup_orphan_policies(config, set())
+
+    assert removed["containers"] == 0
+    assert fresh_path.exists()
 
 
 def test_resolver_rejects_profile_path_traversal(profile_env: Path) -> None:
