@@ -33,6 +33,8 @@ host). The terminal stays attached to the container logs; Ctrl+C stops it.
 Sessions, profiles, plugins, and credentials persist in the agent config dir
 (`~/.config/vibepod/agents/dsh/`, mounted as the container's home).
 
+![DeepSeek Harness Web UI served by `vp run dsh`](../assets/dsh.png)
+
 > **Developer preview:** upstream warns of compatibility-breaking changes.
 > The default `vibepod/dsh` image pins an exact harness (npm) version — the
 > `:latest` docker tag refers to the image build, not the harness inside.
