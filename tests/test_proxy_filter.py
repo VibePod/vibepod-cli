@@ -1,0 +1,425 @@
+"""Tests for proxy filter rule management and materialization."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+
+import pytest
+import yaml
+
+from vibepod.core import proxy_filter as pf
+from vibepod.core.config import get_config
+from vibepod.core.proxy_identity import identified_proxy_url, new_policy_id
+
+
+def test_normalize_pattern_lowercases_and_strips() -> None:
+    assert pf.normalize_pattern("  Example.COM. ") == "example.com"
+
+
+def test_normalize_pattern_accepts_wildcard() -> None:
+    assert pf.normalize_pattern("*.GitHub.com") == "*.github.com"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["", "https://example.com", "example.com/path", "*example.com", "a b.com", "*."],
+)
+def test_normalize_pattern_rejects_garbage(raw: str) -> None:
+    with pytest.raises(ValueError):
+        pf.normalize_pattern(raw)
+
+
+def test_get_filter_settings_defaults_open() -> None:
+    assert pf.get_filter_settings({}) == {"mode": "open", "allow": [], "deny": []}
+
+
+def test_get_filter_settings_rejects_invalid_mode() -> None:
+    config = {"proxy": {"filter": {"mode": "strict", "allow": ["a.com"], "deny": []}}}
+    with pytest.raises(ValueError, match="strict"):
+        pf.get_filter_settings(config)
+
+
+def test_get_filter_settings_rejects_non_string_pattern() -> None:
+    config = {"proxy": {"filter": {"mode": "deny", "allow": [], "deny": [123]}}}
+    with pytest.raises(ValueError, match="strings"):
+        pf.get_filter_settings(config)
+
+
+def test_get_filter_settings_passes_valid_config() -> None:
+    config = {"proxy": {"filter": {"mode": "allow", "allow": ["a.com"], "deny": ["b.com"]}}}
+    assert pf.get_filter_settings(config) == {
+        "mode": "allow",
+        "allow": ["a.com"],
+        "deny": ["b.com"],
+    }
+
+
+def test_update_global_filter_writes_config_yaml(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    pf.update_global_filter(lambda f: f.update(mode="allow"))
+    data = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    assert data["proxy"]["filter"]["mode"] == "allow"
+
+
+def test_update_global_filter_preserves_other_keys(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("default_agent: gemini\nproxy:\n  enabled: true\n")
+    pf.update_global_filter(lambda f: f.setdefault("allow", []).append("a.com"))
+    data = yaml.safe_load((tmp_path / "config.yaml").read_text())
+    assert data["default_agent"] == "gemini"
+    assert data["proxy"]["enabled"] is True
+    assert data["proxy"]["filter"]["allow"] == ["a.com"]
+
+
+def test_update_global_filter_preserves_comments(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "# top-level note kept\n"
+        "default_agent: gemini  # inline note kept\n"
+        "proxy:\n"
+        "  filter:\n"
+        "    mode: open\n",
+    )
+    pf.update_global_filter(lambda f: f.update(mode="allow"))
+    text = (tmp_path / "config.yaml").read_text()
+    assert "# top-level note kept" in text
+    assert "# inline note kept" in text
+    assert yaml.safe_load(text)["proxy"]["filter"]["mode"] == "allow"
+
+
+def test_default_config_has_open_filter(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    config = get_config()
+    assert config["proxy"]["filter"] == {"mode": "open", "allow": [], "deny": []}
+
+
+def test_env_overrides_filter_mode(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VP_PROXY_FILTER_MODE", "deny")
+    config = get_config()
+    assert config["proxy"]["filter"]["mode"] == "deny"
+
+
+def test_materialized_global_base_is_atomic(monkeypatch, tmp_path: Path) -> None:
+    """No truncate-then-write: replace so hot-reload readers never see partials."""
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "proxy:\n  filter:\n    mode: deny\n    deny: [example.com]\n",
+    )
+    config = {"proxy": {"db_path": str(tmp_path / "proxy" / "proxy.db")}}
+    pf.materialize_policy_bases(config, "default")
+
+    calls: list[tuple[Path, Path]] = []
+    real_replace = pf.os.replace
+
+    def spy_replace(src, dst):
+        calls.append((Path(src), Path(dst)))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(pf.os, "replace", spy_replace)
+    pf.materialize_policy_bases(config, "default")
+    path = pf.get_filter_file_path(config).resolve()
+    assert calls and calls[-1][1] == path
+    assert json.loads(path.read_text())["mode"] == "deny"
+    assert list(path.parent.glob(f".{path.name}.*")) == []
+
+
+def test_update_global_filter_refuses_non_mapping_config(monkeypatch, tmp_path: Path) -> None:
+    """A list-root config.yaml must not be silently replaced (data loss)."""
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("- just\n- a\n- list\n")
+    with pytest.raises(ValueError):
+        pf.update_global_filter(lambda f: f.update(mode="allow"))
+    assert yaml.safe_load((tmp_path / "config.yaml").read_text()) == ["just", "a", "list"]
+
+
+def test_atomic_write_preserves_symlinked_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    target = tmp_path / "dotfiles" / "vibepod.yaml"
+    target.parent.mkdir()
+    target.write_text("default_agent: gemini\n")
+    (tmp_path / "config.yaml").symlink_to(target)
+
+    pf.update_global_filter(lambda f: f.update(mode="allow"))
+
+    assert (tmp_path / "config.yaml").is_symlink()
+    data = yaml.safe_load(target.read_text())
+    assert data["default_agent"] == "gemini"
+    assert data["proxy"]["filter"]["mode"] == "allow"
+
+
+# --- per-profile filter settings ---
+
+
+@pytest.fixture()
+def profile_env(monkeypatch, tmp_path: Path) -> Path:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("VP_PROXY_FILTER_MODE", raising=False)
+    (tmp_path / "profiles" / "work" / "agents").mkdir(parents=True)
+    return tmp_path
+
+
+def test_profile_filter_path_default_is_none(profile_env: Path) -> None:
+    assert pf.profile_filter_path("default") is None
+
+
+def test_profile_filter_path_named_profile(profile_env: Path) -> None:
+    assert pf.profile_filter_path("work") == profile_env / "profiles" / "work" / "filter.yaml"
+
+
+def test_effective_settings_fall_back_to_global_without_profile_file(profile_env: Path) -> None:
+    config = {"proxy": {"filter": {"mode": "deny", "deny": ["example.com"]}}}
+    settings = pf.effective_filter_settings(config, "work")
+    assert settings == {"mode": "deny", "allow": [], "deny": ["example.com"]}
+
+
+def test_effective_settings_use_profile_file_when_present(profile_env: Path) -> None:
+    (profile_env / "profiles" / "work" / "filter.yaml").write_text(
+        yaml.safe_dump({"mode": "allow", "allow": ["api.anthropic.com"], "deny": []}),
+    )
+    config = {"proxy": {"filter": {"mode": "deny", "deny": ["example.com"]}}}
+    settings = pf.effective_filter_settings(config, "work")
+    assert settings == {"mode": "allow", "allow": ["api.anthropic.com"], "deny": []}
+
+
+def test_effective_settings_default_profile_ignores_profile_files(profile_env: Path) -> None:
+    config = {"proxy": {"filter": {"mode": "deny", "deny": ["example.com"]}}}
+    assert pf.effective_filter_settings(config, "default") == {
+        "mode": "deny",
+        "allow": [],
+        "deny": ["example.com"],
+    }
+
+
+def test_env_mode_override_beats_profile_file(profile_env: Path, monkeypatch) -> None:
+    (profile_env / "profiles" / "work" / "filter.yaml").write_text(
+        yaml.safe_dump({"mode": "allow", "allow": ["api.anthropic.com"]}),
+    )
+    monkeypatch.setenv("VP_PROXY_FILTER_MODE", "open")
+    assert pf.effective_filter_settings({}, "work")["mode"] == "open"
+
+
+def test_update_profile_filter_seeds_from_global_config(profile_env: Path) -> None:
+    (profile_env / "config.yaml").write_text(
+        yaml.safe_dump({"proxy": {"filter": {"mode": "deny", "deny": ["example.com"]}}}),
+    )
+    pf.update_profile_filter("work", lambda f: f.update(mode="allow"))
+    data = yaml.safe_load((profile_env / "profiles" / "work" / "filter.yaml").read_text())
+    assert data["mode"] == "allow"
+    assert data["deny"] == ["example.com"]
+
+
+def test_update_profile_filter_mutates_existing_file(profile_env: Path) -> None:
+    path = profile_env / "profiles" / "work" / "filter.yaml"
+    path.write_text(yaml.safe_dump({"mode": "allow", "allow": ["a.com"], "deny": []}))
+    pf.update_profile_filter("work", lambda f: f["allow"].append("b.com"))
+    data = yaml.safe_load(path.read_text())
+    assert data["allow"] == ["a.com", "b.com"]
+
+
+def test_update_profile_filter_default_updates_global(profile_env: Path) -> None:
+    pf.update_profile_filter("default", lambda f: f.update(mode="deny"))
+    data = yaml.safe_load((profile_env / "config.yaml").read_text())
+    assert data["proxy"]["filter"]["mode"] == "deny"
+
+
+def test_policy_identity_is_random_hex_and_builds_proxy_url() -> None:
+    first = new_policy_id()
+    second = new_policy_id()
+    assert first != second
+    assert re.fullmatch(r"[0-9a-f]{32}", first)
+    assert identified_proxy_url(first) == f"http://vp-{first}:vibepod@vibepod-proxy:8080"
+
+
+def test_materialize_container_policy_captures_project_and_environment(
+    profile_env: Path,
+    monkeypatch,
+) -> None:
+    workspace = profile_env / "project"
+    project_config = workspace / ".vibepod" / "config.yaml"
+    project_config.parent.mkdir(parents=True)
+    project_config.write_text("proxy:\n  filter:\n    mode: deny\n    deny: [example.com]\n")
+    monkeypatch.setenv("VP_PROXY_FILTER_MODE", "allow")
+    config = {
+        "proxy": {
+            "db_path": str(profile_env / "proxy" / "proxy.db"),
+            "filter": {"mode": "allow", "allow": ["api.anthropic.com"], "deny": []},
+        },
+    }
+    policy_id = "1" * 32
+
+    path = pf.materialize_container_policy(
+        config,
+        profile="work",
+        workspace=workspace,
+        policy_id=policy_id,
+    )
+
+    assert json.loads(path.read_text()) == {
+        "version": 2,
+        "policy_id": policy_id,
+        "profile": "work",
+        "project_filter": {"mode": "deny", "deny": ["example.com"]},
+        "env_mode": "allow",
+    }
+
+
+def test_materialized_profile_hot_reload_preserves_container_env_override(
+    profile_env: Path,
+    monkeypatch,
+) -> None:
+    profile_path = profile_env / "profiles" / "work" / "filter.yaml"
+    profile_path.write_text("mode: allow\nallow: [api.anthropic.com]\ndeny: []\n")
+    monkeypatch.setenv("VP_PROXY_FILTER_MODE", "deny")
+    config = {
+        "proxy": {
+            "db_path": str(profile_env / "proxy" / "proxy.db"),
+            "filter": {"mode": "open", "allow": [], "deny": []},
+        },
+    }
+    policy_id = "2" * 32
+    pf.materialize_policy_bases(config, "work")
+    pf.materialize_container_policy(
+        config,
+        profile="work",
+        workspace=profile_env,
+        policy_id=policy_id,
+    )
+    assert pf.resolve_container_policy(config, policy_id)["mode"] == "deny"
+
+    profile_path.write_text("mode: open\nallow: []\ndeny: []\n")
+    pf.materialize_policy_bases(config, "work")
+
+    assert pf.resolve_container_policy(config, policy_id) == {
+        "mode": "deny",
+        "allow": [],
+        "deny": [],
+    }
+
+
+def test_cleanup_orphan_policies_keeps_existing_container_and_referenced_profile(
+    profile_env: Path,
+) -> None:
+    config = {"proxy": {"db_path": str(profile_env / "proxy" / "proxy.db")}}
+    kept_id = "4" * 32
+    orphan_id = "5" * 32
+    containers_dir = profile_env / "proxy" / "policies" / "containers"
+    profiles_dir = profile_env / "proxy" / "policies" / "profiles"
+    containers_dir.mkdir(parents=True)
+    profiles_dir.mkdir(parents=True)
+    (containers_dir / f"{kept_id}.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "policy_id": kept_id,
+                "profile": "removed-work",
+                "project_filter": None,
+                "env_mode": None,
+            },
+        ),
+    )
+    orphan_path = containers_dir / f"{orphan_id}.json"
+    orphan_path.write_text("{}")
+    # A real orphan predates the grace window that protects in-flight launches.
+    _age(orphan_path)
+    (profiles_dir / "removed-work.json").write_text("{}")
+    (profiles_dir / "unused.json").write_text("{}")
+
+    removed = pf.cleanup_orphan_policies(config, {kept_id})
+
+    assert removed == {"containers": 1, "profiles": 1}
+    assert (containers_dir / f"{kept_id}.json").exists()
+    assert not (containers_dir / f"{orphan_id}.json").exists()
+    assert (profiles_dir / "removed-work.json").exists()
+    assert not (profiles_dir / "unused.json").exists()
+
+
+def _age(path: Path, seconds: float = 3600.0) -> None:
+    """Backdate a file's mtime so grace-window logic treats it as settled."""
+    stat = path.stat()
+    os.utime(path, (stat.st_atime - seconds, stat.st_mtime - seconds))
+
+
+def test_update_profile_filter_refuses_non_mapping_file(profile_env: Path) -> None:
+    path = profile_env / "profiles" / "work" / "filter.yaml"
+    path.write_text("- a.com\n- b.com\n")
+    with pytest.raises(ValueError, match="mapping"):
+        pf.update_profile_filter("work", lambda f: f.update(mode="allow"))
+    assert path.read_text() == "- a.com\n- b.com\n"
+
+
+def test_materialize_policy_bases_retains_base_without_source_file(
+    profile_env: Path,
+) -> None:
+    """A removed profile's materialized base survives while a container references it."""
+    config = {"proxy": {"db_path": str(profile_env / "proxy" / "proxy.db")}}
+    base = pf.materialized_profile_path(config, "work")
+    base.parent.mkdir(parents=True)
+    base.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "profile": "work",
+                "mode": "allow",
+                "allow": ["api.anthropic.com"],
+                "deny": [],
+            },
+        ),
+    )
+    # 'work' has no filter.yaml (it was removed); re-materializing must not wipe it.
+    pf.materialize_policy_bases(config, "work")
+    assert base.exists()
+
+
+def test_cleanup_orphan_policies_retains_recent_unreferenced_record(
+    profile_env: Path,
+) -> None:
+    """A just-written record for a launch whose container isn't listed yet is kept."""
+    config = {"proxy": {"db_path": str(profile_env / "proxy" / "proxy.db")}}
+    fresh_id = "8" * 32
+    containers_dir = profile_env / "proxy" / "policies" / "containers"
+    containers_dir.mkdir(parents=True)
+    fresh_path = containers_dir / f"{fresh_id}.json"
+    fresh_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "policy_id": fresh_id,
+                "profile": "default",
+                "project_filter": None,
+                "env_mode": None,
+            },
+        ),
+    )
+
+    removed = pf.cleanup_orphan_policies(config, set())
+
+    assert removed["containers"] == 0
+    assert fresh_path.exists()
+
+
+def test_resolver_rejects_profile_path_traversal(profile_env: Path) -> None:
+    config = {"proxy": {"db_path": str(profile_env / "proxy" / "proxy.db")}}
+    policy_id = "7" * 32
+    pf.materialize_policy_bases(config, "default")
+    path = pf.container_policy_path(config, policy_id)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "policy_id": policy_id,
+                "profile": "../../outside",
+                "project_filter": None,
+                "env_mode": None,
+            },
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Invalid profile name"):
+        pf.resolve_container_policy(config, policy_id)

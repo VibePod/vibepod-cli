@@ -56,6 +56,9 @@ from vibepod.core.launch import (
     apply_overlay_if_enabled,
 )
 from vibepod.core.launch import (
+    apply_proxy_env as _apply_proxy_env,
+)
+from vibepod.core.launch import (
     get_container_ip as _get_container_ip,
 )
 from vibepod.core.launch import (
@@ -68,10 +71,16 @@ from vibepod.core.launch import (
     init_entrypoint as _init_entrypoint,
 )
 from vibepod.core.launch import (
+    materialize_launch_policy as _materialize_launch_policy,
+)
+from vibepod.core.launch import (
     parse_env_pairs as _parse_env_pairs,
 )
 from vibepod.core.launch import (
     prepare_x11_auth as _prepare_x11_auth,
+)
+from vibepod.core.launch import (
+    provision_proxy as _provision_proxy,
 )
 from vibepod.core.launch import (
     publish_port_bindings as _publish_port_bindings,
@@ -92,6 +101,7 @@ from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, success, warning
@@ -591,6 +601,7 @@ def run(
         Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
     )
     proxy_db_path: Path | None = None
+    proxy_policy_id: str | None = None
 
     extra_volumes = _agent_extra_volumes(selected_agent, config_dir)
     for host_path, _, _ in extra_volumes:
@@ -639,15 +650,24 @@ def run(
             .resolve()
         )
 
-        if _is_latest_tag(proxy_image):
-            manager.pull_if_newer(proxy_image, auto_clean=bool(config.get("auto_clean", True)))
-
-        manager.ensure_proxy(
-            image=proxy_image,
-            db_path=proxy_db_path,
-            ca_dir=proxy_ca_dir or proxy_db_path.parent / "mitmproxy",
-            network=network_name,
-        )
+        try:
+            _provision_proxy(
+                manager,
+                image=proxy_image,
+                db_path=proxy_db_path,
+                ca_dir=proxy_ca_dir or proxy_db_path.parent / "mitmproxy",
+                network=network_name,
+                auto_clean=bool(config.get("auto_clean", True)),
+            )
+            proxy_policy_id = _materialize_launch_policy(
+                manager,
+                config,
+                profile=active_profile,
+                workspace=workspace_path,
+            )
+        except (DockerClientError, ValueError) as exc:
+            error(str(exc))
+            raise typer.Exit(1) from exc
 
         if proxy_ca_path:
             ca_ready = False
@@ -660,15 +680,7 @@ def run(
             if not ca_ready:
                 warning(f"Proxy CA not found yet at {proxy_ca_path}")
 
-        proxy_url = "http://vibepod-proxy:8080"
-        merged_env.setdefault("HTTP_PROXY", proxy_url)
-        merged_env.setdefault("HTTPS_PROXY", proxy_url)
-        merged_env.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
-        _ca = "/etc/vibepod-proxy-ca/mitmproxy-ca-cert.pem"
-        merged_env.setdefault("NODE_EXTRA_CA_CERTS", _ca)
-        merged_env.setdefault("REQUESTS_CA_BUNDLE", _ca)
-        merged_env.setdefault("SSL_CERT_FILE", _ca)
-        merged_env.setdefault("CURL_CA_BUNDLE", _ca)
+        _apply_proxy_env(merged_env, proxy_policy_id)
 
         if proxy_ca_dir:
             extra_volumes.append((str(proxy_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
@@ -677,26 +689,35 @@ def run(
     container_user = None
     if not rootless_podman and spec.run_as_host_user:
         container_user = _host_user()
-    container = manager.run_agent(
-        agent=selected_agent,
-        image=image,
-        workspace=workspace_path,
-        config_dir=config_dir,
-        config_mount_path=spec.config_mount_path,
-        env=merged_env,
-        command=command,
-        auto_remove=bool(config.get("auto_remove", True)),
-        name=name,
-        version=__version__,
-        network=network_name,
-        ports=agent_ports,
-        extra_volumes=extra_volumes,
-        platform=spec.platform,
-        user=container_user,
-        entrypoint=entrypoint,
-        userns_mode=agent_userns_mode,
-        extra_labels=herdr_labels,
-    )
+    launch_labels = dict(herdr_labels)
+    launch_labels["vibepod.profile"] = active_profile
+    if proxy_policy_id is not None:
+        launch_labels["vibepod.proxy-policy"] = proxy_policy_id
+    try:
+        container = manager.run_agent(
+            agent=selected_agent,
+            image=image,
+            workspace=workspace_path,
+            config_dir=config_dir,
+            config_mount_path=spec.config_mount_path,
+            env=merged_env,
+            command=command,
+            auto_remove=bool(config.get("auto_remove", True)),
+            name=name,
+            version=__version__,
+            network=network_name,
+            ports=agent_ports,
+            extra_volumes=extra_volumes,
+            platform=spec.platform,
+            user=container_user,
+            entrypoint=entrypoint,
+            userns_mode=agent_userns_mode,
+            extra_labels=launch_labels,
+        )
+    except Exception:
+        if proxy_policy_id is not None:
+            remove_container_policy(config, proxy_policy_id)
+        raise
 
     container.reload()
     if container.status != "running":
@@ -735,6 +756,8 @@ def run(
                 container.id,
                 container.name,
                 selected_agent,
+                policy_id=proxy_policy_id,
+                profile=active_profile,
             )
             if not mapping_updated:
                 warning(

@@ -15,7 +15,12 @@ from docker.utils.ports import build_port_bindings
 
 from vibepod.core import overlay
 from vibepod.core.config import load_project_config
-from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.docker import (
+    PROXY_POLICY_SCHEMA,
+    DockerClientError,
+    DockerManager,
+    _is_latest_tag,
+)
 from vibepod.utils.console import error, warning
 
 CLAUDE_TOKEN_FILENAME = "oauth-token"
@@ -347,12 +352,130 @@ def get_container_ip(container: Any, network: str) -> str | None:
         return None
 
 
+def provision_proxy(
+    manager: Any,
+    *,
+    image: str,
+    db_path: Path,
+    ca_dir: Path,
+    network: str,
+    auto_clean: bool,
+    policy_schema: str = PROXY_POLICY_SCHEMA,
+) -> Any:
+    """Bring up a schema-compatible proxy, refreshing a ``:latest`` image safely.
+
+    A freshly pulled image is validated *before* any running proxy is torn
+    down, so an incompatible image never leaves the host with no proxy. Untagged
+    images are swept only after the replacement is running (never before the old
+    container is removed, or the in-use image cannot be reclaimed).
+    """
+    if _is_latest_tag(image):
+        if manager.pull_if_newer(image, auto_clean=False):
+            manager.require_proxy_policy_schema(image, policy_schema)
+            existing = manager.find_proxy()
+            if existing:
+                existing.remove(force=True)
+    container = manager.ensure_proxy(
+        image=image,
+        db_path=db_path,
+        ca_dir=ca_dir,
+        network=network,
+        policy_schema=policy_schema,
+    )
+    if auto_clean:
+        manager.clean_untagged_images()
+    return container
+
+
+_PROXY_URL_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
+_PROXY_CA_PATH = "/etc/vibepod-proxy-ca/mitmproxy-ca-cert.pem"
+
+
+def materialize_launch_policy(
+    manager: Any,
+    config: dict[str, Any],
+    *,
+    profile: str,
+    workspace: Path,
+) -> str:
+    """Materialize the policy bases and this launch's record; return its id.
+
+    Sweeps records orphaned by since-removed containers first (best effort), so
+    the policy dir does not grow without bound.
+    """
+    from vibepod.core.proxy_filter import (
+        cleanup_orphan_policies,
+        materialize_container_policy,
+        materialize_policy_bases,
+    )
+    from vibepod.core.proxy_identity import new_policy_id
+
+    materialize_policy_bases(config, profile)
+    referenced = managed_proxy_policy_ids(manager)
+    if referenced is not None:
+        cleanup_orphan_policies(config, referenced)
+    policy_id = new_policy_id()
+    materialize_container_policy(
+        config,
+        profile=profile,
+        workspace=workspace,
+        policy_id=policy_id,
+    )
+    return policy_id
+
+
+def apply_proxy_env(merged_env: dict[str, str], policy_id: str) -> None:
+    """Point the agent at the identified proxy and warn on manual overrides.
+
+    Both cased forms of the proxy variables are inspected: ``http_proxy`` and
+    friends are honored by curl/git/requests, so an override there bypasses the
+    per-container filter just as ``HTTP_PROXY`` would.
+    """
+    from vibepod.core.proxy_identity import identified_proxy_url
+
+    proxy_url = identified_proxy_url(policy_id)
+    for key in ("HTTP_PROXY", "HTTPS_PROXY"):
+        merged_env.setdefault(key, proxy_url)
+    if any(merged_env.get(key, proxy_url) != proxy_url for key in _PROXY_URL_ENV_VARS):
+        warning(
+            "Explicit HTTP_PROXY/HTTPS_PROXY (either case) overrides the identified "
+            "VibePod proxy; this launch may bypass its per-container filter policy.",
+        )
+    merged_env.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
+    for key in ("NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+        merged_env.setdefault(key, _PROXY_CA_PATH)
+
+
+def managed_proxy_policy_ids(manager: Any) -> set[str] | None:
+    """Return policy IDs on all existing managed containers, or None if unknowable."""
+    lister = getattr(manager, "list_managed", None)
+    if not callable(lister):
+        return None
+    try:
+        containers = lister(all_containers=True)
+    except DockerClientError:
+        return None
+    return {
+        policy_id
+        for container in containers
+        if isinstance(
+            policy_id := (getattr(container, "labels", {}) or {}).get(
+                "vibepod.proxy-policy",
+            ),
+            str,
+        )
+    }
+
+
 def update_container_mapping(
     mapping_path: Path,
     ip: str,
     container_id: str,
     container_name: str,
     agent: str,
+    *,
+    policy_id: str | None = None,
+    profile: str | None = None,
 ) -> bool:
     """Merge a new IP→container entry into containers.json atomically."""
     mapping: dict[str, dict[str, str]] = {}
@@ -363,12 +486,17 @@ def update_container_mapping(
             except (json.JSONDecodeError, OSError):
                 pass
 
-        mapping[ip] = {
+        entry = {
             "container_id": container_id,
             "container_name": container_name,
             "agent": agent,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
+        if policy_id is not None:
+            entry["policy_id"] = policy_id
+        if profile is not None:
+            entry["profile"] = profile
+        mapping[ip] = entry
 
         tmp_path = mapping_path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(mapping, indent=2))

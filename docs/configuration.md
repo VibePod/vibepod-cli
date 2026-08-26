@@ -178,6 +178,10 @@ proxy:
   db_path: ~/.config/vibepod/proxy/proxy.db
   ca_dir: ~/.config/vibepod/proxy/mitmproxy
   ca_path: ~/.config/vibepod/proxy/mitmproxy/mitmproxy-ca-cert.pem
+  filter:
+    mode: open        # open | allow | deny
+    allow: []
+    deny: []
 ```
 
 ## Environment variables
@@ -193,6 +197,7 @@ These variables override the corresponding config keys without editing any file:
 | `VP_NO_COLOR` | `no_color` | `VP_NO_COLOR=true` |
 | `VP_DATASETTE_PORT` | `logging.ui_port` | `VP_DATASETTE_PORT=9001` |
 | `VP_PROXY_ENABLED` | `proxy.enabled` | `VP_PROXY_ENABLED=false` |
+| `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow` |
 | `VP_LLM_ENABLED` | `llm.enabled` | `VP_LLM_ENABLED=true` |
 | `VP_LLM_BASE_URL` | `llm.base_url` | `VP_LLM_BASE_URL=http://localhost:11434` |
 | `VP_LLM_API_KEY` | `llm.api_key` | `VP_LLM_API_KEY=ollama` |
@@ -332,3 +337,66 @@ VP_PROXY_ENABLED=false vp run claude
     network. If you use Podman with the CNI backend, install the `dnsname`
     plugin (e.g. `podman-plugins` on Fedora, `golang-github-containernetworking-plugin-dnsname`
     on Debian/Ubuntu) and recreate the network. See [Quickstart — Using Podman](quickstart.md#using-podman-instead-of-docker) for full instructions.
+
+### Allow/deny filtering
+
+Filtering is opt-in; the default mode `open` passes and logs everything
+(today's behavior). In `allow` mode only listed hosts pass; in `deny` mode
+everything passes except listed hosts. Patterns: `example.com` matches that
+host exactly, `*.example.com` matches subdomains (not the apex).
+
+```bash
+vp proxy filter status
+vp proxy filter mode allow
+vp proxy filter allow add api.anthropic.com
+vp proxy filter allow add "*.github.com"
+vp proxy filter deny add example.com
+vp proxy filter mode open        # back to no filtering; lists are kept
+```
+
+One shared proxy evaluates a separate policy for every VibePod agent container.
+Each launch receives an opaque policy identity and is also bound to its source
+container after startup. This prevents a later launch from replacing the rules
+of an already-running agent. Unidentified clients continue to use the global
+filter.
+
+Profile changes apply immediately to every running container using that
+profile—no proxy restart is needed. Project filter settings and
+`VP_PROXY_FILTER_MODE` are captured when each container starts, so changing
+either affects new launches only. The effective profile and live mode are shown
+by `vp list` in the `PROFILE` and `PROXY MODE` columns and in its JSON rows as
+`profile` and `proxy_mode`.
+
+Blocked requests return `403` (HTTPS tunnels are refused at `CONNECT`) and are
+logged with `blocked = 1` in the proxy database. Invalid policy configuration
+is rejected instead of silently falling back to `open`; an identified launch
+whose policy files are missing or malformed fails closed.
+
+The `vp proxy filter` commands act on the **active profile**. For the
+`default` profile they write the global config; for a named profile they write
+`profiles/<name>/filter.yaml` (seeded from the global settings on first
+write), so switching profiles also switches the filter mode and lists. Pass
+`--profile <name>` to manage another profile's filter without switching.
+
+A project-level `.vibepod/config.yaml` filter section or
+`VP_PROXY_FILTER_MODE` takes precedence over the global values (for a profile
+with its own `filter.yaml`, only `VP_PROXY_FILTER_MODE` still overrides the
+mode). Project and environment overrides are launch-specific and never replace
+the shared global fallback.
+
+Custom proxy images must implement per-source policies and expose this exact
+OCI image label:
+
+```dockerfile
+LABEL io.vibepod.proxy.policy-schema="2"
+```
+
+VibePod checks the configured image—and an already-running proxy—before
+launching a proxied agent. An image with a missing or different schema label is
+rejected with an upgrade error.
+
+!!! warning "Filtering is not a network sandbox"
+    The filter controls requests that use the injected proxy. A container can
+    override its proxy environment or attempt a direct connection unless a
+    separate network-control layer prevents that. VibePod warns when explicit
+    `HTTP_PROXY` or `HTTPS_PROXY` values bypass its identified proxy URL.

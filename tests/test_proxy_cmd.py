@@ -27,6 +27,9 @@ class _FakeManager:
         self._events.append(f"pull_if_newer(auto_clean={auto_clean})")
         return self._updated
 
+    def require_proxy_policy_schema(self, image: object, required: str = "2") -> None:
+        self._events.append("require_proxy_policy_schema")
+
     def find_proxy(self):
         return self._container
 
@@ -41,6 +44,11 @@ class _FakeManager:
 def _patch_common(monkeypatch, events: list[str], config: dict, updated: bool = True) -> None:
     monkeypatch.setattr(proxy_cmd, "DockerManager", lambda: _FakeManager(events, updated))
     monkeypatch.setattr(proxy_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(
+        proxy_cmd,
+        "materialize_policy_bases",
+        lambda config, profile: events.append("materialize_policy_bases"),
+    )
 
 
 def test_proxy_start_recreates_container_before_cleanup(monkeypatch) -> None:
@@ -52,7 +60,9 @@ def test_proxy_start_recreates_container_before_cleanup(monkeypatch) -> None:
 
     assert events == [
         "ensure_network",
+        "materialize_policy_bases",
         "pull_if_newer(auto_clean=False)",
+        "require_proxy_policy_schema",
         "container.remove",
         "ensure_proxy",
         "clean_untagged_images",
@@ -67,13 +77,14 @@ def test_proxy_start_keeps_container_without_update(monkeypatch) -> None:
 
     assert events == [
         "ensure_network",
+        "materialize_policy_bases",
         "pull_if_newer(auto_clean=False)",
         "ensure_proxy",
         "clean_untagged_images",
     ]
 
 
-def test_proxy_start_skips_cleanup_without_auto_clean(monkeypatch) -> None:
+def test_proxy_start_validates_new_image_before_removing_running_proxy(monkeypatch) -> None:
     events: list[str] = []
     _patch_common(monkeypatch, events, {"auto_clean": False})
 
@@ -81,7 +92,9 @@ def test_proxy_start_skips_cleanup_without_auto_clean(monkeypatch) -> None:
 
     assert events == [
         "ensure_network",
+        "materialize_policy_bases",
         "pull_if_newer(auto_clean=False)",
+        "require_proxy_policy_schema",
         "container.remove",
         "ensure_proxy",
     ]

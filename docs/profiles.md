@@ -4,11 +4,12 @@ Profiles let you keep multiple credential sets per agent and switch between them
 at run time — for example a Claude subscription login, a separate API-key setup,
 and an environment prepared for Ollama.
 
-A profile only switches the **credential directories** that get mounted into the
-agent container. Everything else (skills, allowed directories, proxy, logging)
-stays shared. Environment variables such as `ANTHROPIC_API_KEY` are still
-configured via `agents.<agent>.env` or `-e` flags — combine them with a profile
-via a project config (see below).
+A profile switches the **credential directories** that get mounted into the
+agent container and, when the profile has its own filter settings, the
+**proxy allow/deny filter** (see below). Everything else (skills, allowed
+directories, proxy, logging) stays shared. Environment variables such as
+`ANTHROPIC_API_KEY` are still configured via `agents.<agent>.env` or `-e`
+flags — combine them with a profile via a project config (see below).
 
 ## Layout
 
@@ -16,6 +17,7 @@ via a project config (see below).
 ~/.config/vibepod/
   agents/<agent>/                    # the built-in "default" profile
   profiles/<name>/agents/<agent>/    # named profiles
+  profiles/<name>/filter.yaml        # optional per-profile proxy filter
 ```
 
 Your existing credentials in `~/.config/vibepod/agents/` are the `default`
@@ -68,3 +70,32 @@ agents:
 
 Referencing a profile that does not exist is a hard error — create it first
 with `vp profile create <name>`.
+
+## Per-profile proxy filter
+
+Each named profile can carry its own proxy filter mode and allow/deny lists in
+`profiles/<name>/filter.yaml`. The `vp proxy filter` commands act on the
+active profile, or on an explicit one via `--profile`:
+
+```bash
+vp proxy filter mode allow --profile work
+vp proxy filter allow add api.anthropic.com --profile work
+vp proxy filter status --profile work
+```
+
+The file is created on first write, seeded from the global filter settings.
+A profile without `filter.yaml` inherits the global `proxy.filter` config and
+then any project filter captured for that launch. An explicit profile file is
+a complete replacement for the global/project base. In both cases, the
+launch-time `VP_PROXY_FILTER_MODE` value wins last.
+
+The proxy keeps one materialized profile base and a small record for each
+container. Editing a profile filter hot-reloads every running container that
+uses it, while each container retains the project and environment overrides it
+started with. This means two agents using different profiles—or different
+projects with the same inherited profile—can safely share one proxy.
+
+`vp list` shows the selected profile and live effective proxy mode for each
+running container. Removing a profile deletes its credentials, but VibePod
+retains its materialized filter while any existing container (including a
+stopped container) still references it.

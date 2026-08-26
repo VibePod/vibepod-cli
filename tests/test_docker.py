@@ -412,6 +412,53 @@ def test_ensure_proxy_pulls_image_when_missing(mock_docker, tmp_path: Path) -> N
     mock_client.containers.run.assert_called_once()
 
 
+@pytest.mark.parametrize("label", [None, "", "two", "3"])
+@patch("vibepod.core.docker.docker")
+def test_require_proxy_policy_schema_rejects_incompatible_image(
+    mock_docker,
+    label: str | None,
+) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    labels = {} if label is None else {"io.vibepod.proxy.policy-schema": label}
+    mock_client.images.get.return_value.attrs = {"Config": {"Labels": labels}}
+
+    manager = DockerManager()
+    with pytest.raises(DockerClientError, match="policy schema 2"):
+        manager.require_proxy_policy_schema("example/proxy:custom", "2")
+
+
+@patch("vibepod.core.docker.docker")
+def test_require_proxy_policy_schema_accepts_exact_label(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.images.get.return_value.attrs = {
+        "Config": {"Labels": {"io.vibepod.proxy.policy-schema": "2"}},
+    }
+
+    manager = DockerManager()
+    manager.require_proxy_policy_schema("example/proxy:custom", "2")
+
+
+@patch("vibepod.core.docker.docker")
+def test_ensure_proxy_rejects_incompatible_running_container(mock_docker, tmp_path: Path) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    existing = MagicMock(status="running")
+    existing.image.attrs = {"Config": {"Labels": {}}}
+    mock_client.containers.list.return_value = [existing]
+
+    manager = DockerManager()
+    with pytest.raises(DockerClientError, match="policy schema 2"):
+        manager.ensure_proxy(
+            image="example/proxy:custom",
+            db_path=tmp_path / "proxy.db",
+            ca_dir=tmp_path / "ca",
+            network="vibepod-network",
+            policy_schema="2",
+        )
+
+
 def test_discover_podman_socket_skipped_when_docker_host_set(monkeypatch) -> None:
     monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
     assert _discover_podman_socket() is None

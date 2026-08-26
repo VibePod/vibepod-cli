@@ -179,6 +179,11 @@ def _default_config() -> dict[str, Any]:
             "db_path": str(config_root / "proxy" / "proxy.db"),
             "ca_dir": str(config_root / "proxy" / "mitmproxy"),
             "ca_path": str(config_root / "proxy" / "mitmproxy" / "mitmproxy-ca-cert.pem"),
+            "filter": {
+                "mode": "open",
+                "allow": [],
+                "deny": [],
+            },
         },
         "llm": {
             "enabled": False,
@@ -228,6 +233,7 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
         "VP_NO_COLOR": ("no_color", lambda x: x.lower() == "true"),
         "VP_DATASETTE_PORT": ("logging.ui_port", int),
         "VP_PROXY_ENABLED": ("proxy.enabled", lambda x: x.lower() == "true"),
+        "VP_PROXY_FILTER_MODE": ("proxy.filter.mode", str),
         "VP_LLM_ENABLED": ("llm.enabled", lambda x: x.lower() == "true"),
         "VP_LLM_BASE_URL": ("llm.base_url", str),
         "VP_LLM_API_KEY": ("llm.api_key", str),

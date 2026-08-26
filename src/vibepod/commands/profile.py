@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
 from vibepod.constants import SUPPORTED_AGENTS
 from vibepod.core.config import get_config
+from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.launch import managed_proxy_policy_ids
 from vibepod.core.profiles import (
     DEFAULT_PROFILE,
     create_profile,
@@ -19,6 +21,7 @@ from vibepod.core.profiles import (
     resolve_profile,
     validate_profile_name,
 )
+from vibepod.core.proxy_filter import cleanup_orphan_policies
 from vibepod.utils.console import console, error, success, warning
 
 app = typer.Typer(help="Manage credential profiles (separate agent logins per environment)")
@@ -42,6 +45,17 @@ def _active_profile() -> str | None:
     except ValueError as exc:
         warning(str(exc))
         return None
+
+
+def _cleanup_removed_profile_policy(config: dict[str, Any]) -> None:
+    """Sweep only when the complete managed-container set is available."""
+    try:
+        manager = DockerManager()
+    except DockerClientError:
+        return
+    referenced = managed_proxy_policy_ids(manager)
+    if referenced is not None:
+        cleanup_orphan_policies(config, referenced)
 
 
 @app.command("list")
@@ -90,6 +104,7 @@ def remove(
         raise typer.Exit(code=1)
     if not yes:
         typer.confirm(f"Remove profile '{name}' and all credentials stored in it?", abort=True)
+    config = get_config()
     try:
         remove_profile(name)
     except ValueError as exc:
@@ -104,4 +119,5 @@ def remove(
         raise typer.Exit(code=1) from exc
     if os.environ.get("VP_PROFILE") == name:
         console.print(f"Note: VP_PROFILE still points at removed profile '{name}'.")
+    _cleanup_removed_profile_policy(config)
     success(f"Removed profile '{name}'")

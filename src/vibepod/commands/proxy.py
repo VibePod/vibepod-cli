@@ -2,17 +2,246 @@
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
+from vibepod.core.docker import DockerClientError, DockerManager
+from vibepod.core.launch import provision_proxy
+from vibepod.core.profiles import DEFAULT_PROFILE, resolve_profile
+from vibepod.core.proxy_filter import (
+    VALID_MODES,
+    effective_filter_settings,
+    materialize_policy_bases,
+    normalize_pattern,
+    profile_filter_path,
+    update_profile_filter,
+)
 from vibepod.utils.console import error, info, success, warning
 
 app = typer.Typer(help="Manage the HTTP(S) proxy")
+
+filter_app = typer.Typer(help="Manage proxy allow/deny filtering")
+allow_app = typer.Typer(help="Manage the allow list")
+deny_app = typer.Typer(help="Manage the deny list")
+filter_app.add_typer(allow_app, name="allow")
+filter_app.add_typer(deny_app, name="deny")
+app.add_typer(filter_app, name="filter")
+
+
+_PROFILE_OPTION = typer.Option(
+    "--profile",
+    help="Profile whose filter to manage (default: the active profile)",
+)
+
+
+def _target_profile(flag: str | None) -> str:
+    try:
+        return resolve_profile(flag, get_config())
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+@contextlib.contextmanager
+def _clean_config_errors() -> Iterator[None]:
+    """Surface invalid config/env (e.g. VP_PROXY_FILTER_MODE) as a clean exit."""
+    try:
+        yield
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+
+def _sync_filter_file(profile: str | None = None) -> None:
+    """Rematerialize the global and selected-profile schema-2 bases."""
+    config = get_config()
+    target = profile
+    if target is None:
+        try:
+            target = resolve_profile(None, config)
+        except ValueError:
+            target = DEFAULT_PROFILE
+    materialize_policy_bases(config, target)
+
+
+def _uses_profile_file(profile: str) -> bool:
+    path = profile_filter_path(profile)
+    return path is not None and path.exists()
+
+
+def _normalized(entry: object) -> str:
+    return str(entry).strip().lower().rstrip(".")
+
+
+_OVERRIDE_HINT = "overridden by project config (.vibepod/config.yaml) or VP_PROXY_FILTER_MODE"
+
+
+@filter_app.command("status")
+def filter_status(
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
+    """Show filter mode, lists, and proxy state."""
+    config = get_config()
+    target = _target_profile(profile)
+    with _clean_config_errors():
+        settings = effective_filter_settings(config, target)
+    if _uses_profile_file(target):
+        info(f"Profile: {target} (profile-specific filter)")
+    else:
+        info(f"Profile: {target} (global filter settings)")
+    info(f"Mode: {settings['mode']}")
+    info(f"Allow list ({len(settings['allow'])}): {', '.join(settings['allow']) or '—'}")
+    info(f"Deny list ({len(settings['deny'])}): {', '.join(settings['deny']) or '—'}")
+    try:
+        manager = DockerManager()
+    except DockerClientError:
+        info("Proxy: unknown (Docker is not running)")
+        return
+    # find_proxy already returns a container listed with a fresh status, so an
+    # extra reload() only risks a NotFound race if the proxy is removed midway.
+    existing = manager.find_proxy()
+    if existing is None:
+        info("Proxy: not running")
+    else:
+        info(f"Proxy: {existing.name} ({existing.status})")
+
+
+@filter_app.command("mode")
+def filter_mode(
+    value: Annotated[str, typer.Argument(help="open, allow, or deny")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
+    """Set the filter mode (open = no filtering)."""
+    normalized = value.strip().lower()
+    if normalized not in VALID_MODES:
+        error(f"Unknown mode '{value}'. Valid modes: {', '.join(VALID_MODES)}")
+        raise typer.Exit(1)
+    target = _target_profile(profile)
+    with _clean_config_errors():
+        update_profile_filter(target, lambda f: f.update(mode=normalized))
+        _sync_filter_file(target)
+        effective = effective_filter_settings(get_config(), target)
+    success(f"Proxy filter mode set to '{normalized}' for profile '{target}'")
+    if effective["mode"] != normalized:
+        warning(
+            f"Effective mode stays '{effective['mode']}' — {_OVERRIDE_HINT}",
+        )
+
+
+def _list_add(list_name: str, host: str, profile: str | None) -> None:
+    try:
+        pattern = normalize_pattern(host)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+    target = _target_profile(profile)
+    added = True
+
+    def mutate(filter_cfg: dict[str, Any]) -> None:
+        nonlocal added
+        entries = filter_cfg.setdefault(list_name, [])
+        if not isinstance(entries, list):
+            entries = []
+            filter_cfg[list_name] = entries
+        # Hand-authored config entries may be unnormalized; compare normalized.
+        if pattern in {_normalized(e) for e in entries}:
+            added = False
+            return
+        entries.append(pattern)
+
+    with _clean_config_errors():
+        update_profile_filter(target, mutate)
+    if not added:
+        warning(f"'{pattern}' is already in the {list_name} list")
+        return
+    with _clean_config_errors():
+        _sync_filter_file(target)
+        effective_list = effective_filter_settings(get_config(), target)[list_name]
+    success(f"Added '{pattern}' to the {list_name} list of profile '{target}'")
+    if pattern not in effective_list:
+        warning(
+            f"'{pattern}' saved globally but absent from the effective "
+            f"{list_name} list — {_OVERRIDE_HINT}",
+        )
+
+
+def _list_remove(list_name: str, host: str, profile: str | None) -> None:
+    try:
+        pattern = normalize_pattern(host)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+    target = _target_profile(profile)
+    removed = False
+
+    def mutate(filter_cfg: dict[str, Any]) -> None:
+        nonlocal removed
+        entries = filter_cfg.setdefault(list_name, [])
+        if not isinstance(entries, list):
+            return
+        kept = [e for e in entries if _normalized(e) != pattern]
+        if len(kept) != len(entries):
+            filter_cfg[list_name] = kept
+            removed = True
+
+    with _clean_config_errors():
+        update_profile_filter(target, mutate)
+    if not removed:
+        warning(f"'{pattern}' is not in the {list_name} list")
+        return
+    with _clean_config_errors():
+        _sync_filter_file(target)
+        effective_list = effective_filter_settings(get_config(), target)[list_name]
+    success(f"Removed '{pattern}' from the {list_name} list of profile '{target}'")
+    if pattern in effective_list:
+        warning(
+            f"'{pattern}' removed globally but still in the effective "
+            f"{list_name} list — {_OVERRIDE_HINT}",
+        )
+
+
+@allow_app.command("add")
+def allow_add(
+    host: Annotated[str, typer.Argument(help="Host pattern")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
+    """Add a host pattern to the allow list."""
+    _list_add("allow", host, profile)
+
+
+@allow_app.command("remove")
+def allow_remove(
+    host: Annotated[str, typer.Argument(help="Host pattern")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
+    """Remove a host pattern from the allow list."""
+    _list_remove("allow", host, profile)
+
+
+@deny_app.command("add")
+def deny_add(
+    host: Annotated[str, typer.Argument(help="Host pattern")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
+    """Add a host pattern to the deny list."""
+    _list_add("deny", host, profile)
+
+
+@deny_app.command("remove")
+def deny_remove(
+    host: Annotated[str, typer.Argument(help="Host pattern")],
+    profile: Annotated[str | None, _PROFILE_OPTION] = None,
+) -> None:
+    """Remove a host pattern from the deny list."""
+    _list_remove("deny", host, profile)
 
 
 @app.command("start")
@@ -42,28 +271,24 @@ def proxy_start() -> None:
 
     manager.ensure_network(network_name)
 
-    auto_clean = bool(config.get("auto_clean", True))
-    updated = False
-    if _is_latest_tag(proxy_image):
-        info("Checking for proxy image updates…")
-        updated = manager.pull_if_newer(proxy_image)
-        if updated:
-            info("New image available — restarting proxy")
-            existing = manager.find_proxy()
-            if existing:
-                existing.remove(force=True)
+    # Materialize the shared global and active-profile policy bases first; they
+    # live on disk independent of the proxy container's lifecycle.
+    with _clean_config_errors():
+        _sync_filter_file()
 
     info("Starting proxy")
-    manager.ensure_proxy(
-        image=proxy_image,
-        db_path=db_path,
-        ca_dir=ca_dir,
-        network=network_name,
-    )
-    if auto_clean:
-        # Swept last: the replaced image is only removable once the proxy
-        # container that held it has been recreated on the new one.
-        manager.clean_untagged_images()
+    try:
+        provision_proxy(
+            manager,
+            image=proxy_image,
+            db_path=db_path,
+            ca_dir=ca_dir,
+            network=network_name,
+            auto_clean=bool(config.get("auto_clean", True)),
+        )
+    except DockerClientError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     success("Proxy is running")
 
 

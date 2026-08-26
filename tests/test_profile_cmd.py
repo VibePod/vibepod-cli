@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from vibepod.cli import app
+from vibepod.commands import profile as profile_cmd
 from vibepod.core.agents import agent_config_dir
 
 runner = CliRunner()
@@ -67,6 +69,71 @@ def test_profile_remove(config_root: Path) -> None:
     result = runner.invoke(app, ["profile", "remove", "work", "--yes"])
     assert result.exit_code == 0, result.output
     assert not (config_root / "profiles" / "work").exists()
+
+
+def test_profile_remove_retains_materialized_policy_while_container_references_it(
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner.invoke(app, ["profile", "create", "work"])
+    (config_root / "config.yaml").write_text(
+        f"proxy:\n  db_path: {config_root / 'proxy' / 'proxy.db'}\n",
+    )
+    policy_id = "6" * 32
+    materialized = config_root / "proxy" / "policies" / "profiles" / "work.json"
+    record = config_root / "proxy" / "policies" / "containers" / f"{policy_id}.json"
+    materialized.parent.mkdir(parents=True)
+    record.parent.mkdir(parents=True)
+    materialized.write_text("{}")
+    record.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "policy_id": policy_id,
+                "profile": "work",
+                "project_filter": None,
+                "env_mode": None,
+            },
+        ),
+    )
+
+    class _Container:
+        labels = {"vibepod.proxy-policy": policy_id}
+
+    class _Manager:
+        def list_managed(self, all_containers: bool = True):  # noqa: ARG002
+            return [_Container()]
+
+    monkeypatch.setattr(profile_cmd, "DockerManager", _Manager)
+
+    result = runner.invoke(app, ["profile", "remove", "work", "--yes"])
+
+    assert result.exit_code == 0
+    assert materialized.exists()
+
+
+def test_profile_remove_cleans_unreferenced_materialized_policy(
+    config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner.invoke(app, ["profile", "create", "work"])
+    (config_root / "config.yaml").write_text(
+        f"proxy:\n  db_path: {config_root / 'proxy' / 'proxy.db'}\n",
+    )
+    materialized = config_root / "proxy" / "policies" / "profiles" / "work.json"
+    materialized.parent.mkdir(parents=True)
+    materialized.write_text("{}")
+
+    class _Manager:
+        def list_managed(self, all_containers: bool = True):  # noqa: ARG002
+            return []
+
+    monkeypatch.setattr(profile_cmd, "DockerManager", _Manager)
+
+    result = runner.invoke(app, ["profile", "remove", "work", "--yes"])
+
+    assert result.exit_code == 0
+    assert not materialized.exists()
 
 
 def test_profile_remove_refuses_default(config_root: Path) -> None:

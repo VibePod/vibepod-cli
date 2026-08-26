@@ -20,6 +20,8 @@ def test_update_container_mapping_success(tmp_path: Path) -> None:
         "abc123",
         "vibepod-claude-test",
         "claude",
+        policy_id="1" * 32,
+        profile="work",
     )
 
     assert updated is True
@@ -27,6 +29,8 @@ def test_update_container_mapping_success(tmp_path: Path) -> None:
     assert data["172.18.0.3"]["container_id"] == "abc123"
     assert data["172.18.0.3"]["container_name"] == "vibepod-claude-test"
     assert data["172.18.0.3"]["agent"] == "claude"
+    assert data["172.18.0.3"]["policy_id"] == "1" * 32
+    assert data["172.18.0.3"]["profile"] == "work"
 
 
 def test_update_container_mapping_permission_error_returns_false(

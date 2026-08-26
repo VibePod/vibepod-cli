@@ -35,16 +35,20 @@ from vibepod.core.launch import (
     agent_init_commands,
     agent_port_bindings,
     apply_overlay_if_enabled,
+    apply_proxy_env,
     get_container_ip,
     host_identity_env,
     host_user,
     init_entrypoint,
+    materialize_launch_policy,
     parse_env_pairs,
+    provision_proxy,
     read_claude_stored_token,
     terminal_env_defaults,
     update_container_mapping,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.tasks import (
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
@@ -707,6 +711,7 @@ def task_create(
         Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
     )
     proxy_db_path: Path | None = None
+    proxy_policy_id: str | None = None
 
     if proxy_enabled:
         proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
@@ -716,16 +721,25 @@ def task_create(
             .resolve()
         )
 
-        if _is_latest_tag(proxy_image):
-            manager.pull_if_newer(proxy_image, auto_clean=bool(config.get("auto_clean", True)))
-
         actual_ca_dir = proxy_ca_dir or proxy_db_path.parent / "mitmproxy"
-        manager.ensure_proxy(
-            image=proxy_image,
-            db_path=proxy_db_path,
-            ca_dir=actual_ca_dir,
-            network=network_name,
-        )
+        try:
+            provision_proxy(
+                manager,
+                image=proxy_image,
+                db_path=proxy_db_path,
+                ca_dir=actual_ca_dir,
+                network=network_name,
+                auto_clean=bool(config.get("auto_clean", True)),
+            )
+            proxy_policy_id = materialize_launch_policy(
+                manager,
+                config,
+                profile=active_profile,
+                workspace=workspace_path,
+            )
+        except (DockerClientError, ValueError) as exc:
+            error(str(exc))
+            raise typer.Exit(1) from exc
 
         if proxy_ca_path:
             deadline = time.time() + 10
@@ -734,15 +748,7 @@ def task_create(
                     break
                 time.sleep(0.25)
 
-        proxy_url = "http://vibepod-proxy:8080"
-        merged_env.setdefault("HTTP_PROXY", proxy_url)
-        merged_env.setdefault("HTTPS_PROXY", proxy_url)
-        merged_env.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
-        _ca = "/etc/vibepod-proxy-ca/mitmproxy-ca-cert.pem"
-        merged_env.setdefault("NODE_EXTRA_CA_CERTS", _ca)
-        merged_env.setdefault("REQUESTS_CA_BUNDLE", _ca)
-        merged_env.setdefault("SSL_CERT_FILE", _ca)
-        merged_env.setdefault("CURL_CA_BUNDLE", _ca)
+        apply_proxy_env(merged_env, proxy_policy_id)
 
         extra_volumes.append((str(actual_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
 
@@ -750,26 +756,35 @@ def task_create(
     container_user = None
     if not rootless_podman and spec.run_as_host_user:
         container_user = host_user()
-    container = manager.run_agent(
-        agent=selected,
-        image=image,
-        workspace=workspace_path,
-        config_dir=config_dir,
-        config_mount_path=spec.config_mount_path,
-        env=merged_env,
-        command=command,
-        auto_remove=False,  # tasks keep the container so logs/exit survive
-        name=name,
-        version=__version__,
-        network=network_name,
-        ports=agent_ports,
-        extra_volumes=extra_volumes,
-        platform=spec.platform,
-        user=container_user,
-        entrypoint=entrypoint,
-        userns_mode=agent_userns_mode,
-        extra_labels=herdr_labels,
-    )
+    launch_labels = dict(herdr_labels)
+    launch_labels["vibepod.profile"] = active_profile
+    if proxy_policy_id is not None:
+        launch_labels["vibepod.proxy-policy"] = proxy_policy_id
+    try:
+        container = manager.run_agent(
+            agent=selected,
+            image=image,
+            workspace=workspace_path,
+            config_dir=config_dir,
+            config_mount_path=spec.config_mount_path,
+            env=merged_env,
+            command=command,
+            auto_remove=False,  # tasks keep the container so logs/exit survive
+            name=name,
+            version=__version__,
+            network=network_name,
+            ports=agent_ports,
+            extra_volumes=extra_volumes,
+            platform=spec.platform,
+            user=container_user,
+            entrypoint=entrypoint,
+            userns_mode=agent_userns_mode,
+            extra_labels=launch_labels,
+        )
+    except Exception:
+        if proxy_policy_id is not None:
+            remove_container_policy(config, proxy_policy_id)
+        raise
 
     container.reload()
     if container.status not in {"running", "created"}:
@@ -796,6 +811,8 @@ def task_create(
                 container.id,
                 container.name,
                 selected,
+                policy_id=proxy_policy_id,
+                profile=active_profile,
             )
 
     state = container.attrs.get("State", {}) or {}
