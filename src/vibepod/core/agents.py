@@ -34,6 +34,10 @@ class AgentSpec:
     headless_command: list[str] | None = None
     preview: bool = False
     web_container_port: int | None = None
+    # acp_command replaces `command` entirely for `vp run --acp` (Zed Agent
+    # Panel via the Agent Client Protocol). None means the agent does not ship
+    # an ACP adapter and `--acp` aborts with the list of supported agents.
+    acp_command: list[str] | None = None
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -58,6 +62,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         },
         llm_model_args=["--model"],
         headless_prefix=["-p"],
+        acp_command=["npx", "-y", "@agentclientprotocol/claude-agent-acp"],
     ),
     "gemini": AgentSpec(
         "gemini",
@@ -70,6 +75,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config"},
         ikwid_args=["--approval-mode=yolo"],
+        acp_command=["gemini", "--experimental-acp"],
     ),
     "opencode": AgentSpec(
         "opencode",
@@ -133,6 +139,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         },
         llm_model_args=["--oss", "-m"],
         headless_prefix=["exec"],
+        acp_command=["npx", "-y", "@agentclientprotocol/codex-acp"],
     ),
     "pi": AgentSpec(
         "pi",
@@ -205,6 +212,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         {"QWEN_CONFIG_DIR": "/qwen"},
         ikwid_args=["--approval-mode=yolo"],
         headless_prefix=["-p"],
+        acp_command=["qwen", "--experimental-acp"],
     ),
     "dsh": AgentSpec(
         "dsh",

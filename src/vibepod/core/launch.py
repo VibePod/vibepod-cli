@@ -373,8 +373,8 @@ def provision_proxy(
         if manager.pull_if_newer(image, auto_clean=False):
             manager.require_proxy_policy_schema(image, policy_schema)
             existing = manager.find_proxy()
-            if existing:
-                existing.remove(force=True)
+            if existing and existing.status != "running":
+                manager.remove_proxy(existing)
     container = manager.ensure_proxy(
         image=image,
         db_path=db_path,

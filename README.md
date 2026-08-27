@@ -75,22 +75,43 @@ vp run <agent> -- <agent-args>
 
 Use `--ikwid` to append each agent's auto-approval / permission-skip flag when supported.
 
-| Agent | `--ikwid` appended args |
-|---|---|
-| `claude` | `--dangerously-skip-permissions` |
-| `gemini` | `--approval-mode=yolo` |
-| `devstral` (`vibe`) | `--auto-approve` |
-| `copilot` | `--yolo` |
-| `codex` | `--dangerously-bypass-approvals-and-sandbox` |
-| `pi` | `--approve` |
-| `agy` | `--dangerously-skip-permissions` |
-| `opencode` | Not supported |
-| `auggie` | Not supported |
-| `tau` | Not supported |
-| `jcode` | Not supported |
-| `freebuff` | Not supported |
-| `qwen` | `--approval-mode=yolo` |
-| `dsh` | Not supported |
+| Agent               | `--ikwid` appended args                      |
+| ------------------- | -------------------------------------------- |
+| `claude`            | `--dangerously-skip-permissions`             |
+| `gemini`            | `--approval-mode=yolo`                       |
+| `devstral` (`vibe`) | `--auto-approve`                             |
+| `copilot`           | `--yolo`                                     |
+| `codex`             | `--dangerously-bypass-approvals-and-sandbox` |
+| `pi`                | `--approve`                                  |
+| `agy`               | `--dangerously-skip-permissions`             |
+| `opencode`          | Not supported                                |
+| `auggie`            | Not supported                                |
+| `tau`               | Not supported                                |
+| `jcode`             | Not supported                                |
+| `freebuff`          | Not supported                                |
+| `qwen`              | `--approval-mode=yolo`                       |
+| `dsh`               | Not supported                                |
+
+## Editor integration (`--acp`)
+
+`vp run <agent> --acp` turns VibePod into an [Agent Client Protocol](https://agentclientprotocol.com/) adapter, so the containerized agent appears directly in the AI panel of any editor with ACP support (e.g. [Zed](https://zed.dev/docs/ai/external-agents)) — with isolation, profiles, overlays and proxy metrics intact. Supported out of the box: `claude`, `gemini`, `qwen`, `codex`.
+
+Register `vp` as a custom/external agent server in your editor. Zed example (`settings.json`):
+
+```json
+{
+  "agent_servers": {
+    "VibePod Claude": {
+      "type": "custom",
+      "command": "vp",
+      "args": ["run", "claude", "--acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+Run `vp config allow-dir /path/to/project` once first (the editor's stdin is a pipe, so the interactive prompt cannot run). See the [ACP docs](docs/acp.md) for details and limitations.
 
 ![VibePod CLI preview](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/preview.png)
 
@@ -132,11 +153,11 @@ a built-in dashboard.
 
 ![VibePod Analytics Dashboard](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/dashboard.png)
 
-| Command          | Description                                        |
-|------------------|----------------------------------------------------|
-| `vp logs start`  | Start or resume dashboard for collected metrics     |
-| `vp logs stop`   | Stop the dashboard container                       |
-| `vp logs status` | Show dashboard container status                    |
+| Command          | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `vp logs start`  | Start or resume dashboard for collected metrics |
+| `vp logs stop`   | Stop the dashboard container                    |
+| `vp logs status` | Show dashboard container status                 |
 
 The dashboard shows per-agent HTTP traffic, usage over time, and Claude token
 metrics. It also lets you compare agents side-by-side. All data stays on your
