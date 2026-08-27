@@ -16,6 +16,7 @@ from rich.prompt import Confirm, Prompt
 from vibepod import __version__
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
 from vibepod.core.agents import (
+    AGENT_SPECS,
     agent_config_dir,
     effective_agent_image,
     get_agent_shortcut,
@@ -104,9 +105,68 @@ from vibepod.core.profiles import resolve_profile
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
-from vibepod.utils.console import error, info, success, warning
+from vibepod.utils.console import error, info, route_to_stderr, success, warning
 
 _SAFE_SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+# Container paths that must never be shadowed by the ACP path-parity mount of
+# the workspace onto its own host path.
+_ACP_RESERVED_CONTAINER_PATHS = (
+    "/workspace",
+    "/config",
+    "/claude",
+    "/qwen",
+    "/etc",
+    "/usr",
+    "/tmp/.X11-unix",
+)
+
+
+def _resolve_acp_command(spec: Any, agent_cfg: dict[str, Any]) -> list[str] | None:
+    """Resolve the ACP adapter command: config override wins over the spec."""
+    override = agent_cfg.get("acp_command")
+    if override is None:
+        default = spec.acp_command
+        return list(default) if default is not None else None
+    if isinstance(override, str):
+        return override.split()
+    return [str(part) for part in override]
+
+
+def _acp_workspace_mount_path(workspace_path: Path, spec: Any) -> str:
+    """Return the host path the workspace is bound to for ACP path parity.
+
+    ACP clients (editors like Zed) send absolute host paths (session cwd,
+    @-mentions) and expect absolute host paths back in diffs. Binding the
+    workspace onto its own host path (in addition to /workspace) makes both
+    sides agree. Aborts when the host path would shadow a container-reserved
+    path or is not a POSIX path (Windows hosts are not supported in ACP mode).
+    """
+    host_path = str(workspace_path)
+    if not host_path.startswith("/"):
+        error(
+            f"--acp requires a POSIX workspace path; '{host_path}' is not "
+            "usable as a container path (Windows hosts are not supported "
+            "in ACP mode).",
+        )
+        raise typer.Exit(1)
+
+    reserved = {*_ACP_RESERVED_CONTAINER_PATHS, spec.config_mount_path}
+    for reserved_path in sorted(reserved):
+        shadows_reserved = host_path == reserved_path or host_path.startswith(
+            reserved_path + "/",
+        )
+        # Also guard the reverse: binding /tmp over the container /tmp would
+        # shadow the /tmp/.X11-unix mount target inside it.
+        shadowed_by_mount = reserved_path.startswith(host_path + "/")
+        if shadows_reserved or shadowed_by_mount:
+            error(
+                f"--acp cannot mount the workspace at '{host_path}': it collides "
+                f"with the container-reserved path '{reserved_path}'. "
+                "Move the project to a non-reserved host path.",
+            )
+            raise typer.Exit(1)
+    return host_path
 
 
 def _is_safe_skill_id(skill_id: str) -> bool:
@@ -371,6 +431,13 @@ def run(
             help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
         ),
     ] = False,
+    acp: Annotated[
+        bool,
+        typer.Option(
+            "--acp",
+            help="Run as an Agent Client Protocol (ACP) adapter for ACP-capable editors",
+        ),
+    ] = False,
     profile: Annotated[
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
@@ -384,6 +451,13 @@ def run(
     be parsed as VibePod flags.
     """
     passthrough_args = passthrough_args or []
+    if acp and detach:
+        error("--acp cannot be combined with --detach: the ACP client owns the process lifetime.")
+        raise typer.Exit(1)
+    if acp:
+        # Must happen before any output: stdout carries only the ACP
+        # JSON-RPC stream, so all console output is rerouted to stderr.
+        route_to_stderr()
     config = get_config()
     try:
         active_profile = resolve_profile(profile, config)
@@ -402,7 +476,7 @@ def run(
         error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
 
-    _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr)
+    _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
 
     workspace_path = workspace.expanduser().resolve()
     if not workspace_path.exists() or not workspace_path.is_dir():
@@ -436,6 +510,22 @@ def run(
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
+
+    acp_workspace_mount: str | None = None
+    acp_command: list[str] | None = None
+    if acp:
+        acp_command = _resolve_acp_command(spec, agent_cfg)
+        if acp_command is None:
+            acp_capable = [
+                name for name, agent_spec in AGENT_SPECS.items() if agent_spec.acp_command
+            ]
+            error(
+                f"Agent '{selected_agent}' has no ACP adapter. "
+                f"Supported: {', '.join(sorted(acp_capable))}. "
+                "Set agents.<agent>.acp_command in the config to provide one.",
+            )
+            raise typer.Exit(1)
+        acp_workspace_mount = _acp_workspace_mount_path(workspace_path, spec)
     if spec.preview:
         warning(
             f"{selected_agent} is a developer preview; upstream warns of "
@@ -554,6 +644,8 @@ def run(
     )
 
     command = spec.command
+    if acp:
+        command = list(acp_command or [])
     entrypoint: list[str] | None = None
     if init_commands:
         info(f"Applying {len(init_commands)} init command(s) before startup")
@@ -565,7 +657,12 @@ def run(
         entrypoint = _init_entrypoint(init_commands)
 
     if ikwid:
-        if spec.ikwid_args:
+        if acp:
+            warning(
+                "--ikwid ignored in ACP mode: permissions are negotiated by "
+                "the ACP client (i.e. the editor).",
+            )
+        elif spec.ikwid_args:
             if command is None:
                 try:
                     command = manager.resolve_launch_command(image=image, command=spec.command)
@@ -577,7 +674,7 @@ def run(
         else:
             warning(f"IKWID mode not supported for agent '{selected_agent}', ignoring")
 
-    if llm_command_extra:
+    if llm_command_extra and not acp:
         command = list(command or []) + llm_command_extra
 
     if passthrough_args:
@@ -613,7 +710,7 @@ def run(
         selected_agent,
         config_dir,
         config,
-        no_herdr=no_herdr,
+        no_herdr=no_herdr or acp,
     )
     herdr_labels = (
         {_HERDR_PANE_LABEL: os.environ["HERDR_PANE_ID"]}
@@ -713,6 +810,9 @@ def run(
             entrypoint=entrypoint,
             userns_mode=agent_userns_mode,
             extra_labels=launch_labels,
+            workspace_mount_path=acp_workspace_mount,
+            start=not acp,
+            tty=not acp,
         )
     except Exception:
         if proxy_policy_id is not None:
@@ -720,50 +820,87 @@ def run(
         raise
 
     container.reload()
-    if container.status != "running":
+    if container.status != "running" and not (acp and container.status == "created"):
         recent = container.logs(tail=50).decode("utf-8", errors="replace")
         error("Container exited immediately after start.")
         if recent.strip():
-            print(recent)
+            if acp:
+                # stdout is the ACP JSON-RPC stream; keep diagnostics on stderr.
+                sys.stderr.write(recent)
+                sys.stderr.flush()
+            else:
+                print(recent)
         if herdr_volumes:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
         raise typer.Exit(1)
 
-    # Prefer the inspected bindings (they resolve ephemeral 0-port publishes to
-    # the daemon-assigned port); fall back to the requested bindings when the
-    # inspect payload has no Ports section.
-    inspected_ports = (container.attrs.get("NetworkSettings") or {}).get("Ports") or None
-    web_url = _web_ui_url(spec.web_container_port, inspected_ports or agent_ports)
-    if web_url:
-        success(f"{selected_agent} Web UI → {web_url}")
-        info("Sessions persist in the agent config dir.")
-
-    if extra_network and extra_network != network_name:
-        try:
-            manager.connect_network(container, extra_network)
-            info(f"Connected to additional network: {extra_network}")
-        except DockerClientError as exc:
-            warning(str(exc))
-
-    if proxy_db_path is not None:
-        container_ip = _get_container_ip(container, network_name)
-        if container_ip:
-            mapping_path = proxy_db_path.parent / "containers.json"
-            mapping_updated = _update_container_mapping(
-                mapping_path,
-                container_ip,
-                container.id,
-                container.name,
-                selected_agent,
-                policy_id=proxy_policy_id,
-                profile=active_profile,
-            )
-            if not mapping_updated:
-                warning(
-                    f"Could not write proxy container mapping at {mapping_path}. "
-                    "Fix proxy directory permissions to restore container attribution.",
+    def _finish_acp_launch() -> None:
+        """Start the container after the attach socket is open, then wire up
+        everything that needs a started container (extra network, proxy
+        attribution). Called from attach_stdio before the first byte flows."""
+        container.start()
+        if extra_network and extra_network != network_name:
+            try:
+                manager.connect_network(container, extra_network)
+                info(f"Connected to additional network: {extra_network}")
+            except DockerClientError as exc:
+                warning(str(exc))
+        if proxy_db_path is not None:
+            container.reload()
+            container_ip = _get_container_ip(container, network_name)
+            if container_ip:
+                mapping_path = proxy_db_path.parent / "containers.json"
+                mapping_updated = _update_container_mapping(
+                    mapping_path,
+                    container_ip,
+                    container.id,
+                    container.name,
+                    selected_agent,
+                    policy_id=proxy_policy_id,
+                    profile=active_profile,
                 )
+                if not mapping_updated:
+                    warning(
+                        f"Could not write proxy container mapping at {mapping_path}. "
+                        "Fix proxy directory permissions to restore container attribution.",
+                    )
+
+    if not acp:
+        # Prefer the inspected bindings (they resolve ephemeral 0-port publishes to
+        # the daemon-assigned port); fall back to the requested bindings when the
+        # inspect payload has no Ports section.
+        inspected_ports = (container.attrs.get("NetworkSettings") or {}).get("Ports") or None
+        web_url = _web_ui_url(spec.web_container_port, inspected_ports or agent_ports)
+        if web_url:
+            success(f"{selected_agent} Web UI → {web_url}")
+            info("Sessions persist in the agent config dir.")
+
+        if extra_network and extra_network != network_name:
+            try:
+                manager.connect_network(container, extra_network)
+                info(f"Connected to additional network: {extra_network}")
+            except DockerClientError as exc:
+                warning(str(exc))
+
+        if proxy_db_path is not None:
+            container_ip = _get_container_ip(container, network_name)
+            if container_ip:
+                mapping_path = proxy_db_path.parent / "containers.json"
+                mapping_updated = _update_container_mapping(
+                    mapping_path,
+                    container_ip,
+                    container.id,
+                    container.name,
+                    selected_agent,
+                    policy_id=proxy_policy_id,
+                    profile=active_profile,
+                )
+                if not mapping_updated:
+                    warning(
+                        f"Could not write proxy container mapping at {mapping_path}. "
+                        "Fix proxy directory permissions to restore container attribution.",
+                    )
 
     if detach:
         if selected_agent == "claude" and "setup-token" in passthrough_args:
@@ -797,9 +934,15 @@ def run(
 
     exit_reason = "normal"
     output_tail = b""
-    warning("Attached to container. Use Ctrl+C to stop.")
+    if not acp:
+        warning("Attached to container. Use Ctrl+C to stop.")
     try:
-        output_tail = manager.attach_interactive(container, logger=logger)
+        if acp:
+            # No SessionLogger frames here: JSON-RPC payloads embed whole file
+            # contents, and the ACP client owns the transcript.
+            manager.attach_stdio(container, on_attached=_finish_acp_launch)
+        else:
+            output_tail = manager.attach_interactive(container, logger=logger)
     except KeyboardInterrupt:
         exit_reason = "keyboard_interrupt"
         info("Stopping container...")
@@ -817,7 +960,7 @@ def run(
     if selected_agent == "claude" and "setup-token" in passthrough_args and exit_reason == "normal":
         _capture_claude_setup_token(config_dir)
 
-    if exit_reason == "normal":
+    if exit_reason == "normal" and not acp:
         show_resume_hint(selected_agent, output_tail)
 
 

@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +27,249 @@ requires_af_unix = pytest.mark.skipif(
     not hasattr(socket, "AF_UNIX"),
     reason="AF_UNIX sockets are not available on this platform",
 )
+
+
+# ---------------------------------------------------------------------------
+# ACP support: run_agent(start=False/tty=False) and attach_stdio
+# ---------------------------------------------------------------------------
+
+
+class _AcpLowLevelApi:
+    def __init__(self) -> None:
+        self.create_kwargs: dict | None = None
+        self.host_config_kwargs: dict | None = None
+        self.started: str | None = None
+
+    def create_host_config(self, **kwargs):
+        self.host_config_kwargs = kwargs
+        return {"Binds": kwargs["binds"], "AutoRemove": kwargs["auto_remove"]}
+
+    def create_container(self, **kwargs):
+        self.create_kwargs = kwargs
+        return {"Id": "created"}
+
+    def start(self, container_id: str) -> None:
+        self.started = container_id
+
+
+class _AcpLowLevelClient:
+    def __init__(self) -> None:
+        self.api = _AcpLowLevelApi()
+
+        class _Containers:
+            def get(self, container_id: str):
+                return {"id": container_id}
+
+        self.containers = _Containers()
+
+
+def _run_acp_agent(manager: DockerManager, tmp_path: Path, **overrides):
+    kwargs = dict(
+        agent="claude",
+        image="vibepod/claude:latest",
+        workspace=tmp_path / "workspace",
+        config_dir=tmp_path / "agents" / "claude",
+        config_mount_path="/claude",
+        env={},
+        command=["npx", "-y", "@agentclientprotocol/claude-agent-acp"],
+        auto_remove=True,
+        name=None,
+        version="test",
+    )
+    kwargs.update(overrides)
+    return manager.run_agent(**kwargs)
+
+
+def test_run_agent_start_false_creates_without_starting(tmp_path: Path) -> None:
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "agents" / "claude").mkdir(parents=True)
+
+    container = _run_acp_agent(
+        manager,
+        tmp_path,
+        workspace_mount_path=str(tmp_path / "workspace"),
+        start=False,
+        tty=False,
+    )
+
+    assert container == {"id": "created"}
+    assert client.api.started is None
+    kwargs = client.api.create_kwargs
+    assert kwargs is not None
+    assert kwargs["tty"] is False
+    assert kwargs["stdin_open"] is True
+    assert kwargs["working_dir"] == str(tmp_path / "workspace")
+    binds = client.api.host_config_kwargs["binds"]
+    assert f"{tmp_path / 'workspace'}:/workspace:rw" in binds
+    assert f"{tmp_path / 'workspace'}:{tmp_path / 'workspace'}:rw" in binds
+
+
+def test_run_agent_workspace_mount_path_sets_working_dir(tmp_path: Path) -> None:
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "agents" / "claude").mkdir(parents=True)
+
+    _run_acp_agent(
+        manager,
+        tmp_path,
+        workspace_mount_path=str(tmp_path / "workspace"),
+        start=False,
+    )
+
+    kwargs = client.api.create_kwargs
+    assert kwargs is not None
+    assert kwargs["working_dir"] == str(tmp_path / "workspace")
+    assert kwargs["tty"] is True
+    assert "UsernsMode" not in client.api.create_kwargs["host_config"]
+
+
+def test_run_agent_podman_branch_honors_start_false(tmp_path: Path) -> None:
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "agents" / "claude").mkdir(parents=True)
+
+    _run_acp_agent(
+        manager,
+        tmp_path,
+        userns_mode="keep-id",
+        workspace_mount_path=str(tmp_path / "workspace"),
+        start=False,
+        tty=False,
+    )
+
+    assert client.api.started is None
+    kwargs = client.api.create_kwargs
+    assert kwargs is not None
+    assert kwargs["tty"] is False
+    assert kwargs["working_dir"] == str(tmp_path / "workspace")
+    binds = client.api.host_config_kwargs["binds"]
+    assert f"{tmp_path / 'workspace'}:{tmp_path / 'workspace'}:rw" in binds
+
+
+class _FakeStreamSocket:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = list(chunks)
+        self.shutdown_calls: list[int] = []
+
+    def recv(self, _size: int) -> bytes:
+        if self._chunks:
+            return self._chunks.pop(0)
+        return b""
+
+    def shutdown(self, how: int) -> None:
+        self.shutdown_calls.append(how)
+
+    def sendall(self, data: bytes) -> None:
+        del data
+
+
+class _FakeSocketWrapper:
+    def __init__(self, sock: _FakeStreamSocket) -> None:
+        self._sock = sock
+
+    def close(self) -> None:
+        pass
+
+
+class _AttachClient:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.wrapper = _FakeSocketWrapper(_FakeStreamSocket(chunks))
+
+    @property
+    def api(self):
+        return self
+
+    def attach_socket(self, _id: str, params: dict) -> _FakeSocketWrapper:
+        assert params == {"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
+        return self.wrapper
+
+
+class _AttachContainer:
+    id = "abc123"
+    attrs = {"State": {"ExitCode": 0}}
+
+    def reload(self) -> None:
+        pass
+
+    def stop(self, timeout: int = 0) -> None:
+        pass
+
+
+def _run_attach_stdio(monkeypatch, chunks: list[bytes]) -> tuple[bytes, bytes, int]:
+    import types
+
+    from vibepod.core import docker as docker_mod
+
+    out = io.BytesIO()
+    err = io.BytesIO()
+    fake_stdout = types.SimpleNamespace(buffer=out)
+    fake_stderr = types.SimpleNamespace(buffer=err)
+    fake_stdin = types.SimpleNamespace(closed=False)
+
+    def _no_fileno() -> int:
+        raise ValueError("no fd in test")
+
+    fake_stdin.fileno = _no_fileno
+
+    client = _AttachClient(chunks)
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    select_calls: list[list[Any]] = []
+
+    def _fake_select(readers, writ, exc):
+        select_calls.append(list(readers))
+        # Always report the stream socket ready; recv() returns b"" once the
+        # scripted chunks are drained, which ends the attach loop.
+        return ([readers[0]], [], [])
+
+    monkeypatch.setattr(docker_mod.select, "select", _fake_select)
+    monkeypatch.setattr(docker_mod.sys, "stdout", fake_stdout)
+    monkeypatch.setattr(docker_mod.sys, "stderr", fake_stderr)
+    monkeypatch.setattr(docker_mod.sys, "stdin", fake_stdin)
+
+    exit_code = manager.attach_stdio(_AttachContainer())
+    return out.getvalue(), err.getvalue(), exit_code
+
+
+def test_attach_stdio_demuxes_split_frames(monkeypatch) -> None:
+    header_out = b"\x01\x00\x00\x00" + len(b'{"jsonrpc": "2.0"}\n').to_bytes(4, "big")
+    header_err = b"\x02\x00\x00\x00" + len(b"boom\n").to_bytes(4, "big")
+    # The stdout frame is split across recv() boundaries.
+    chunks = [
+        header_out[:5],
+        header_out[5:] + b'{"jsonr',
+        b'pc": "2.0"}\n' + header_err + b"boom\n",
+    ]
+
+    out, err, exit_code = _run_attach_stdio(monkeypatch, chunks)
+
+    assert out == b'{"jsonrpc": "2.0"}\n'
+    assert err == b"boom\n"
+    assert exit_code == 0
+
+
+def test_attach_stdio_preserves_null_bytes_and_routes_stderr(monkeypatch) -> None:
+    payload = b"a\x00b"
+    chunks = [
+        b"\x01\x00\x00\x00" + len(payload).to_bytes(4, "big") + payload,
+        b"\x02\x00\x00\x00\x00\x00\x00\x00",
+    ]
+
+    out, err, _ = _run_attach_stdio(monkeypatch, chunks)
+
+    assert out == payload
+    assert err == b""
 
 
 @pytest.fixture()

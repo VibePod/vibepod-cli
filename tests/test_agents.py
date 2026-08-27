@@ -255,6 +255,21 @@ def test_agents_without_llm_env_map() -> None:
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
 
 
+def test_acp_commands_match_contract() -> None:
+    expected = {
+        "claude": ["npx", "-y", "@agentclientprotocol/claude-agent-acp"],
+        "gemini": ["gemini", "--experimental-acp"],
+        "qwen": ["qwen", "--experimental-acp"],
+        "codex": ["npx", "-y", "@agentclientprotocol/codex-acp"],
+    }
+    for agent in SUPPORTED_AGENTS:
+        spec = get_agent_spec(agent)
+        if agent in expected:
+            assert spec.acp_command == expected[agent]
+        else:
+            assert spec.acp_command is None, f"{agent} should not have acp_command"
+
+
 def test_opencode_spec_matches_container_contract() -> None:
     spec = get_agent_spec("opencode")
     assert spec.id == "opencode"
