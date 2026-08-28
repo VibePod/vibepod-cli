@@ -75,7 +75,17 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config"},
         ikwid_args=["--approval-mode=yolo"],
-        acp_command=["gemini", "--experimental-acp"],
+        # Same launcher as `command`: --acp replaces it wholesale, so the
+        # shebang/HOME workaround above has to be repeated here. Keep
+        # --experimental-acp (the `--acp` alias only exists in gemini-cli
+        # >= 0.33; the image tracks upstream and is not pinned).
+        acp_command=[
+            "env",
+            "HOME=/config",
+            "node",
+            "/usr/local/bin/gemini",
+            "--experimental-acp",
+        ],
     ),
     "opencode": AgentSpec(
         "opencode",
@@ -92,6 +102,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
             "XDG_STATE_HOME": "/config/.local/state",
             "XDG_CACHE_HOME": "/config/.cache",
         },
+        acp_command=["opencode", "acp"],
     ),
     "devstral": AgentSpec(
         "devstral",
@@ -104,6 +115,9 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         platform="linux/amd64",
         run_as_host_user=True,
         ikwid_args=["--auto-approve"],
+        # Separate console script shipped by the same mistral-vibe package,
+        # not a flag on `devstral`.
+        acp_command=["vibe-acp"],
     ),
     "auggie": AgentSpec(
         "auggie",
@@ -114,6 +128,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config"},
         headless_prefix=["--print"],
+        acp_command=["auggie", "--acp"],
     ),
     "copilot": AgentSpec(
         "copilot",
@@ -124,6 +139,10 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config"},
         ikwid_args=["--yolo"],
+        # --stdio is the default transport, but it is mutually exclusive with
+        # --port: pass it so an inherited config cannot move the adapter onto
+        # a socket the attach stream never sees.
+        acp_command=["copilot", "--acp", "--stdio"],
     ),
     "codex": AgentSpec(
         "codex",
@@ -187,6 +206,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # so pointing HOME at the persisted /config mount covers both.
         {"HOME": "/config", "JCODE_NO_AUTO_UPDATE": "1"},
         headless_prefix=["run"],
+        acp_command=["jcode", "acp"],
     ),
     "freebuff": AgentSpec(
         "freebuff",

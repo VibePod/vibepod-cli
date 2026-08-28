@@ -83,6 +83,7 @@ def test_agent_extra_volumes_for_auggie(tmp_path: Path) -> None:
     assert run_cmd._agent_extra_volumes("auggie", config_dir) == [
         (str(augment_dir), "/root/.augment", "rw"),
         (str(augment_dir), "/home/node/.augment", "rw"),
+        (str(augment_dir), "/home/auggie/.augment", "rw"),
     ]
 
 
@@ -113,6 +114,7 @@ def test_agent_extra_volumes_for_copilot(tmp_path: Path) -> None:
         (str(config_host), "/root/.copilot", "rw"),
         (str(config_host), "/home/node/.copilot", "rw"),
         (str(config_host), "/home/coder/.copilot", "rw"),
+        (str(config_host), "/home/copilot/.copilot", "rw"),
     ]
 
 

@@ -219,11 +219,17 @@ def init_entrypoint(init_commands: list[str]) -> list[str]:
 
 def agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, str]]:
     """Return agent-specific bind mounts as (host_path, container_path, mode)."""
+    # These images drop privileges with `su`, which resets HOME to the runtime
+    # user's passwd entry — so the credential dir has to be bound at every home
+    # the entrypoint can land on, including the one it creates for a host uid it
+    # does not already know (macOS Docker Desktop's 501, for one). ACP mode
+    # cannot recover from a miss: editors have no TTY for a login flow.
     if agent == "auggie":
         host = str(config_dir / ".augment")
         return [
             (host, "/root/.augment", "rw"),
             (host, "/home/node/.augment", "rw"),
+            (host, "/home/auggie/.augment", "rw"),
         ]
     if agent == "copilot":
         host = str(config_dir / ".copilot")
@@ -231,6 +237,7 @@ def agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, st
             (host, "/root/.copilot", "rw"),
             (host, "/home/node/.copilot", "rw"),
             (host, "/home/coder/.copilot", "rw"),
+            (host, "/home/copilot/.copilot", "rw"),
         ]
     if agent == "opencode":
         xdg_config = config_dir / ".config" / "opencode"
