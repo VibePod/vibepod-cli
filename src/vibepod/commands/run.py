@@ -140,14 +140,15 @@ def _acp_workspace_mount_path(workspace_path: Path, spec: Any) -> str:
     @-mentions) and expect absolute host paths back in diffs. Binding the
     workspace onto its own host path (in addition to /workspace) makes both
     sides agree. Aborts when the host path would shadow a container-reserved
-    path or is not a POSIX path (Windows hosts are not supported in ACP mode).
+    path, or is not a POSIX path: a Linux container's bind target cannot be a
+    Windows path, so native Windows hosts run ACP mode from WSL2 instead.
     """
     host_path = str(workspace_path)
     if not host_path.startswith("/"):
         error(
-            f"--acp requires a POSIX workspace path; '{host_path}' is not "
-            "usable as a container path (Windows hosts are not supported "
-            "in ACP mode).",
+            f"--acp requires a POSIX workspace path; '{host_path}' cannot be a "
+            "container path. On Windows, run the editor and vp inside WSL2 "
+            "(see the ACP docs).",
         )
         raise typer.Exit(1)
 
