@@ -703,6 +703,62 @@ def test_ensure_proxy_rejects_incompatible_running_container(mock_docker, tmp_pa
         )
 
 
+@patch("vibepod.core.docker.docker")
+def test_remove_proxy_returns_once_the_target_container_is_gone(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    existing = MagicMock(id="old")
+    mock_client.containers.list.return_value = []
+
+    manager = DockerManager()
+    manager.remove_proxy(existing, timeout=1.0)
+
+    existing.remove.assert_called_once_with(force=True)
+
+
+@patch("vibepod.core.docker.docker")
+def test_remove_proxy_returns_when_a_peer_already_created_the_replacement(mock_docker) -> None:
+    """A racing launch's new proxy carries the same labels as the old one.
+
+    Waiting for `find_proxy()` to go empty would then never be satisfied, and
+    the second launch would abort even though a healthy proxy is up.
+    """
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    existing = MagicMock(id="old")
+    mock_client.containers.list.return_value = [MagicMock(id="new")]
+
+    manager = DockerManager()
+    manager.remove_proxy(existing, timeout=1.0)
+
+
+@patch("vibepod.core.docker.docker")
+def test_remove_proxy_tolerates_a_peer_winning_the_removal(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.containers.list.return_value = []
+
+    for error in (
+        APIError("409 Client Error: removal of container abc is already in progress"),
+        NotFound("404 Client Error: No such container: abc"),
+    ):
+        existing = MagicMock(id="old")
+        existing.remove.side_effect = error
+        DockerManager().remove_proxy(existing, timeout=1.0)
+
+
+@patch("vibepod.core.docker.docker")
+def test_remove_proxy_times_out_while_the_target_lingers(mock_docker) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    existing = MagicMock(id="old")
+    mock_client.containers.list.return_value = [existing]
+
+    manager = DockerManager()
+    with pytest.raises(DockerClientError, match="Timed out"):
+        manager.remove_proxy(existing, timeout=0.5)
+
+
 def test_discover_podman_socket_skipped_when_docker_host_set(monkeypatch) -> None:
     monkeypatch.setenv("DOCKER_HOST", "unix:///var/run/docker.sock")
     assert _discover_podman_socket() is None

@@ -858,21 +858,30 @@ class DockerManager:
         return containers[0] if containers else None
 
     def remove_proxy(self, existing: Any, timeout: float = 15.0) -> None:
-        """Force-remove a non-running proxy container.
+        """Force-remove a proxy container and wait for it to disappear.
 
         Concurrent launches (e.g. an editor spawning `vp run` twice) can race
         on the removal; Docker then answers 409 "removal ... is already in
-        progress". Treat that as success and wait until the container is gone
-        so the caller can create its replacement.
+        progress", or 404 if the peer already finished. Treat both as success
+        and wait until the container is gone so the caller can create its
+        replacement.
+
+        The wait tracks *this* container, not any proxy: a peer's replacement
+        carries the same labels, so waiting for `find_proxy()` to go empty
+        would never be satisfied once one exists.
         """
+        target_id = getattr(existing, "id", None)
         try:
             existing.remove(force=True)
+        except NotFound:
+            return
         except APIError as exc:
             if "already in progress" not in str(exc):
                 raise
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if self.find_proxy() is None:
+            current = self.find_proxy()
+            if current is None or getattr(current, "id", None) != target_id:
                 return
             time.sleep(0.2)
         raise DockerClientError(
