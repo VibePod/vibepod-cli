@@ -10,9 +10,29 @@ metric collection — stays active.
 
 ## Supported agents
 
-`claude`, `gemini`, `qwen` and `codex` ship an ACP adapter command. Other
-agents abort with an error listing the supported agents (you can still provide
-your own adapter via `agents.<agent>.acp_command` in the config).
+Nine agents ship an ACP adapter command. They split into two kinds, which
+differ in what has to happen before the first JSON-RPC frame:
+
+| Agent      | Adapter                                     |
+| ---------- | ------------------------------------------- |
+| `opencode` | `opencode acp` — built into the CLI         |
+| `copilot`  | `copilot --acp --stdio` — built into the CLI |
+| `auggie`   | `auggie --acp` — built into the CLI          |
+| `jcode`    | `jcode acp` — built into the CLI             |
+| `gemini`   | `gemini --experimental-acp` — built in       |
+| `qwen`     | `qwen --experimental-acp` — built in         |
+| `devstral` | `vibe-acp` — separate binary in the image    |
+| `claude`   | `npx @agentclientprotocol/claude-agent-acp`  |
+| `codex`    | `npx @agentclientprotocol/codex-acp`         |
+
+The first seven run a binary that is already in the image, so they start
+offline and immediately. `claude` and `codex` fetch their adapter over the
+network on every launch, which adds startup latency and needs the package
+registry reachable through the proxy filter.
+
+Other agents abort with an error listing the supported agents (you can still
+provide your own adapter via `agents.<agent>.acp_command` in the config —
+that is also how you pin an `npx` adapter to a version).
 
 ## Setup
 
@@ -34,9 +54,9 @@ arguments. For example, in [Zed](https://zed.dev/docs/ai/external-agents)
 }
 ```
 
-Repeat the block for `gemini`, `qwen` or `codex` (adjust the `run` argument)
-if you want more than one. Make sure `vp` is on the `PATH` your editor
-inherits (or use an absolute path).
+Repeat the block for any other supported agent (adjust the `run` argument) if
+you want more than one. Make sure `vp` is on the `PATH` your editor inherits
+(or use an absolute path).
 
 Then allow your project directory once — under an editor, stdin is a pipe, so
 the interactive allow prompt cannot run:
@@ -44,6 +64,18 @@ the interactive allow prompt cannot run:
 ```bash
 vp config allow-dir /path/to/your/project
 ```
+
+Authenticate the agent once interactively too, before the first ACP session:
+
+```bash
+vp run <agent>   # sign in, then quit
+```
+
+An ACP session cannot log you in. Most adapters expose no authentication
+method to the editor at all, and the ones that do point it at a command inside
+the container that the editor would run on your host. Credentials persist in
+the agent's config dir, so this is a one-time step per agent and profile; skip
+it and the thread starts cleanly and then fails on the first prompt.
 
 Open the AI/agent panel in your editor, pick the VibePod thread type, and
 start a thread inside your project.

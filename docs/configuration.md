@@ -56,9 +56,9 @@ agents:
     overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
     # acp_command: ACP adapter command for `vp run <agent> --acp` (editor
     # integration via the Agent Client Protocol). Defaults exist for claude,
-    # gemini, qwen and codex; override with a list (or a string, which is
-    # shell-split). Not present by default — just add the key to override.
-    # just add the key to override.
+    # gemini, qwen, codex, opencode, copilot, auggie, jcode and devstral;
+    # override with a list (or a string, split on whitespace). Not present by
+    # default — just add the key to override.
     # acp_command: ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
 
   gemini:
