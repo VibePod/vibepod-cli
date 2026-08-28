@@ -94,10 +94,48 @@ When you close the thread, the editor kills the `vp` process; the container
 sees stdin EOF, the adapter exits, and `auto_remove` cleans up — no orphaned
 containers.
 
+## Windows: run it from WSL2
+
+ACP itself is platform-neutral, and your editor's ACP support is not the
+problem — the path-parity mount is. A Linux container's bind *target* has to be
+a Linux path, so `C:\Users\you\proj` cannot be mounted onto itself and `--acp`
+refuses a Windows workspace path.
+
+WSL2 works today, with no special flags: put the project on the WSL filesystem,
+enable Docker Desktop's WSL integration, install `vp` in the distro, and open
+the project as a **remote WSL project** in your editor (in Zed:
+`projects: open folder in wsl`). The editor then spawns `vp` inside the distro,
+every path on both sides is POSIX, and the parity mount lines up.
+
+```json
+{
+  "agent_servers": {
+    "VibePod Claude": {
+      "type": "custom",
+      "command": "/home/you/.local/bin/vp",
+      "args": ["run", "claude", "--acp", "-w", "/home/you/proj"],
+      "env": {}
+    }
+  }
+}
+```
+
+Use an absolute path to `vp` (the spawn environment is not a login shell) and
+pass `-w` explicitly: VibePod picks the workspace from `--workspace` at launch
+and never reads the cwd the ACP client sends, and the spawn cwd is not
+guaranteed to be your project.
+
+!!! warning "Do not bridge a Windows-side project through `wsl.exe`"
+
+    Running a Windows-native editor against a Windows-side project with
+    `"command": "wsl.exe"` looks like it works and then silently misbehaves:
+    the editor sends `C:\dev\proj` while VibePod mounts `/mnt/c/dev/proj`, and
+    nothing translates between them. The path starts with `/`, so the guard
+    above does not catch it. Keep the project, the editor's remote server and
+    `vp` all on the Linux side.
+
 ## Limitations
 
-- **Windows hosts are not supported**: the path-parity mount requires the host
-  workspace path to be a valid container path.
 - The workspace host path must not collide with container-reserved paths
   (`/workspace`, `/config`, `/claude`, `/qwen`, `/etc`, `/usr`,
   `/tmp/.X11-unix` and the agent's config mount); `--acp` aborts with a clear

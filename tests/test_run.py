@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import typer
@@ -2673,7 +2673,7 @@ def test_run_recreates_proxy_when_image_updated(monkeypatch, tmp_path: Path) -> 
     events: list[str] = []
 
     class _OldProxyContainer:
-        status = "exited"
+        status = "running"
 
         def remove(self, force: bool = False) -> None:
             events.append("proxy.remove")
@@ -2800,6 +2800,17 @@ class _FakeSessionLogger:
         pass
 
 
+# `--acp` binds the workspace onto its own host path, which a Linux container
+# cannot do with a Windows path: run() aborts at _acp_workspace_mount_path
+# before any container is created. Windows users run ACP mode from WSL2, where
+# the workspace path is POSIX — so these tests exercise the supported host, and
+# only native-Windows interpreters skip.
+_requires_posix_workspace = pytest.mark.skipif(
+    os.name == "nt",
+    reason="ACP mode runs from WSL2 on Windows, where workspace paths are POSIX",
+)
+
+
 @pytest.fixture()
 def _acp_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Common stubs for ACP run tests; returns the workspace dir."""
@@ -2810,6 +2821,7 @@ def _acp_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return workspace
 
 
+@_requires_posix_workspace
 def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env) -> None:
     captured: dict = {}
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
@@ -2825,6 +2837,7 @@ def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env) -> None
     assert captured["container_started_by_attach"] is True
 
 
+@_requires_posix_workspace
 def test_acp_config_override_wins_over_default(monkeypatch, _acp_env) -> None:
     captured: dict = {}
     config = _make_config()
@@ -2863,6 +2876,7 @@ def test_acp_detach_aborts(monkeypatch, _acp_env) -> None:
     assert "command" not in captured
 
 
+@_requires_posix_workspace
 def test_acp_skips_herdr_hint(monkeypatch, _acp_env) -> None:
     captured: dict = {}
     calls: dict = {}
@@ -2879,6 +2893,7 @@ def test_acp_skips_herdr_hint(monkeypatch, _acp_env) -> None:
     assert calls["no_herdr"] is True
 
 
+@_requires_posix_workspace
 def test_acp_ignores_ikwid_with_warning(monkeypatch, _acp_env) -> None:
     captured: dict = {}
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
@@ -2889,11 +2904,32 @@ def test_acp_ignores_ikwid_with_warning(monkeypatch, _acp_env) -> None:
     assert captured["command"] == ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
 
 
-def test_acp_workspace_mount_path_guard(tmp_path: Path) -> None:
+@_requires_posix_workspace
+def test_acp_workspace_mount_path_accepts_a_posix_workspace(tmp_path: Path) -> None:
     spec = get_agent_spec("claude")
     good = run_cmd._acp_workspace_mount_path(tmp_path / "proj", spec)
     assert good == str(tmp_path / "proj")
 
+
+def test_acp_workspace_mount_path_accepts_wsl_paths() -> None:
+    """WSL2 is the supported Windows route, so its paths must pass the guard.
+
+    Both shapes matter: a project on the distro filesystem, and one on a
+    Windows drive reached through /mnt (which works for the mount, but is the
+    setup that silently mismatches paths — see docs/acp.md).
+    """
+    spec = get_agent_spec("claude")
+    # PurePosixPath, not Path: a native-Windows interpreter would stringify
+    # these with backslashes and the assertion would test nothing.
+    for wsl_path in ("/home/you/proj", "/mnt/c/dev/proj"):
+        assert run_cmd._acp_workspace_mount_path(PurePosixPath(wsl_path), spec) == wsl_path
+
+
+def test_acp_workspace_mount_path_guard(tmp_path: Path) -> None:
+    spec = get_agent_spec("claude")
+
+    # On Windows these are rejected by the POSIX check rather than the
+    # reserved-path check — a different reason, but the same right outcome.
     for reserved in ("/workspace", "/config", "/etc/vibepod", "/usr/local", "/claude"):
         with pytest.raises(typer.Exit):
             run_cmd._acp_workspace_mount_path(Path(reserved), spec)
@@ -2907,6 +2943,7 @@ def test_acp_workspace_mount_path_guard(tmp_path: Path) -> None:
         run_cmd._acp_workspace_mount_path(Path("C:\\projects\\demo"), spec)
 
 
+@_requires_posix_workspace
 def test_acp_routes_console_to_stderr(monkeypatch, _acp_env) -> None:
     from vibepod.utils import console as console_mod
 
