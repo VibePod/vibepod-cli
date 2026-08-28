@@ -380,7 +380,11 @@ def provision_proxy(
         if manager.pull_if_newer(image, auto_clean=False):
             manager.require_proxy_policy_schema(image, policy_schema)
             existing = manager.find_proxy()
-            if existing and existing.status != "running":
+            if existing:
+                # Including a *running* proxy: ensure_proxy returns one as-is,
+                # so leaving it would keep serving the superseded image for the
+                # life of the container. remove_proxy tolerates a concurrent
+                # launch removing it first.
                 manager.remove_proxy(existing)
     container = manager.ensure_proxy(
         image=image,
