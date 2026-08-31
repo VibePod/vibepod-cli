@@ -15,13 +15,14 @@ class TestSessionLogger:
         db = tmp_path / "test.db"
         return SessionLogger(db, enabled=enabled)
 
-    def _open(self, logger: SessionLogger) -> str:
+    def _open(self, logger: SessionLogger, profile: str = "default") -> str:
         sid = logger.open_session(
             agent="claude",
             image="ghcr.io/anthropics/claude-code:latest",
             workspace="/workspace",
             container_id="abc123",
             container_name="vibepod-claude-test",
+            profile=profile,
             vibepod_version="0.2.1",
         )
         return sid  # type: ignore[return-value]
@@ -57,6 +58,38 @@ class TestSessionLogger:
         assert row == ("claude", "vibepod-claude-test")
         conn.close()
         logger.close_session()
+
+    def test_open_stores_profile(self, tmp_path):
+        logger = self._make_logger(tmp_path)
+        sid = self._open(logger, profile="work")
+
+        conn = sqlite3.connect(str(tmp_path / "test.db"))
+        row = conn.execute("SELECT profile FROM sessions WHERE id = ?", (sid,)).fetchone()
+        assert row == ("work",)
+        conn.close()
+        logger.close_session()
+
+    def test_migrates_profile_column_on_existing_db(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE sessions ("
+            "id TEXT PRIMARY KEY, agent TEXT NOT NULL, image TEXT NOT NULL, "
+            "workspace TEXT NOT NULL, container_id TEXT NOT NULL, "
+            "container_name TEXT NOT NULL, started_at TEXT NOT NULL, "
+            "ended_at TEXT, exit_reason TEXT, vibepod_version TEXT NOT NULL)",
+        )
+        conn.commit()
+        conn.close()
+
+        logger = SessionLogger(db_path, enabled=True)
+        sid = self._open(logger, profile="migrated")
+        logger.close_session()
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute("SELECT profile FROM sessions WHERE id = ?", (sid,)).fetchone()
+        assert row == ("migrated",)
+        conn.close()
 
     def test_close_sets_ended_at_and_reason(self, tmp_path):
         logger = self._make_logger(tmp_path)
@@ -308,6 +341,7 @@ class TestSessionLogger:
             workspace="/ws",
             container_id="c1",
             container_name="cn",
+            profile="default",
             vibepod_version="0.2.1",
         )
         assert result is None
@@ -355,6 +389,7 @@ class TestSessionLogger:
             workspace="/ws",
             container_id="c1",
             container_name="cn",
+            profile="default",
             vibepod_version="0.2.1",
         )
         logger.close_session()
