@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     workspace       TEXT NOT NULL,
     container_id    TEXT NOT NULL,
     container_name  TEXT NOT NULL,
+    profile         TEXT NOT NULL DEFAULT 'default',
     started_at      TEXT NOT NULL,
     ended_at        TEXT,
     exit_reason     TEXT,
@@ -67,6 +68,7 @@ class SessionLogger:
         workspace: str,
         container_id: str,
         container_name: str,
+        profile: str,
         vibepod_version: str,
     ) -> str | None:
         """Create the session row.  Returns the session id, or ``None`` when disabled."""
@@ -78,6 +80,9 @@ class SessionLogger:
 
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
+        # Backfill columns first: databases from older versions may not have
+        # the profile column yet, and CREATE TABLE IF NOT EXISTS won't add it.
+        self._migrate_schema()
         self._conn.executescript(_SCHEMA)
 
         self._session_id = uuid4().hex
@@ -85,9 +90,9 @@ class SessionLogger:
 
         self._conn.execute(
             "INSERT INTO sessions "
-            "(id, agent, image, workspace, container_id, container_name, "
+            "(id, agent, image, workspace, container_id, container_name, profile, "
             "started_at, vibepod_version) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 self._session_id,
                 agent,
@@ -95,6 +100,7 @@ class SessionLogger:
                 workspace,
                 container_id,
                 container_name,
+                profile,
                 now,
                 vibepod_version,
             ),
@@ -167,6 +173,23 @@ class SessionLogger:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _migrate_schema(self) -> None:
+        """Backfill columns on existing databases created by older versions."""
+        assert self._conn is not None
+        self._ensure_column("sessions", "profile", "TEXT NOT NULL DEFAULT 'default'")
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        assert self._conn is not None
+        rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if not rows:
+            # Table does not exist yet; _SCHEMA will create it in full.
+            return
+        existing = {str(row[1]) for row in rows}
+        if column in existing:
+            return
+        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        self._conn.commit()
 
     def _flush_message(self) -> None:
         """Write the current input buffer as a message row and clear it."""

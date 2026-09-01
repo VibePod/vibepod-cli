@@ -792,6 +792,7 @@ def run(
         workspace=str(workspace_path),
         container_id=container.id,
         container_name=container.name,
+        profile=active_profile,
         vibepod_version=__version__,
     )
 
