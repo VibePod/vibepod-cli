@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Annotated, Any
 
 import typer
@@ -17,6 +18,7 @@ from vibepod import __version__
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
 from vibepod.core.agents import (
     AGENT_SPECS,
+    AgentSpec,
     agent_config_dir,
     effective_agent_image,
     get_agent_shortcut,
@@ -122,18 +124,33 @@ _ACP_RESERVED_CONTAINER_PATHS = (
 )
 
 
-def _resolve_acp_command(spec: Any, agent_cfg: dict[str, Any]) -> list[str] | None:
-    """Resolve the ACP adapter command: config override wins over the spec."""
+def _resolve_acp_command(spec: AgentSpec, agent_cfg: dict[str, Any]) -> list[str] | None:
+    """Resolve the ACP adapter command: config override wins over the spec.
+
+    A string override is parsed with shell quoting rules, so a quoted argument
+    containing spaces stays one argv element. An empty override means "no
+    adapter", the same as an agent without a default.
+    """
     override = agent_cfg.get("acp_command")
     if override is None:
         default = spec.acp_command
         return list(default) if default is not None else None
     if isinstance(override, str):
-        return override.split()
-    return [str(part) for part in override]
+        parts = shlex.split(override)
+    else:
+        parts = [str(part) for part in override]
+    return parts or None
 
 
-def _acp_workspace_mount_path(workspace_path: Path, spec: Any) -> str:
+def _remove_container_quietly(container: Any) -> None:
+    """Force-remove *container*, tolerating one that is already gone."""
+    try:
+        container.remove(force=True)
+    except Exception:
+        pass
+
+
+def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
     """Return the host path the workspace is bound to for ACP path parity.
 
     ACP clients (editors like Zed) send absolute host paths (session cwd,
@@ -452,13 +469,14 @@ def run(
     be parsed as VibePod flags.
     """
     passthrough_args = passthrough_args or []
+    if acp:
+        # Must happen before any output, including the --detach conflict
+        # below: stdout carries only the ACP JSON-RPC stream, so all console
+        # output is rerouted to stderr.
+        route_to_stderr()
     if acp and detach:
         error("--acp cannot be combined with --detach: the ACP client owns the process lifetime.")
         raise typer.Exit(1)
-    if acp:
-        # Must happen before any output: stdout carries only the ACP
-        # JSON-RPC stream, so all console output is rerouted to stderr.
-        route_to_stderr()
     config = get_config()
     try:
         active_profile = resolve_profile(profile, config)
@@ -513,6 +531,7 @@ def run(
     spec = get_agent_spec(selected_agent)
 
     acp_workspace_mount: str | None = None
+    acp_workspace_alias: str | None = None
     acp_command: list[str] | None = None
     if acp:
         acp_command = _resolve_acp_command(spec, agent_cfg)
@@ -527,6 +546,12 @@ def run(
             )
             raise typer.Exit(1)
         acp_workspace_mount = _acp_workspace_mount_path(workspace_path, spec)
+        # resolve() above followed symlinks, but the editor keeps sending the
+        # path as it was opened (macOS /tmp -> /private/tmp, ~/code -> another
+        # volume). Bind that spelling too so either form works in the container.
+        logical_workspace = Path(os.path.normpath(workspace.expanduser().absolute()))
+        if str(logical_workspace) != str(workspace_path):
+            acp_workspace_alias = _acp_workspace_mount_path(logical_workspace, spec)
     if spec.preview:
         warning(
             f"{selected_agent} is a developer preview; upstream warns of "
@@ -651,7 +676,13 @@ def run(
     if init_commands:
         info(f"Applying {len(init_commands)} init command(s) before startup")
         try:
-            command = manager.resolve_launch_command(image=image, command=spec.command)
+            # The init wrapper replaces the image entrypoint, so the launch
+            # argv has to be made explicit. In ACP mode that argv is the
+            # adapter command, not the interactive one.
+            command = manager.resolve_launch_command(
+                image=image,
+                command=acp_command if acp else spec.command,
+            )
         except DockerClientError as exc:
             error(str(exc))
             raise typer.Exit(1) from exc
@@ -706,6 +737,8 @@ def run(
         Path(host_path).mkdir(parents=True, exist_ok=True)
 
     extra_volumes.extend(_skills_mounts_for_agent(selected_agent, workspace_path))
+    if acp_workspace_alias is not None:
+        extra_volumes.append((str(workspace_path), acp_workspace_alias, "rw"))
 
     herdr_volumes, herdr_env = _apply_herdr_if_enabled(
         selected_agent,
@@ -791,6 +824,7 @@ def run(
     launch_labels["vibepod.profile"] = active_profile
     if proxy_policy_id is not None:
         launch_labels["vibepod.proxy-policy"] = proxy_policy_id
+    auto_remove = bool(config.get("auto_remove", True))
     try:
         container = manager.run_agent(
             agent=selected_agent,
@@ -800,7 +834,7 @@ def run(
             config_mount_path=spec.config_mount_path,
             env=merged_env,
             command=command,
-            auto_remove=bool(config.get("auto_remove", True)),
+            auto_remove=auto_remove,
             name=name,
             version=__version__,
             network=network_name,
@@ -836,11 +870,11 @@ def run(
             _clear_herdr_metadata(selected_agent)
         raise typer.Exit(1)
 
-    def _finish_acp_launch() -> None:
-        """Start the container after the attach socket is open, then wire up
-        everything that needs a started container (extra network, proxy
-        attribution). Called from attach_stdio before the first byte flows."""
-        container.start()
+    def _wire_started_container() -> None:
+        """Connect the extra network and record proxy attribution.
+
+        Needs a running container: the IP is only known after start.
+        """
         if extra_network and extra_network != network_name:
             try:
                 manager.connect_network(container, extra_network)
@@ -848,7 +882,6 @@ def run(
             except DockerClientError as exc:
                 warning(str(exc))
         if proxy_db_path is not None:
-            container.reload()
             container_ip = _get_container_ip(container, network_name)
             if container_ip:
                 mapping_path = proxy_db_path.parent / "containers.json"
@@ -866,6 +899,20 @@ def run(
                         f"Could not write proxy container mapping at {mapping_path}. "
                         "Fix proxy directory permissions to restore container attribution.",
                     )
+
+    acp_started = False
+
+    def _finish_acp_launch() -> None:
+        """Start the container once the attach socket is open, then wire it up.
+
+        Called from attach_stdio before the first byte flows.
+        """
+        nonlocal acp_started
+        container.start()
+        acp_started = True
+        # The pre-start inspect carries no network settings yet.
+        container.reload()
+        _wire_started_container()
 
     if not acp:
         # Prefer the inspected bindings (they resolve ephemeral 0-port publishes to
@@ -876,32 +923,7 @@ def run(
         if web_url:
             success(f"{selected_agent} Web UI → {web_url}")
             info("Sessions persist in the agent config dir.")
-
-        if extra_network and extra_network != network_name:
-            try:
-                manager.connect_network(container, extra_network)
-                info(f"Connected to additional network: {extra_network}")
-            except DockerClientError as exc:
-                warning(str(exc))
-
-        if proxy_db_path is not None:
-            container_ip = _get_container_ip(container, network_name)
-            if container_ip:
-                mapping_path = proxy_db_path.parent / "containers.json"
-                mapping_updated = _update_container_mapping(
-                    mapping_path,
-                    container_ip,
-                    container.id,
-                    container.name,
-                    selected_agent,
-                    policy_id=proxy_policy_id,
-                    profile=active_profile,
-                )
-                if not mapping_updated:
-                    warning(
-                        f"Could not write proxy container mapping at {mapping_path}. "
-                        "Fix proxy directory permissions to restore container attribution.",
-                    )
+        _wire_started_container()
 
     if detach:
         if selected_agent == "claude" and "setup-token" in passthrough_args:
@@ -935,13 +957,18 @@ def run(
 
     exit_reason = "normal"
     output_tail = b""
+    exit_code = 0
     if not acp:
         warning("Attached to container. Use Ctrl+C to stop.")
     try:
         if acp:
             # No SessionLogger frames here: JSON-RPC payloads embed whole file
             # contents, and the ACP client owns the transcript.
-            manager.attach_stdio(container, on_attached=_finish_acp_launch)
+            exit_code = manager.attach_stdio(
+                container,
+                on_attached=_finish_acp_launch,
+                auto_remove=auto_remove,
+            )
         else:
             output_tail = manager.attach_interactive(container, logger=logger)
     except KeyboardInterrupt:
@@ -951,6 +978,14 @@ def run(
         success("Stopped")
     except Exception:
         exit_reason = "error"
+        if acp:
+            # AutoRemove only fires on exit, so a container that never started
+            # (the attach failed) would otherwise linger in `created`; a
+            # started one has just lost its only client. Drop it either way,
+            # plus the launch policy of a container that never ran.
+            _remove_container_quietly(container)
+            if proxy_policy_id is not None and not acp_started:
+                remove_container_policy(config, proxy_policy_id)
         raise
     finally:
         logger.close_session(exit_reason)
@@ -963,6 +998,10 @@ def run(
 
     if exit_reason == "normal" and not acp:
         show_resume_hint(selected_agent, output_tail)
+
+    if acp and exit_code != 0:
+        # Surface adapter failures to the ACP client instead of exiting 0.
+        raise typer.Exit(exit_code)
 
 
 def _read_masked_line(prompt: str) -> str:

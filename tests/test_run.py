@@ -2749,6 +2749,7 @@ class _AcpContainer:
         self.status = "created"
         self.attrs: dict = {"NetworkSettings": {"Ports": {}}}
         self.started = False
+        self.removed: list[bool] = []
 
     def reload(self) -> None:
         pass
@@ -2759,6 +2760,9 @@ class _AcpContainer:
 
     def stop(self, timeout: int = 0) -> None:
         pass
+
+    def remove(self, force: bool = False) -> None:
+        self.removed.append(force)
 
 
 def _make_acp_manager(captured: dict):
@@ -2777,10 +2781,19 @@ def _make_acp_manager(captured: dict):
 
         def run_agent(self, **kwargs) -> object:  # type: ignore[no-untyped-def]
             captured.update(kwargs)
-            return _AcpContainer()
+            container = _AcpContainer()
+            captured["container"] = container
+            return container
 
-        def attach_stdio(self, container, logger=None, on_attached=None) -> int:  # type: ignore[no-untyped-def]
+        def attach_stdio(  # type: ignore[no-untyped-def]
+            self,
+            container,
+            logger=None,
+            on_attached=None,
+            auto_remove=False,
+        ) -> int:
             captured["attach_stdio_called"] = True
+            captured["attach_auto_remove"] = auto_remove
             if on_attached is not None:
                 on_attached()
                 captured["container_started_by_attach"] = container.started
@@ -2835,6 +2848,8 @@ def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env) -> None
     assert captured["workspace_mount_path"] == str(_acp_env)
     assert captured["attach_stdio_called"] is True
     assert captured["container_started_by_attach"] is True
+    # The attach needs the AutoRemove setting to pick the right wait condition.
+    assert captured["attach_auto_remove"] is True
 
 
 @_requires_posix_workspace
@@ -2950,9 +2965,127 @@ def test_acp_routes_console_to_stderr(monkeypatch, _acp_env) -> None:
     captured: dict = {}
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
     monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
-    original = console_mod.console
-    try:
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    # The conftest fixture flips the shared console back after the test.
+    assert console_mod.console.stderr is True
+
+
+def test_acp_detach_conflict_is_reported_on_stderr(monkeypatch, _acp_env, capsys) -> None:
+    """Even the earliest --acp error must stay off the JSON-RPC stream."""
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+
+    with pytest.raises(typer.Exit):
+        run_cmd.run(agent="claude", workspace=_acp_env, acp=True, detach=True)
+
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "--detach" in err
+
+
+@_requires_posix_workspace
+def test_acp_init_commands_keep_the_acp_command(monkeypatch, _acp_env) -> None:
+    """The init wrapper needs an explicit argv; in ACP mode that is the adapter."""
+    captured: dict = {}
+    config = _make_config()
+    config["agents"]["claude"]["init"] = ["echo hi"]
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    assert captured["command"] == ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
+    assert captured["entrypoint"] == run_cmd._init_entrypoint(["echo hi"])
+
+
+@_requires_posix_workspace
+def test_acp_adapter_exit_code_propagates(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+
+    class _CrashingAdapterManager(_make_acp_manager(captured)):
+        def attach_stdio(  # type: ignore[no-untyped-def]
+            self,
+            container,
+            logger=None,
+            on_attached=None,
+            auto_remove=False,
+        ) -> int:
+            if on_attached is not None:
+                on_attached()
+            return 7
+
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _CrashingAdapterManager)
+
+    with pytest.raises(typer.Exit) as exc:
         run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
-        assert console_mod.console.stderr is True
-    finally:
-        console_mod.console = original
+
+    assert exc.value.exit_code == 7
+
+
+@_requires_posix_workspace
+def test_acp_attach_failure_removes_the_created_container(monkeypatch, _acp_env) -> None:
+    """AutoRemove never fires for a container that was created but not started."""
+    captured: dict = {}
+
+    class _AttachFailsManager(_make_acp_manager(captured)):
+        def attach_stdio(  # type: ignore[no-untyped-def]
+            self,
+            container,
+            logger=None,
+            on_attached=None,
+            auto_remove=False,
+        ) -> int:
+            raise DockerClientError("attach failed")
+
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _AttachFailsManager)
+
+    with pytest.raises(DockerClientError):
+        run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    container = captured["container"]
+    assert container.started is False
+    assert container.removed == [True]
+
+
+@_requires_posix_workspace
+def test_acp_mounts_the_unresolved_workspace_path_too(monkeypatch, _acp_env) -> None:
+    """The editor sends the path as opened, while resolve() follows symlinks."""
+    captured: dict = {}
+    link = _acp_env.parent / "link"
+    link.symlink_to(_acp_env, target_is_directory=True)
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+
+    run_cmd.run(agent="claude", workspace=link, acp=True)
+
+    assert captured["workspace_mount_path"] == str(_acp_env)
+    assert (str(_acp_env), str(link), "rw") in captured["extra_volumes"]
+
+
+@_requires_posix_workspace
+def test_acp_skips_the_alias_mount_for_a_plain_path(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    assert all(bind != str(_acp_env) for _, bind, _ in captured["extra_volumes"])
+
+
+def test_resolve_acp_command_parses_string_overrides_like_a_shell() -> None:
+    spec = get_agent_spec("claude")
+    quoted = {"acp_command": "my-acp --config '/p/with space.json'"}
+
+    assert run_cmd._resolve_acp_command(spec, quoted) == [
+        "my-acp",
+        "--config",
+        "/p/with space.json",
+    ]
+    assert run_cmd._resolve_acp_command(spec, {}) == spec.acp_command
+    # An empty override is "no adapter", not "run the image default".
+    assert run_cmd._resolve_acp_command(spec, {"acp_command": ""}) is None
+    assert run_cmd._resolve_acp_command(spec, {"acp_command": []}) is None

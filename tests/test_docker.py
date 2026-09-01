@@ -182,8 +182,10 @@ class _FakeSocketWrapper:
 
 
 class _AttachClient:
-    def __init__(self, chunks: list[bytes]) -> None:
+    def __init__(self, chunks: list[bytes], wait_result: dict | None = None) -> None:
         self.wrapper = _FakeSocketWrapper(_FakeStreamSocket(chunks))
+        self.wait_result = wait_result
+        self.wait_conditions: list[str | None] = []
 
     @property
     def api(self):
@@ -192,6 +194,12 @@ class _AttachClient:
     def attach_socket(self, _id: str, params: dict) -> _FakeSocketWrapper:
         assert params == {"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
         return self.wrapper
+
+    def wait(self, _id: str, timeout: float | None = None, condition: str | None = None) -> dict:
+        self.wait_conditions.append(condition)
+        if self.wait_result is None:
+            raise RuntimeError("wait not scripted for this fake")
+        return dict(self.wait_result)
 
 
 class _AttachContainer:
@@ -205,7 +213,14 @@ class _AttachContainer:
         pass
 
 
-def _run_attach_stdio(monkeypatch, chunks: list[bytes]) -> tuple[bytes, bytes, int]:
+def _run_attach_stdio(
+    monkeypatch,
+    chunks: list[bytes],
+    *,
+    client: _AttachClient | None = None,
+    container: Any = None,
+    auto_remove: bool = False,
+) -> tuple[bytes, bytes, int]:
     import types
 
     from vibepod.core import docker as docker_mod
@@ -221,7 +236,8 @@ def _run_attach_stdio(monkeypatch, chunks: list[bytes]) -> tuple[bytes, bytes, i
 
     fake_stdin.fileno = _no_fileno
 
-    client = _AttachClient(chunks)
+    if client is None:
+        client = _AttachClient(chunks)
     manager = object.__new__(DockerManager)
     manager.client = client  # type: ignore[assignment]
 
@@ -238,7 +254,10 @@ def _run_attach_stdio(monkeypatch, chunks: list[bytes]) -> tuple[bytes, bytes, i
     monkeypatch.setattr(docker_mod.sys, "stderr", fake_stderr)
     monkeypatch.setattr(docker_mod.sys, "stdin", fake_stdin)
 
-    exit_code = manager.attach_stdio(_AttachContainer())
+    exit_code = manager.attach_stdio(
+        container if container is not None else _AttachContainer(),
+        auto_remove=auto_remove,
+    )
     return out.getvalue(), err.getvalue(), exit_code
 
 
@@ -270,6 +289,68 @@ def test_attach_stdio_preserves_null_bytes_and_routes_stderr(monkeypatch) -> Non
 
     assert out == payload
     assert err == b""
+
+
+def test_attach_stdio_takes_the_exit_code_from_a_wait_opened_before_start(monkeypatch) -> None:
+    """With AutoRemove the container is gone once the stream closes, so an
+    inspect afterwards cannot see the exit code; the wait opened up front can."""
+
+    class _GoneContainer(_AttachContainer):
+        def reload(self) -> None:
+            raise NotFound("auto-removed")
+
+    client = _AttachClient([], wait_result={"StatusCode": 3})
+
+    _, _, exit_code = _run_attach_stdio(
+        monkeypatch,
+        [],
+        client=client,
+        container=_GoneContainer(),
+        auto_remove=True,
+    )
+
+    assert exit_code == 3
+    assert client.wait_conditions == ["removed"]
+
+
+def test_attach_stdio_waits_for_the_next_exit_without_auto_remove(monkeypatch) -> None:
+    client = _AttachClient([], wait_result={"StatusCode": 0})
+
+    _run_attach_stdio(monkeypatch, [], client=client)
+
+    assert client.wait_conditions == ["next-exit"]
+
+
+def test_attach_stdio_falls_back_to_inspect_without_a_wait_answer(monkeypatch) -> None:
+    class _ExitedContainer(_AttachContainer):
+        attrs = {"State": {"ExitCode": 5}}
+
+    _, _, exit_code = _run_attach_stdio(monkeypatch, [], container=_ExitedContainer())
+
+    assert exit_code == 5
+
+
+def test_build_image_streams_output_through_the_console(capsys) -> None:
+    """ACP mode reroutes the console to stderr; build logs have to follow it."""
+    from vibepod.utils.console import route_to_stderr
+
+    class _BuildApi:
+        def build(self, **_kwargs):
+            return iter([{"stream": "Step 1/2 : FROM base\n"}, {"stream": " ---> abc\n"}])
+
+    class _BuildClient:
+        api = _BuildApi()
+
+    manager = object.__new__(DockerManager)
+    manager.client = _BuildClient()  # type: ignore[assignment]
+    route_to_stderr()
+
+    manager.build_image(io.BytesIO(b""), "vibepod/overlay:test", {})
+
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "Step 1/2 : FROM base" in err
+    assert "---> abc" in err
 
 
 @pytest.fixture()

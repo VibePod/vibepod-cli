@@ -10,7 +10,8 @@ To add a new agent, mirror the `qwen` (or `freebuff`) entry end-to-end:
 `SUPPORTED_AGENTS`/`AGENT_SHORTCUTS`/`AGENT_ALIASES`/`IMAGE_OVERRIDE_ENV_KEYS`
 and `get_default_images()` in `src/vibepod/constants.py`, the `AGENT_SPECS`
 entry in `src/vibepod/core/agents.py` (mount contract must match the
-vibepod-agents image entrypoint), the per-agent defaults in
+vibepod-agents image entrypoint; set `acp_command` when the agent ships an
+ACP adapter, see `docs/acp.md`), the per-agent defaults in
 `src/vibepod/core/config.py`, skills paths in
 `src/vibepod/commands/run.py::_agent_skill_paths`, and the docs + tests
 (`docs/agents/index.md`, `README.md`, `docs/quickstart.md`, `docs/index.md`,
