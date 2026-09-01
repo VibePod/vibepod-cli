@@ -88,11 +88,15 @@ demultiplexes the Docker stream: container stdout carries only the
 newline-delimited JSON-RPC stream, all VibePod messages go to stderr. The
 workspace is mounted a second time onto its own host path so absolute paths
 from the editor (session cwd, @-mentions, diffs) resolve identically inside
-the container.
+the container. If that path goes through a symlink (macOS `/tmp`, a linked
+`~/code`), the unresolved spelling is bound as well, so the path the editor
+sends and the resolved one both exist in the container.
 
 When you close the thread, the editor kills the `vp` process; the container
 sees stdin EOF, the adapter exits, and `auto_remove` cleans up — no orphaned
-containers.
+containers. `vp` exits with the adapter's exit code, so a crashed adapter
+shows up in the editor as a failure rather than a clean exit, and a container
+whose attach failed before it ever started is removed rather than left behind.
 
 ## Windows: run it from WSL2
 

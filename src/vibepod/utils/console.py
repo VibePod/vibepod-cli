@@ -11,12 +11,12 @@ def route_to_stderr() -> None:
     """Redirect all console output to stderr.
 
     Used by ACP mode: stdout must carry only the JSON-RPC stream, so every
-    info()/error() line is routed to stderr instead. Callers import the
-    info/error helpers (not ``console`` itself), so swapping the module-global
-    console reroutes output project-wide.
+    info()/error() line is routed to stderr instead. The shared ``console``
+    object is flipped in place rather than rebound: several modules bind the
+    object itself at import time (``from vibepod.utils.console import
+    console``), and a rebound module global would never reach those.
     """
-    global console
-    console = Console(stderr=True)
+    console.stderr = True
 
 
 def info(message: str) -> None:

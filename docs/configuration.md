@@ -57,8 +57,8 @@ agents:
     # acp_command: ACP adapter command for `vp run <agent> --acp` (editor
     # integration via the Agent Client Protocol). Defaults exist for claude,
     # gemini, qwen, codex, opencode, copilot, auggie, jcode and devstral;
-    # override with a list (or a string, split on whitespace). Not present by
-    # default — just add the key to override.
+    # override with a list, or a string parsed with shell quoting rules. Not
+    # present by default — just add the key to override.
     # acp_command: ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
 
   gemini:
@@ -306,10 +306,10 @@ agents:
 ```
 
 !!! warning "Always quote port entries"
-YAML 1.1 parses unquoted `host:container` pairs as base-60 numbers:
-`- 22:22` loads as the integer `1342` and would publish the wrong port.
-Out-of-range results (e.g. `3000:30` → `180030`) are rejected at startup,
-but in-range ones are not detectable — quote every entry.
+    YAML 1.1 parses unquoted `host:container` pairs as base-60 numbers:
+    `- 22:22` loads as the integer `1342` and would publish the wrong port.
+    Out-of-range results (e.g. `3000:30` → `180030`) are rejected at startup,
+    but in-range ones are not detectable — quote every entry.
 
 Like other agent keys, a project-level `ports` list replaces the global one for that agent. The list applies to both `vp run` and `vp task` containers; note that two containers cannot publish the same host port at the same time, so a fixed host port limits you to one such container per agent.
 
@@ -339,10 +339,10 @@ VP_PROXY_ENABLED=false vp run claude
 ```
 
 !!! note "Podman users"
-The proxy relies on container-name DNS resolution over the `vibepod-network`
-network. If you use Podman with the CNI backend, install the `dnsname`
-plugin (e.g. `podman-plugins` on Fedora, `golang-github-containernetworking-plugin-dnsname`
-on Debian/Ubuntu) and recreate the network. See [Quickstart — Using Podman](quickstart.md#using-podman-instead-of-docker) for full instructions.
+    The proxy relies on container-name DNS resolution over the `vibepod-network`
+    network. If you use Podman with the CNI backend, install the `dnsname`
+    plugin (e.g. `podman-plugins` on Fedora, `golang-github-containernetworking-plugin-dnsname`
+    on Debian/Ubuntu) and recreate the network. See [Quickstart — Using Podman](quickstart.md#using-podman-instead-of-docker) for full instructions.
 
 ### Allow/deny filtering
 
@@ -402,7 +402,7 @@ launching a proxied agent. An image with a missing or different schema label is
 rejected with an upgrade error.
 
 !!! warning "Filtering is not a network sandbox"
-The filter controls requests that use the injected proxy. A container can
-override its proxy environment or attempt a direct connection unless a
-separate network-control layer prevents that. VibePod warns when explicit
-`HTTP_PROXY` or `HTTPS_PROXY` values bypass its identified proxy URL.
+    The filter controls requests that use the injected proxy. A container can
+    override its proxy environment or attempt a direct connection unless a
+    separate network-control layer prevents that. VibePod warns when explicit
+    `HTTP_PROXY` or `HTTPS_PROXY` values bypass its identified proxy URL.

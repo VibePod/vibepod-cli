@@ -462,7 +462,11 @@ class DockerManager:
                     raise DockerClientError(f"Failed to build image {tag}: {chunk['error']}")
                 stream = chunk.get("stream")
                 if stream and stream.strip():
-                    print(stream, end="" if stream.endswith("\n") else "\n")
+                    # Through the shared console so ACP mode's stderr routing
+                    # keeps build logs off the JSON-RPC stream on stdout.
+                    from vibepod.utils.console import console
+
+                    console.out(stream, end="" if stream.endswith("\n") else "\n", highlight=False)
         except DockerClientError:
             raise
         except (APIError, DockerException) as exc:
@@ -1048,6 +1052,7 @@ class DockerManager:
         container: Any,
         logger: Any = None,
         on_attached: Any = None,
+        auto_remove: bool = False,
     ) -> int:
         """Attach local stdin/stdout to a container without a TTY (ACP mode).
 
@@ -1055,8 +1060,9 @@ class DockerManager:
         resize handling and no ``logs`` replay; instead it demultiplexes the
         Docker stream frame protocol so container stdout goes to our stdout
         and stderr to our stderr, keeping the JSON-RPC stream clean.
-        Returns the container's exit code (0 when the container is stopped by
-        signal handling rather than observed exiting).
+        Returns the container's exit code, also when the container was
+        stopped by the SIGINT/SIGTERM handling. ``auto_remove`` must match the
+        container's AutoRemove setting so the exit code survives its removal.
         """
         try:
             sock_wrapper = self.client.api.attach_socket(
@@ -1072,6 +1078,29 @@ class DockerManager:
             raise DockerClientError(f"Failed to attach to container: {exc}") from exc
 
         sock = getattr(sock_wrapper, "_sock", sock_wrapper)
+
+        # Register the exit-code wait before the container starts. With
+        # AutoRemove the container can be gone by the time the stream closes,
+        # so inspecting it afterwards races the daemon; a wait opened up front
+        # is answered with the status code even once the container is removed
+        # (docker's own CLI waits for "removed" under --rm for the same reason).
+        wait_result: dict[str, Any] = {}
+
+        def _wait_for_exit() -> None:
+            try:
+                result = self.client.api.wait(
+                    container.id,
+                    timeout=None,
+                    condition="removed" if auto_remove else "next-exit",
+                )
+            except Exception:
+                return
+            if isinstance(result, dict):
+                wait_result.update(result)
+
+        waiter = threading.Thread(target=_wait_for_exit, name="vibepod-acp-wait", daemon=True)
+        waiter.start()
+
         if on_attached is not None:
             # Create-attach-start ordering: the ACP adapter emits its first
             # JSON-RPC frames immediately once the entrypoint runs, so the
@@ -1084,7 +1113,6 @@ class DockerManager:
             except (OSError, ValueError):
                 stdin_fd = None
 
-        exit_code = 0
         stop_requested = False
         old_sigterm = None
         old_sigint = None
@@ -1170,9 +1198,15 @@ class DockerManager:
             if old_sigint is not None:
                 signal.signal(signal.SIGINT, old_sigint)
 
-        try:
-            container.reload()
-            exit_code = int(container.attrs.get("State", {}).get("ExitCode", 0) or 0)
-        except Exception:  # pragma: no cover - auto-removed containers
-            exit_code = 0
-        return exit_code
+        waiter.join(timeout=10)
+        status = wait_result.get("StatusCode")
+        if status is None:
+            # No wait answer (daemon without wait conditions, or the stream
+            # ended without an exit): fall back to an inspect, which only
+            # works while the container still exists.
+            try:
+                container.reload()
+                status = container.attrs.get("State", {}).get("ExitCode", 0)
+            except Exception:  # pragma: no cover - auto-removed containers
+                status = 0
+        return int(status or 0)
