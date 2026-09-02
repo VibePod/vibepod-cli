@@ -36,49 +36,123 @@ that is also how you pin an `npx` adapter to a version).
 
 ## Setup
 
-Register `vp` as an external/custom agent server in your editor. The exact
-location and format depend on the editor; the general shape is a command plus
-arguments. For example, in [Zed](https://zed.dev/docs/ai/external-agents)
-(`settings.json`):
+Register `vp` as an external or custom ACP agent in your editor. Use an
+absolute path to the executable because GUI applications do not necessarily
+inherit your shell `PATH`. Pass `-w` explicitly when the editor's subprocess
+working directory is not guaranteed to be the open project.
+
+Allow the project directory before opening the first editor session — editor
+stdin is a protocol pipe, so the interactive allow prompt cannot run:
+
+```bash
+vp config allow-dir /absolute/path/to/project
+```
+
+Authenticate the selected agent once interactively when its ACP adapter or
+editor does not provide the required login flow:
+
+```bash
+vp run <agent>   # sign in, then quit
+```
+
+Credentials persist in the agent's config directory. Replace `claude` in the
+examples below with any agent from the supported-agent table.
+
+## Editor integrations
+
+### Zed
+
+[Zed supports ACP External Agents natively](https://zed.dev/docs/ai/external-agents).
+Open Agent Settings, select **External Agents**, then **Add Agent** →
+**Add Custom Agent**, or add this entry to `settings.json`:
 
 ```json
 {
   "agent_servers": {
     "VibePod Claude": {
       "type": "custom",
-      "command": "vp",
-      "args": ["run", "claude", "--acp"],
+      "command": "/absolute/path/to/vp",
+      "args": [
+        "run",
+        "claude",
+        "--acp",
+        "-w",
+        "/absolute/path/to/project"
+      ],
       "env": {}
     }
   }
 }
 ```
 
-Repeat the block for any other supported agent (adjust the `run` argument) if
-you want more than one. Make sure `vp` is on the `PATH` your editor inherits
-(or use an absolute path).
+Select **VibePod Claude** when starting an External Agent thread. Run
+`dev: open acp logs` from the command palette to inspect startup errors and
+protocol traffic.
 
-Then allow your project directory once — under an editor, stdin is a pipe, so
-the interactive allow prompt cannot run:
+### PyCharm and other JetBrains IDEs
 
-```bash
-vp config allow-dir /path/to/your/project
+[JetBrains IDEs support custom ACP agents natively](https://www.jetbrains.com/help/ai-assistant/acp.html)
+through the AI Assistant plugin. In AI Chat, open the **More** menu and select
+**Add Custom Agent**. This creates `~/.jetbrains/acp.json`; add:
+
+```json
+{
+  "default_mcp_settings": {},
+  "agent_servers": {
+    "VibePod Claude": {
+      "command": "/absolute/path/to/vp",
+      "args": [
+        "run",
+        "claude",
+        "--acp",
+        "-w",
+        "/absolute/path/to/project"
+      ],
+      "env": {}
+    }
+  }
+}
 ```
 
-Authenticate the agent once interactively too, before the first ACP session:
+Select **VibePod Claude** in AI Chat. Use **Get ACP Logs** from the AI Chat
+**More** menu for diagnostics.
 
-```bash
-vp run <agent>   # sign in, then quit
+!!! warning "JetBrains IDEs do not currently support ACP agents through WSL"
+
+    Use PyCharm on native Linux or macOS for this integration. This is a
+    JetBrains client limitation; the Zed remote-WSL setup documented below is
+    unaffected.
+
+### Visual Studio Code
+
+For Visual Studio Code, install an ACP client extension. This example uses the
+third-party
+[ACP Client extension](https://marketplace.visualstudio.com/items?itemName=formulahendry.acp-client).
+Install it, run **ACP: Add Agent Configuration** from the command palette, or
+add this to your user or workspace `settings.json`:
+
+```json
+{
+  "acp.agents": {
+    "VibePod Claude": {
+      "command": "/absolute/path/to/vp",
+      "args": [
+        "run",
+        "claude",
+        "--acp",
+        "-w",
+        "/absolute/path/to/project"
+      ],
+      "env": {}
+    }
+  },
+  "acp.autoApprovePermissions": "ask",
+  "acp.logTraffic": true
+}
 ```
 
-An ACP session cannot log you in. Most adapters expose no authentication
-method to the editor at all, and the ones that do point it at a command inside
-the container that the editor would run on your host. Credentials persist in
-the agent's config dir, so this is a one-time step per agent and profile; skip
-it and the thread starts cleanly and then fails on the first prompt.
-
-Open the AI/agent panel in your editor, pick the VibePod thread type, and
-start a thread inside your project.
+Open the ACP Client panel and connect to **VibePod Claude**. Use
+**ACP: Show Log** or **ACP: Show Protocol Traffic** for diagnostics.
 
 ## How it works
 
@@ -150,6 +224,6 @@ guaranteed to be your project.
 
 ## Debugging
 
-VibePod's diagnostics (e.g. a missing `vp config allow-dir`) go to stderr and
-show up in the editor's ACP logs. Zed, for example, exposes them via
-`dev: open acp logs` from the command palette.
+VibePod diagnostics, including a missing `vp config allow-dir`, go to stderr
+and appear in the editor's ACP logs. Use the log command named in the relevant
+editor integration above.
