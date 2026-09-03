@@ -61,6 +61,10 @@ def run_command(
         bool,
         typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
     ] = False,
+    no_dash: Annotated[
+        bool,
+        typer.Option("--no-dash", help="Skip VibePod Dash state reporting"),
+    ] = False,
     detach: Annotated[
         bool,
         typer.Option("-d", "--detach", help="Run container in background"),
@@ -140,6 +144,7 @@ def run_command(
         no_overlay=no_overlay,
         rebuild_overlay=rebuild_overlay,
         no_herdr=no_herdr,
+        no_dash=no_dash,
         detach=detach,
         env=env,
         publish=publish,
@@ -196,6 +201,10 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
         no_herdr: Annotated[
             bool,
             typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
+        ] = False,
+        no_dash: Annotated[
+            bool,
+            typer.Option("--no-dash", help="Skip VibePod Dash state reporting"),
         ] = False,
         detach: Annotated[
             bool,
@@ -279,6 +288,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             no_overlay=no_overlay,
             rebuild_overlay=rebuild_overlay,
             no_herdr=no_herdr,
+            no_dash=no_dash,
             detach=detach,
             env=env,
             publish=publish,

@@ -13,7 +13,6 @@ import importlib.resources
 import json
 import os
 import shutil
-import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,6 +22,7 @@ if sys.version_info >= (3, 11):
 else:  # pragma: no cover - exercised on Python 3.10 CI
     import tomli as tomllib
 
+from vibepod.core.hooksync import sync_integration_files
 from vibepod.utils.console import info, warning
 
 DEFAULT_SOCKET = Path("~/.config/herdr/herdr.sock")
@@ -107,18 +107,6 @@ def resource_root() -> Path:
     return Path(str(importlib.resources.files("vibepod"))) / "resources" / "herdr"
 
 
-def _copy_into(config_dir: Path, dest_rel: str, content: bytes, executable: bool) -> bool:
-    dest = (config_dir / dest_rel).resolve()
-    if config_dir.resolve() not in dest.parents:
-        warning(f"herdr: destination '{dest_rel}' escapes the agent config dir, skipping")
-        return False
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(content)
-    if executable:
-        dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return True
-
-
 def sync_herdr_files(agent: str, config_dir: Path, config: dict[str, Any]) -> int:
     """Copy herdr integration files for *agent* into its config dir.
 
@@ -127,31 +115,16 @@ def sync_herdr_files(agent: str, config_dir: Path, config: dict[str, Any]) -> in
     VibePod-owned dests are overwritten each run; other files untouched.
     Returns the number of files synced.
     """
-    synced = 0
-    root = resource_root()
-    for resource_rel, dest_rel in BUILTIN_INTEGRATIONS.get(agent, []):
-        source = root / resource_rel
-        if not source.is_file():
-            warning(f"herdr: packaged resource missing: {resource_rel}")
-            continue
-        executable = resource_rel.endswith(".sh")
-        if _copy_into(config_dir, dest_rel, source.read_bytes(), executable):
-            synced += 1
-
     herdr_cfg = config.get("herdr")
     entries = (herdr_cfg or {}).get("integrations", {}) if isinstance(herdr_cfg, dict) else {}
-    for entry in entries.get(agent, []) or []:
-        if not isinstance(entry, dict) or "source" not in entry or "dest" not in entry:
-            warning(f"herdr: invalid integration entry for '{agent}': {entry!r}")
-            continue
-        source = Path(str(entry["source"])).expanduser()
-        if not source.is_file():
-            warning(f"herdr: integration source not found: {source}")
-            continue
-        executable = os.access(source, os.X_OK)
-        if _copy_into(config_dir, str(entry["dest"]), source.read_bytes(), executable):
-            synced += 1
-    return synced
+    return sync_integration_files(
+        label="herdr",
+        root=resource_root(),
+        builtin=BUILTIN_INTEGRATIONS.get(agent, []),
+        config_dir=config_dir,
+        custom=entries.get(agent, []) or [],
+        agent=agent,
+    )
 
 
 _HERDR_MARKER = "herdr-agent-state.sh"
