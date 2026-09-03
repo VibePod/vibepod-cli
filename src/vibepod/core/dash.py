@@ -424,6 +424,12 @@ def _warn_once(host_url: str, state: str, exc: BaseException) -> None:
         return
     _warned_urls.add(host_url)
     warning(f"dash: could not report '{state}' to {host_url}: {exc}")
+    if getattr(exc, "code", None) in (401, 403):
+        warning(
+            "dash: the dashboard rejected the token. Set dash.token (or VPDASH_TOKEN) to "
+            "its ingest token — the server prints it on start, e.g. "
+            "`docker compose logs dash | grep 'ingest token'`.",
+        )
     if is_name_resolution_error(exc):
         # A container-network name in dash.url that usable_host_url() could
         # not find a published loopback equivalent for.
