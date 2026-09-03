@@ -587,3 +587,51 @@ def test_a_rejected_token_says_where_to_find_the_right_one(capsys) -> None:
     assert "rejected the token" in out
     assert "VPDASH_TOKEN" in out
     assert "ingest token" in out
+
+
+def test_details_drops_unset_fields_and_stringifies() -> None:
+    built = dash.details(
+        workspace=Path("/work/proj"),
+        image="vibepod/claude:latest",
+        profile=None,
+        container="",
+        task=42,
+    )
+    assert built == {
+        "workspace": "/work/proj",
+        "image": "vibepod/claude:latest",
+        "task": "42",
+    }
+
+
+def test_report_carries_the_run_details(dash_server: Any) -> None:
+    config = {"dash": {"url": server_url(dash_server)}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+
+    assert dash.report(
+        target,
+        "working",
+        cwd="/work/proj",
+        data=dash.details(
+            workspace=Path("/work/proj"),
+            image="vibepod/claude:latest",
+            profile="work",
+            container="vibepod-claude-ab12cd34",
+            vibepod="0.21.0",
+        ),
+    )
+
+    payload, _ = dash_server.received[0]
+    assert payload["data"]["image"] == "vibepod/claude:latest"
+    assert payload["data"]["profile"] == "work"
+    assert payload["data"]["container"] == "vibepod-claude-ab12cd34"
+    assert payload["data"]["workspace"] == "/work/proj"
+
+
+def test_report_omits_an_empty_data_block(dash_server: Any) -> None:
+    config = {"dash": {"url": server_url(dash_server)}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    assert dash.report(target, "idle", data=dash.details(profile=None))
+    assert "data" not in dash_server.received[0][0]

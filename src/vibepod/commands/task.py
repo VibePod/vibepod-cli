@@ -34,6 +34,7 @@ from vibepod.core.config import get_config, get_config_root
 from vibepod.core.dash import AGENT_ID_LABEL as DASH_ID_LABEL
 from vibepod.core.dash import AGENT_LABEL as DASH_AGENT_LABEL
 from vibepod.core.dash import apply_dash_if_enabled, target_from_labels
+from vibepod.core.dash import details as dash_details
 from vibepod.core.dash import report as dash_report
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag, bind_mode
 from vibepod.core.herdr import (
@@ -974,16 +975,6 @@ def launch_task(
                 )
             raise typer.Exit(1)
 
-        if dash_target is not None:
-            # A task is head-down from the first second, unlike an interactive run.
-            dash_report(
-                dash_target,
-                "working",
-                event="task.start",
-                message=prompt,
-                cwd=workspace_path,
-            )
-
         if network and network != network_name:
             try:
                 manager.connect_network(container, network)
@@ -1044,6 +1035,26 @@ def launch_task(
             release_agent(selected)
             clear_pane_metadata(selected)
         raise
+    if dash_target is not None:
+        # Reported here rather than right after start so the card carries the
+        # task id — the handle for `vp task logs` / `vp task cancel`. A task is
+        # also head-down from its first second, unlike an interactive run.
+        dash_report(
+            dash_target,
+            "working",
+            event="task.start",
+            message=prompt,
+            cwd=workspace_path,
+            data=dash_details(
+                workspace=workspace_path,
+                image=image,
+                profile=active_profile,
+                container=container.name,
+                task=record.id,
+                vibepod=__version__,
+            ),
+        )
+
     return LaunchedTask(record=record, container=container, manager=manager, store=store)
 
 
