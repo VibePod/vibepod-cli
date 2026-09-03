@@ -63,13 +63,15 @@ def test_register_preserves_user_hooks_and_is_idempotent(tmp_path: Path) -> None
     path = tmp_path / ".codex" / "hooks.json"
     path.parent.mkdir(parents=True)
     path.write_text(
-        json.dumps({
-            "description": "mine",
-            "hooks": {
-                "Stop": [{"hooks": [{"type": "command", "command": "mine.sh"}]}],
-                "PreCompact": [{"hooks": [{"type": "command", "command": "compact.sh"}]}],
-            },
-        }),
+        json.dumps(
+            {
+                "description": "mine",
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": "mine.sh"}]}],
+                    "PreCompact": [{"hooks": [{"type": "command", "command": "compact.sh"}]}],
+                },
+            }
+        ),
         encoding="utf-8",
     )
     command = "/config/.codex/herdr-agent-state.sh"
@@ -129,10 +131,12 @@ LIFECYCLE_EVENTS = (
     "SessionEnd",
 )
 
-LEGACY_NOTIFY_LINES = frozenset({
-    'notify = ["/config/.codex/herdr-agent-state.sh"]',
-    'notify = ["/config/.codex/dash-agent-state.sh"]',
-})
+LEGACY_NOTIFY_LINES = frozenset(
+    {
+        'notify = ["/config/.codex/herdr-agent-state.sh"]',
+        'notify = ["/config/.codex/dash-agent-state.sh"]',
+    }
+)
 
 
 def _entry(command: str) -> dict[str, Any]:
@@ -398,20 +402,26 @@ def test_codex_lifecycle_hook_reports_over_http(
     dash_server: Any,
     tmp_path: Path,
 ) -> None:
-    target = dash.make_target("codex", Path("/work/proj"), {
-        "dash": {"url": server_url(dash_server), "token": "t0ken"},
-    })
+    target = dash.make_target(
+        "codex",
+        Path("/work/proj"),
+        {
+            "dash": {"url": server_url(dash_server), "token": "t0ken"},
+        },
+    )
     assert target is not None
     dash.sync_dash_files("codex", tmp_path, {})
     subprocess.run(
         [str(tmp_path / ".codex" / "dash-agent-state.sh")],
-        input=json.dumps({
-            "hook_event_name": event,
-            "session_id": "s1",
-            "cwd": "/work/proj",
-            "prompt": "fix it",
-            "tool_name": "Bash",
-        }),
+        input=json.dumps(
+            {
+                "hook_event_name": event,
+                "session_id": "s1",
+                "cwd": "/work/proj",
+                "prompt": "fix it",
+                "tool_name": "Bash",
+            }
+        ),
         text=True,
         check=True,
         env={
