@@ -34,6 +34,9 @@ from vibepod.core.dash import (
     apply_dash_if_enabled as _apply_dash_if_enabled,
 )
 from vibepod.core.dash import (
+    details as _dash_details,
+)
+from vibepod.core.dash import (
     report as _dash_report,
 )
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
@@ -654,6 +657,8 @@ def run(
     # setdefault: explicit -e VPDASH_* overrides win, same as for herdr
     for key, value in dash_env.items():
         merged_env.setdefault(key, value)
+    # Filled once the container exists, then reused by the stop report.
+    dash_details: dict[str, str] = {}
 
     if paste_images:
         display = os.environ.get("DISPLAY", "")
@@ -771,12 +776,24 @@ def run(
         raise typer.Exit(1)
 
     if dash_target is not None:
+        # Everything the board cannot know on its own, sent once at start and
+        # kept on the card for the life of the session.
+        dash_details.update(
+            _dash_details(
+                workspace=workspace_path,
+                image=image,
+                profile=active_profile,
+                container=container.name,
+                vibepod=__version__,
+            ),
+        )
         _dash_report(
             dash_target,
             "idle",
             event="container.start",
             message=f"{selected_agent} started in {workspace_path.name}",
             cwd=workspace_path,
+            data=dash_details,
         )
 
     # Prefer the inspected bindings (they resolve ephemeral 0-port publishes to
@@ -872,6 +889,7 @@ def run(
                 event="container.stop",
                 message=f"session ended ({exit_reason})",
                 cwd=workspace_path,
+                data=dash_details,
             )
 
     if selected_agent == "claude" and "setup-token" in passthrough_args and exit_reason == "normal":

@@ -357,6 +357,21 @@ def register_codex_notify(config_dir: Path) -> None:
     config_path.write_text(new_content, encoding="utf-8")
 
 
+def details(**fields: Any) -> dict[str, str]:
+    """Build a report's ``data`` block, dropping whatever is unset.
+
+    This is where the context only VibePod has — the workspace it mounted, the
+    image it resolved, the profile, the container it can be attached to, the
+    task id — reaches the board, which shows it on the agent's card.
+    """
+    out: dict[str, str] = {}
+    for key, value in fields.items():
+        if value is None or value == "":
+            continue
+        out[key] = str(value)
+    return out
+
+
 def report(
     target: DashTarget,
     state: str,
@@ -364,15 +379,18 @@ def report(
     event: str | None = None,
     message: str | None = None,
     cwd: Path | str | None = None,
+    data: dict[str, str] | None = None,
     quiet: bool = False,
 ) -> bool:
     """POST one state report to the dashboard. Never raises."""
-    payload: dict[str, str] = {
+    payload: dict[str, Any] = {
         "agent": target.agent,
         "agent_id": target.agent_id,
         "state": state,
         "host": os.environ.get("VPDASH_HOST") or socket.gethostname(),
     }
+    if data:
+        payload["data"] = data
     if target.name:
         payload["name"] = target.name
     if event:

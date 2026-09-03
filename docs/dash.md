@@ -49,6 +49,24 @@ hooks need only `curl` inside the image.
 `blocked` is the state worth a phone notification: the agent is waiting for
 your approval.
 
+## What lands on the card
+
+Beyond the state, VibePod attaches the context only it knows. Tap a card on
+the dashboard and it shows:
+
+| Detail      | Where it comes from                                     |
+| ----------- | ------------------------------------------------------- |
+| `dir`       | the workspace directory mounted into the container      |
+| `image`     | the resolved agent image, overlay included              |
+| `profile`   | the active [credential profile](profiles.md)            |
+| `container` | the container name — the handle for `vp attach` / `vp stop` |
+| `task`      | the task id, for `vp task logs` / `vp task cancel`      |
+| `vibepod`   | the CLI version that started the run                    |
+
+The agent's own hooks add the live part: the prompt you sent, the tool being
+run, the notification text it is blocked on. Details are sent once at start
+and stay on the card — a hook report that carries none never clears them.
+
 ## Reaching the dashboard from inside the container
 
 `localhost` inside a container is the container itself, so a `localhost` or
