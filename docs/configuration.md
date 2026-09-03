@@ -172,6 +172,13 @@ logging:
   db_path: ~/.config/vibepod/logs.db
   ui_port: 8001         # Port for the Datasette UI
 
+# Report agent state to a VibePod Dash board (see the Dash integration page)
+dash:
+  enabled: true
+  url: ""            # e.g. http://localhost:8765; empty disables reporting
+  token: ""          # ingest token of the dash server
+  integrations: {}   # Extra hook files per agent, {agent: [{source, dest}]}
+
 proxy:
   enabled: true
   image: vibepod/proxy:latest
@@ -202,6 +209,8 @@ These variables override the corresponding config keys without editing any file:
 | `VP_LLM_BASE_URL` | `llm.base_url` | `VP_LLM_BASE_URL=http://localhost:11434` |
 | `VP_LLM_API_KEY` | `llm.api_key` | `VP_LLM_API_KEY=ollama` |
 | `VP_LLM_MODEL` | `llm.model` | `VP_LLM_MODEL=qwen3:14b` |
+| `VPDASH_URL` | `dash.url` | `VPDASH_URL=http://localhost:8765` |
+| `VPDASH_TOKEN` | `dash.token` | `VPDASH_TOKEN=s3cret` |
 | `VP_CONFIG_DIR` | *(config root)* | `VP_CONFIG_DIR=/custom/path` |
 | `VP_PROFILE` | `profile` | `VP_PROFILE=work` |
 
