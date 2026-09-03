@@ -17,11 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - exercised on Python 3.10 CI
-    import tomli as tomllib
-
+from vibepod.core.codex_hooks import register as register_codex_lifecycle_hooks
 from vibepod.core.hooksync import sync_integration_files
 from vibepod.utils.console import info, warning
 
@@ -137,7 +133,7 @@ _CLAUDE_EVENTS = (
     "Stop",
     "SessionEnd",
 )
-_CODEX_NOTIFY_LINE = 'notify = ["/config/.codex/herdr-agent-state.sh"]'
+CODEX_HOOK_COMMAND = "/config/.codex/herdr-agent-state.sh"
 
 
 def _claude_hook_entry() -> dict[str, Any]:
@@ -187,50 +183,9 @@ def register_claude_hooks(config_dir: Path) -> None:
         settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
 
 
-def register_codex_notify(config_dir: Path) -> None:
-    """Point codex's notify program at our hook script, idempotently.
-
-    The line must live in the TOML root table, so it is inserted at the top
-    of the file — appending would place it inside the last ``[section]``.
-    A previously misplaced line (early VibePod versions appended) is moved.
-    """
-    config_path = config_dir / ".codex" / "config.toml"
-    content = ""
-    if config_path.is_file():
-        try:
-            content = config_path.read_text(encoding="utf-8")
-        except OSError:
-            warning("herdr: could not read codex config.toml, skipping notify registration")
-            return
-
-    lines = content.splitlines()
-    marker_at = next(
-        (i for i, line in enumerate(lines) if line.strip() == _CODEX_NOTIFY_LINE),
-        None,
-    )
-    if marker_at is not None:
-        if not any(line.lstrip().startswith("[") for line in lines[:marker_at]):
-            return
-        del lines[marker_at]
-        content = "\n".join(lines) + ("\n" if lines else "")
-
-    try:
-        parsed = tomllib.loads(content)
-    except tomllib.TOMLDecodeError:
-        warning("herdr: codex config.toml is not valid TOML, skipping notify registration")
-        return
-    if "notify" in parsed:
-        warning("herdr: codex config.toml already sets 'notify', leaving it untouched")
-        return
-
-    new_content = _CODEX_NOTIFY_LINE + "\n" + content
-    try:
-        tomllib.loads(new_content)
-    except tomllib.TOMLDecodeError:
-        warning("herdr: notify registration would corrupt codex config.toml, skipping")
-        return
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(new_content, encoding="utf-8")
+def register_codex_hooks(config_dir: Path) -> None:
+    """Register herdr for Codex lifecycle events, preserving other hooks."""
+    register_codex_lifecycle_hooks(config_dir, CODEX_HOOK_COMMAND, label="herdr")
 
 
 #: Container label carrying the herdr pane a run was started in, so
@@ -433,7 +388,7 @@ def apply_herdr_if_enabled(
         if agent == "claude":
             register_claude_hooks(config_dir)
         elif agent == "codex":
-            register_codex_notify(config_dir)
+            register_codex_hooks(config_dir)
     except Exception as exc:  # noqa: BLE001 - herdr problems must never block a run
         warning(f"herdr: could not prepare integration files: {exc}")
         return volumes, env

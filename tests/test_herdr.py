@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import socket as socket_module
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -286,37 +287,43 @@ def test_claude_settings_unparseable_left_alone(tmp_path: Path, capsys) -> None:
     assert "settings.json" in capsys.readouterr().out
 
 
-def test_codex_notify_registered(tmp_path: Path) -> None:
-    herdr.register_codex_notify(tmp_path)
-    content = (tmp_path / ".codex" / "config.toml").read_text()
-    assert 'notify = ["/config/.codex/herdr-agent-state.sh"]' in content
+def test_codex_lifecycle_hooks_registered(tmp_path: Path) -> None:
+    herdr.register_codex_hooks(tmp_path)
+    data = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    for groups in data["hooks"].values():
+        commands = [hook["command"] for group in groups for hook in group["hooks"]]
+        assert herdr.CODEX_HOOK_COMMAND in commands
 
 
-def test_codex_notify_appends_to_existing_config(tmp_path: Path) -> None:
+def test_codex_lifecycle_hooks_preserve_existing_hooks(tmp_path: Path) -> None:
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir(parents=True)
-    (codex_dir / "config.toml").write_text('model = "o4"\n')
-    herdr.register_codex_notify(tmp_path)
-    content = (codex_dir / "config.toml").read_text()
-    assert 'model = "o4"' in content
-    assert "herdr-agent-state.sh" in content
+    (codex_dir / "hooks.json").write_text(
+        json.dumps(
+            {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine.sh"}]}]}},
+        ),
+    )
+    herdr.register_codex_hooks(tmp_path)
+    data = json.loads((codex_dir / "hooks.json").read_text())
+    commands = [hook["command"] for group in data["hooks"]["Stop"] for hook in group["hooks"]]
+    assert commands == ["mine.sh", herdr.CODEX_HOOK_COMMAND]
 
 
-def test_codex_notify_respects_existing_notify(tmp_path: Path, capsys) -> None:
+def test_codex_lifecycle_hooks_respect_user_notify(tmp_path: Path) -> None:
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir(parents=True)
     (codex_dir / "config.toml").write_text('notify = ["my-notifier"]\n')
-    herdr.register_codex_notify(tmp_path)
+    herdr.register_codex_hooks(tmp_path)
     assert "my-notifier" in (codex_dir / "config.toml").read_text()
-    assert "herdr-agent-state.sh" not in (codex_dir / "config.toml").read_text()
-    assert "notify" in capsys.readouterr().out
+    assert (codex_dir / "hooks.json").is_file()
 
 
-def test_codex_notify_idempotent(tmp_path: Path) -> None:
-    herdr.register_codex_notify(tmp_path)
-    first = (tmp_path / ".codex" / "config.toml").read_text()
-    herdr.register_codex_notify(tmp_path)
-    assert (tmp_path / ".codex" / "config.toml").read_text() == first
+def test_codex_lifecycle_hooks_are_idempotent(tmp_path: Path) -> None:
+    herdr.register_codex_hooks(tmp_path)
+    path = tmp_path / ".codex" / "hooks.json"
+    first = path.read_text()
+    herdr.register_codex_hooks(tmp_path)
+    assert path.read_text() == first
 
 
 def _activate(monkeypatch, tmp_path: Path, with_binary: bool = True) -> None:
@@ -368,12 +375,12 @@ def test_apply_wires_claude(monkeypatch, tmp_path: Path) -> None:
     assert (config_dir / "settings.json").is_file()
 
 
-def test_apply_wires_codex_notify(monkeypatch, tmp_path: Path) -> None:
+def test_apply_wires_codex_lifecycle_hooks(monkeypatch, tmp_path: Path) -> None:
     _activate(monkeypatch, tmp_path)
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
     herdr.apply_herdr_if_enabled("codex", config_dir, {}, no_herdr=False)
-    assert (config_dir / ".codex" / "config.toml").is_file()
+    assert (config_dir / ".codex" / "hooks.json").is_file()
 
 
 def test_apply_warns_without_binary(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -441,48 +448,48 @@ def test_apply_logs_detection_without_integrations(monkeypatch, tmp_path: Path, 
     assert "herdr pane detected" in capsys.readouterr().out
 
 
-def test_codex_notify_goes_to_root_table_before_sections(tmp_path: Path) -> None:
+def test_codex_lifecycle_hooks_remove_legacy_notify(tmp_path: Path) -> None:
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir(parents=True)
     (codex_dir / "config.toml").write_text(
+        'notify = ["/config/.codex/herdr-agent-state.sh"]\n'
         'model = "o4"\n\n[notice.model_migrations]\nseen = true\n',
     )
-    herdr.register_codex_notify(tmp_path)
-    parsed = herdr.tomllib.loads((codex_dir / "config.toml").read_text())
-    assert parsed["notify"] == ["/config/.codex/herdr-agent-state.sh"]
-    assert "notify" not in parsed["notice"]["model_migrations"]
+    herdr.register_codex_hooks(tmp_path)
+    content = (codex_dir / "config.toml").read_text()
+    assert "notify" not in content
+    assert 'model = "o4"' in content
 
 
-def test_codex_notify_repairs_line_misplaced_inside_section(tmp_path: Path) -> None:
+def test_codex_lifecycle_hooks_remove_legacy_notify_inside_section(tmp_path: Path) -> None:
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir(parents=True)
     (codex_dir / "config.toml").write_text(
         "[notice.model_migrations]\nseen = true\n"
         'notify = ["/config/.codex/herdr-agent-state.sh"]\n',
     )
-    herdr.register_codex_notify(tmp_path)
-    parsed = herdr.tomllib.loads((codex_dir / "config.toml").read_text())
-    assert parsed["notify"] == ["/config/.codex/herdr-agent-state.sh"]
-    assert "notify" not in parsed["notice"]["model_migrations"]
+    herdr.register_codex_hooks(tmp_path)
+    assert "notify" not in (codex_dir / "config.toml").read_text()
 
 
-def test_codex_notify_skips_invalid_toml(tmp_path: Path, capsys) -> None:
+def test_codex_lifecycle_hooks_leave_invalid_toml(tmp_path: Path, capsys) -> None:
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir(parents=True)
     (codex_dir / "config.toml").write_text("model = [unclosed\n")
-    herdr.register_codex_notify(tmp_path)
+    herdr.register_codex_hooks(tmp_path)
     assert (codex_dir / "config.toml").read_text() == "model = [unclosed\n"
+    assert (codex_dir / "hooks.json").is_file()
     assert "TOML" in capsys.readouterr().out
 
 
-def test_codex_notify_respects_user_notify_in_root(tmp_path: Path, capsys) -> None:
+def test_codex_lifecycle_hooks_preserve_user_notify_in_root(tmp_path: Path) -> None:
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir(parents=True)
     (codex_dir / "config.toml").write_text('notify = ["my-notifier"]\n\n[other]\nx = 1\n')
-    herdr.register_codex_notify(tmp_path)
+    herdr.register_codex_hooks(tmp_path)
     content = (codex_dir / "config.toml").read_text()
     assert "my-notifier" in content
-    assert "herdr-agent-state.sh" not in content
+    assert (codex_dir / "hooks.json").is_file()
 
 
 def test_doctor_herdr_command_registered() -> None:
@@ -609,6 +616,95 @@ def _serve_requests(sock_path: Path, received: list, count: int) -> object:
 
 def _serve_one(sock_path: Path, received: list) -> object:
     return _serve_requests(sock_path, received, 1)
+
+
+@pytest.mark.parametrize(
+    ("event", "state"),
+    [
+        ("UserPromptSubmit", "working"),
+        ("PreToolUse", "working"),
+        ("PostToolUse", "working"),
+        ("PermissionRequest", "blocked"),
+        ("Stop", "idle"),
+        ("Interrupt", "idle"),
+        ("SessionEnd", "idle"),
+    ],
+)
+def test_codex_lifecycle_hook_reports_state(
+    event: str,
+    state: str,
+    sock_dir: Path,
+    tmp_path: Path,
+) -> None:
+    if shutil.which("node") is None:
+        pytest.skip("node not available")
+    received: list[dict] = []
+    sock_path = sock_dir / "herdr.sock"
+    thread = _serve_one(sock_path, received)
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    herdr.sync_herdr_files("codex", config_dir, {})
+
+    proc = subprocess.run(
+        ["sh", str(config_dir / ".codex" / "herdr-agent-state.sh")],
+        input=json.dumps({"hook_event_name": event, "session_id": "s1"}),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+        env={
+            "PATH": os.environ["PATH"],
+            "HERDR_SOCKET_PATH": str(sock_path),
+            "HERDR_PANE_ID": "w1:p1",
+            "HOME": str(config_dir),
+        },
+    )
+    thread.join(timeout=5)
+
+    assert proc.stdout == ""
+    assert received[0]["method"] == "pane.report_agent"
+    assert received[0]["params"]["state"] == state
+    assert received[0]["params"]["agent_session_id"] == "s1"
+
+
+def test_codex_session_start_reports_session_then_idle(sock_dir: Path, tmp_path: Path) -> None:
+    if shutil.which("node") is None:
+        pytest.skip("node not available")
+    received: list[dict] = []
+    sock_path = sock_dir / "herdr.sock"
+    thread = _serve_requests(sock_path, received, 2)
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    herdr.sync_herdr_files("codex", config_dir, {})
+
+    proc = subprocess.run(
+        ["sh", str(config_dir / ".codex" / "herdr-agent-state.sh")],
+        input=json.dumps(
+            {
+                "hook_event_name": "SessionStart",
+                "session_id": "s1",
+                "transcript_path": "/config/.codex/session.jsonl",
+            },
+        ),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+        env={
+            "PATH": os.environ["PATH"],
+            "HERDR_SOCKET_PATH": str(sock_path),
+            "HERDR_PANE_ID": "w1:p1",
+            "HOME": str(config_dir),
+        },
+    )
+    thread.join(timeout=5)
+
+    assert proc.stdout == ""
+    assert received[0]["method"] == "pane.report_agent_session"
+    assert received[0]["params"]["agent_session_id"] == "s1"
+    assert received[0]["params"]["agent_session_path"] == "/config/.codex/session.jsonl"
+    assert received[1]["method"] == "pane.report_agent"
+    assert received[1]["params"]["state"] == "idle"
 
 
 def test_release_agent_sends_socket_request(monkeypatch, sock_dir: Path) -> None:
