@@ -61,22 +61,39 @@ That rewrite is enough on its own when the dash server's port is published on
 the host, and it needs no configuration.
 
 The dash server's own `docker-compose.yml` goes one better: it joins
-`vibepod-network`, the network VibePod creates for its containers, so agents
-can address it by container name instead of going back out through the host —
-which also survives a rootless Podman setup, where the host gateway is the
-flakiest part of the chain. The CLI still needs a URL *it* can resolve, so the
-two sides are configured separately:
+`vibepod-network` — the network VibePod creates for its containers — under the
+alias `vibepod-dash`, so agents can address it by name instead of going back
+out through the host, which also survives a rootless Podman setup where the
+host gateway is the flakiest part of the chain.
+
+**Either URL works as the only thing you configure.** The CLI reports from the
+host, so it cannot use a container-only name; when `dash.url` is one, it falls
+back to the same port on `127.0.0.1` — but only after checking that a
+dashboard actually answers there. Both of these are complete configurations:
 
 ```yaml
-# ~/.config/vibepod/config.yaml
 dash:
-  url: http://localhost:8765                 # how the CLI reports
+  url: http://vibepod-dash:8765   # agents use it as-is; the CLI falls back to
+                                  # 127.0.0.1:8765, the published port
+```
+
+```yaml
+dash:
+  url: http://localhost:8765      # the CLI uses it as-is; agents get
+                                  # host.docker.internal:8765
+```
+
+Spell both out when neither default fits — a dashboard on another host, or a
+published port that differs from the container's:
+
+```yaml
+dash:
+  url: http://dash.lan:9000                  # how the CLI reports
   container_url: http://vibepod-dash:8765    # how agents report
-  token: <ingest token>
 ```
 
 If you run agents on a custom network (`network:` in the config), put the dash
-container on that one instead.
+container on that one — its compose file reads `VIBEPOD_NETWORK`.
 
 ## Identity on the board
 

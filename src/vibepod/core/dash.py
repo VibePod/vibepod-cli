@@ -145,6 +145,53 @@ def resolve_container_url(config: dict[str, Any], host_url: str) -> str:
     return raw if "://" in raw else f"http://{raw}"
 
 
+#: Resolved host-side URLs, so the probe below runs once per process.
+_host_url_cache: dict[str, str] = {}
+
+
+def _resolves(hostname: str) -> bool:
+    try:
+        socket.getaddrinfo(hostname, None)
+    except (socket.gaierror, UnicodeError):
+        return False
+    return True
+
+
+def _answers(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(f"{url}/healthz", timeout=2):
+            return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def usable_host_url(url: str) -> str:
+    """The configured URL, or a loopback equivalent when it is container-only.
+
+    ``http://vibepod-dash:8765`` is the natural thing to configure once the
+    dashboard sits on the VibePod network — but that name only resolves for
+    the agents, not for the CLI reporting container start and stop from the
+    host. Rather than fail, look for the same dashboard on the loopback
+    address (its port is published) and use that for the CLI's own reports.
+    Never guesses silently: the fallback is only adopted when it answers.
+    """
+    cached = _host_url_cache.get(url)
+    if cached is not None:
+        return cached
+
+    resolved = url
+    parts = urllib.parse.urlsplit(url)
+    hostname = parts.hostname or ""
+    if hostname and not _resolves(hostname):
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        fallback = f"http://127.0.0.1:{port}"
+        if _answers(fallback):
+            info(f"dash: '{hostname}' is container-only; reporting to {fallback} from the host")
+            resolved = fallback
+    _host_url_cache[url] = resolved
+    return resolved
+
+
 def agent_id(agent: str, workspace: Path, host: str) -> str:
     """Stable dashboard id for *agent* working in *workspace* on *host*.
 
@@ -168,7 +215,9 @@ def make_target(agent: str, workspace: Path, config: dict[str, Any]) -> DashTarg
         return None
     host = os.environ.get("VPDASH_HOST") or socket.gethostname()
     return DashTarget(
-        host_url=url,
+        # Container side first: it is derived from what was configured, not
+        # from the loopback URL the host side may fall back to.
+        host_url=usable_host_url(url),
         container_url=resolve_container_url(config, url),
         token=resolve_token(config),
         agent=agent,
@@ -347,8 +396,43 @@ def report(
             return True
     except (urllib.error.URLError, OSError, ValueError) as exc:
         if not quiet:
-            warning(f"dash: could not report '{state}' to {target.host_url}: {exc}")
+            _warn_once(target.host_url, state, exc)
         return False
+
+
+#: Host URLs already complained about, so a run that reports start and stop
+#: does not print the same failure twice.
+_warned_urls: set[str] = set()
+
+
+def reset_state() -> None:
+    """Drop the warn-once and host-URL caches (tests, long-lived processes)."""
+    _warned_urls.clear()
+    _host_url_cache.clear()
+
+
+def is_name_resolution_error(exc: BaseException) -> bool:
+    """True when *exc* means the hostname itself could not be resolved."""
+    return isinstance(exc, socket.gaierror) or isinstance(
+        getattr(exc, "reason", None),
+        socket.gaierror,
+    )
+
+
+def _warn_once(host_url: str, state: str, exc: BaseException) -> None:
+    if host_url in _warned_urls:
+        return
+    _warned_urls.add(host_url)
+    warning(f"dash: could not report '{state}' to {host_url}: {exc}")
+    if is_name_resolution_error(exc):
+        # A container-network name in dash.url that usable_host_url() could
+        # not find a published loopback equivalent for.
+        warning(
+            f"dash: '{urllib.parse.urlsplit(host_url).hostname}' does not resolve on this "
+            "host and nothing answered on the same port locally. Publish the dashboard's "
+            "port, or set dash.url to a URL the CLI can reach and keep the "
+            "container-side name in dash.container_url.",
+        )
 
 
 def apply_dash_if_enabled(
@@ -398,7 +482,7 @@ def target_from_labels(labels: dict[str, str], config: dict[str, Any]) -> DashTa
     if url is None or not dash_enabled(config):
         return None
     return DashTarget(
-        host_url=url,
+        host_url=usable_host_url(url),
         container_url=resolve_container_url(config, url),
         token=resolve_token(config),
         agent=agent,

@@ -744,19 +744,21 @@ def _dash_registration(agent: str, cfg_dir: Path) -> str:
     return "auto"
 
 
-def _dash_reachable(url: str) -> tuple[bool, str]:
-    """GET {url}/healthz; (ok, detail)."""
+def _dash_reachable(url: str) -> tuple[bool, str, bool]:
+    """GET {url}/healthz; (ok, detail, hostname-does-not-resolve)."""
     import urllib.error
     import urllib.request
+
+    from vibepod.core import dash as dash_core
 
     try:
         with urllib.request.urlopen(f"{url}/healthz", timeout=5) as response:
             body = response.read(200).decode("utf-8", errors="replace").strip()
-            return True, f"HTTP {response.status} {body}"
+            return True, f"HTTP {response.status} {body}", False
     except urllib.error.HTTPError as exc:
-        return False, f"HTTP {exc.code}"
+        return False, f"HTTP {exc.code}", False
     except (urllib.error.URLError, OSError) as exc:
-        return False, str(exc)
+        return False, str(exc), dash_core.is_name_resolution_error(exc)
 
 
 @app.command("dash")
@@ -813,17 +815,27 @@ def dash_doctor(
         error("  no dashboard URL (set VPDASH_URL or dash.url in the config)")
         console.print("  see https://github.com/VibePod/vibepod-dash to run one")
         raise typer.Exit(1)
-    console.print(f"  host URL:      {url}")
-    console.print(f"  container URL: {dash_core.container_url(url)}")
+    host_url = dash_core.usable_host_url(url)
+    console.print(f"  configured:    {url}")
+    if host_url != url:
+        console.print(f"  host URL:      {host_url} (fell back: '{url}' is container-only)")
+    else:
+        console.print(f"  host URL:      {host_url}")
+    console.print(f"  container URL: {dash_core.resolve_container_url(config, url)}")
     console.print(f"  token:         {'set' if dash_core.resolve_token(config) else 'not set'}")
 
     console.print()
     console.print("[bold]Reachability from this host[/bold]")
-    ok, detail = _dash_reachable(url)
+    ok, detail, unresolvable = _dash_reachable(host_url)
     if ok:
         success(f"  {detail}")
     else:
         error(f"  {detail}")
+        if unresolvable:
+            warning(
+                "  → this looks like a container-network name. dash.url is the URL the "
+                "CLI itself posts to; put the container-side name in dash.container_url.",
+            )
         failures += 1
 
     if agent is None:
