@@ -298,6 +298,24 @@ def _herdr_log_relpath(agent: str) -> str | None:
     }.get(agent)
 
 
+def _herdr_registration(agent: str, cfg_dir: Path) -> str:
+    """How the agent is wired to report Herdr state, as a table cell."""
+    from vibepod.core import codex_hooks
+    from vibepod.core import herdr as herdr_core
+
+    if agent == "claude":
+        settings = cfg_dir / "settings.json"
+        ok = settings.is_file() and "herdr-agent-state.sh" in settings.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+        return "settings.json" if ok else "MISSING"
+    if agent == "codex":
+        ok = codex_hooks.registered(cfg_dir, herdr_core.CODEX_HOOK_COMMAND)
+        return "hooks.json" if ok else "MISSING"
+    return "auto"
+
+
 def _herdr_agent_summary(profile: str) -> None:
     """One line per supported agent: integration, injection, registration, activity."""
     from rich.table import Table
@@ -336,24 +354,7 @@ def _herdr_agent_summary(profile: str) -> None:
             present = sum(1 for dest in dests if (cfg_dir / dest).is_file())
             injected = "yes" if present == len(dests) else f"{present}/{len(dests)}"
 
-        if name == "claude":
-            settings = cfg_dir / "settings.json"
-            ok = settings.is_file() and "herdr-agent-state.sh" in settings.read_text(
-                encoding="utf-8",
-                errors="replace",
-            )
-            registration = "settings.json" if ok else "MISSING"
-        elif name == "codex":
-            toml_path = cfg_dir / ".codex" / "config.toml"
-            ok = toml_path.is_file() and "herdr-agent-state.sh" in toml_path.read_text(
-                encoding="utf-8",
-                errors="replace",
-            )
-            registration = "notify" if ok else "MISSING"
-        elif dests:
-            registration = "auto"
-        else:
-            registration = "-"
+        registration = _herdr_registration(name, cfg_dir) if dests else "-"
 
         activity = "-"
         log_rel = _herdr_log_relpath(name)
@@ -545,18 +546,17 @@ def herdr_doctor(
         else:
             info("  settings.json hooks: not registered (engine can't mount the herdr socket)")
     if agent == "codex":
-        toml_path = cfg_dir / ".codex" / "config.toml"
-        registered = toml_path.is_file() and "herdr-agent-state.sh" in toml_path.read_text(
-            encoding="utf-8",
-            errors="replace",
-        )
+        registered = _herdr_registration(agent, cfg_dir) == "hooks.json"
         if registered:
-            console.print("  config.toml notify: registered")
+            console.print("  hooks.json lifecycle hooks: registered")
         elif socket_supported:
-            warning("  config.toml notify: NOT REGISTERED")
+            warning("  hooks.json lifecycle hooks: NOT REGISTERED")
             failures += 1
         else:
-            info("  config.toml notify: not registered (engine can't mount the herdr socket)")
+            info(
+                "  hooks.json lifecycle hooks: not registered "
+                "(engine can't mount the herdr socket)",
+            )
 
     log_dirs = {"claude": "", "codex": ".codex", "copilot": ".copilot"}
     if agent in log_dirs:
@@ -581,7 +581,7 @@ def herdr_doctor(
     #: replays the exact in-container call path the agent itself would take.
     probe_payloads = {
         "claude": '{"hook_event_name":"Stop"}',
-        "codex": '{"type":"agent-turn-complete"}',
+        "codex": '{"hook_event_name":"Stop","session_id":"doctor"}',
         "copilot": '{"type":"stop"}',
     }
     probe_reported = False
@@ -619,10 +619,7 @@ def herdr_doctor(
             hook_dest = herdr_core.BUILTIN_INTEGRATIONS[agent][0][1]
             hook_path = f"{spec.config_mount_path}/{hook_dest}"
             payload = probe_payloads[agent]
-            if agent == "codex":
-                shell_line = f"{hook_path} '{payload}'"
-            else:
-                shell_line = f"printf '%s' '{payload}' | {hook_path}"
+            shell_line = f"printf '%s' '{payload}' | {hook_path}"
             output = manager.client.containers.run(
                 image,
                 entrypoint=["/bin/sh"],
@@ -762,6 +759,9 @@ def _dash_agent_summary(profile: str, config: dict[str, Any]) -> None:
 
 def _dash_registration(agent: str, cfg_dir: Path) -> str:
     """How the agent is wired to call the hook, as a table cell."""
+    from vibepod.core import codex_hooks
+    from vibepod.core import dash as dash_core
+
     marker = "dash-agent-state.sh"
     if agent == "claude":
         settings = cfg_dir / "settings.json"
@@ -771,12 +771,8 @@ def _dash_registration(agent: str, cfg_dir: Path) -> str:
         )
         return "settings.json" if ok else "MISSING"
     if agent == "codex":
-        toml_path = cfg_dir / ".codex" / "config.toml"
-        ok = toml_path.is_file() and marker in toml_path.read_text(
-            encoding="utf-8",
-            errors="replace",
-        )
-        return "notify" if ok else "MISSING"
+        ok = codex_hooks.registered(cfg_dir, dash_core.CODEX_HOOK_COMMAND)
+        return "hooks.json" if ok else "MISSING"
     return "auto"
 
 
@@ -935,7 +931,7 @@ def dash_doctor(
     #: agent itself would make, which is what exercises the container URL.
     probe_payloads = {
         "claude": '{"hook_event_name":"Stop"}',
-        "codex": '{"type":"agent-turn-complete"}',
+        "codex": '{"hook_event_name":"Stop","session_id":"doctor"}',
         "copilot": '{"type":"stop"}',
     }
     if agent not in probe_payloads:
@@ -953,10 +949,7 @@ def dash_doctor(
             hook_dest = dash_core.BUILTIN_INTEGRATIONS[agent][1][1]
             hook_path = f"{spec.config_mount_path}/{hook_dest}"
             payload = probe_payloads[agent]
-            if agent == "codex":
-                shell_line = f"{hook_path} '{payload}'"
-            else:
-                shell_line = f"printf '%s' '{payload}' | {hook_path}"
+            shell_line = f"printf '%s' '{payload}' | {hook_path}"
             output = manager.client.containers.run(
                 image,
                 entrypoint=["/bin/sh"],

@@ -187,3 +187,23 @@ def test_registered_detects_exact_command_and_soft_fails(tmp_path: Path) -> None
     path = tmp_path / ".codex" / "hooks.json"
     path.write_text("{broken", encoding="utf-8")
     assert not codex_hooks.registered(tmp_path, "hook.sh")
+
+
+def test_registered_rejects_a_partial_lifecycle_registration(tmp_path: Path) -> None:
+    codex_hooks = _module()
+    path = tmp_path / ".codex" / "hooks.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {"hooks": [{"type": "command", "command": "hook.sh"}]},
+                    ],
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert not codex_hooks.registered(tmp_path, "hook.sh")

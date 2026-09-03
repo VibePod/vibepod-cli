@@ -690,6 +690,14 @@ def test_codex_lifecycle_adapter_maps_reporter_arguments(
 # -- doctor ---------------------------------------------------------------
 
 
+def test_doctor_detects_complete_codex_lifecycle_registration(tmp_path: Path) -> None:
+    from vibepod.commands.doctor import _dash_registration
+
+    assert _dash_registration("codex", tmp_path) == "MISSING"
+    dash.register_codex_hooks(tmp_path)
+    assert _dash_registration("codex", tmp_path) == "hooks.json"
+
+
 def test_doctor_dash_needs_a_url(monkeypatch, tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
