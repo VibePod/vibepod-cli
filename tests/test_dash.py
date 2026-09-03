@@ -693,7 +693,16 @@ def test_codex_lifecycle_adapter_maps_reporter_arguments(
 def test_doctor_detects_complete_codex_lifecycle_registration(tmp_path: Path) -> None:
     from vibepod.commands.doctor import _dash_registration
 
-    assert _dash_registration("codex", tmp_path) == "MISSING"
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    assert _dash_registration("codex", tmp_path) == "MISSING hooks.json"
+
+    hooks_path.parent.mkdir(parents=True)
+    hooks_path.write_text("{broken", encoding="utf-8")
+    assert _dash_registration("codex", tmp_path) == "INVALID hooks.json"
+
+    hooks_path.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+    assert _dash_registration("codex", tmp_path) == "MISSING handler"
+
     dash.register_codex_hooks(tmp_path)
     assert _dash_registration("codex", tmp_path) == "hooks.json"
 
@@ -725,6 +734,43 @@ def test_doctor_dash_summarizes_every_agent(monkeypatch, tmp_path: Path, dash_se
     for agent in SUPPORTED_AGENTS:
         assert agent in output
     assert "dash integration per agent" in output
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("missing", "MISSING hooks.json"),
+        ("malformed", "INVALID hooks.json"),
+        ("handler-absent", "MISSING handler"),
+        ("registered", "hooks.json"),
+    ],
+)
+def test_doctor_dash_summary_distinguishes_codex_hook_states(
+    status: str,
+    expected: str,
+    monkeypatch,
+    tmp_path: Path,
+    dash_server,
+) -> None:
+    from typer.testing import CliRunner
+
+    from vibepod.cli import app
+
+    config_dir = tmp_path / "agents" / "codex"
+    hooks_path = config_dir / ".codex" / "hooks.json"
+    if status != "missing":
+        hooks_path.parent.mkdir(parents=True)
+        content = "{broken" if status == "malformed" else json.dumps({"hooks": {}})
+        hooks_path.write_text(content, encoding="utf-8")
+    if status == "registered":
+        dash.register_codex_hooks(config_dir)
+
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VPDASH_URL", server_url(dash_server))
+
+    result = CliRunner().invoke(app, ["doctor", "dash"])
+    assert result.exit_code == 0
+    assert expected in result.output
 
 
 def test_run_and_task_expose_the_opt_out() -> None:

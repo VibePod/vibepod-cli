@@ -286,7 +286,6 @@ def _herdr_log_relpath(agent: str) -> str | None:
 
 def _herdr_registration(agent: str, cfg_dir: Path) -> str:
     """How the agent is wired to report Herdr state, as a table cell."""
-    from vibepod.core import codex_hooks
     from vibepod.core import herdr as herdr_core
 
     if agent == "claude":
@@ -297,9 +296,21 @@ def _herdr_registration(agent: str, cfg_dir: Path) -> str:
         )
         return "settings.json" if ok else "MISSING"
     if agent == "codex":
-        ok = codex_hooks.registered(cfg_dir, herdr_core.CODEX_HOOK_COMMAND)
-        return "hooks.json" if ok else "MISSING"
+        return _codex_registration(cfg_dir, herdr_core.CODEX_HOOK_COMMAND)
     return "auto"
+
+
+def _codex_registration(cfg_dir: Path, command: str) -> str:
+    """Render a Codex lifecycle-hook inspection as a diagnostic label."""
+    from vibepod.core import codex_hooks
+
+    status = codex_hooks.registration_status(cfg_dir, command)
+    return {
+        "missing": "MISSING hooks.json",
+        "malformed": "INVALID hooks.json",
+        "handler-absent": "MISSING handler",
+        "registered": "hooks.json",
+    }[status]
 
 
 def _herdr_agent_summary(profile: str) -> None:
@@ -519,9 +530,10 @@ def herdr_doctor(
         if not registered:
             failures += 1
     if agent == "codex":
-        registered = _herdr_registration(agent, cfg_dir) == "hooks.json"
+        registration = _herdr_registration(agent, cfg_dir)
+        registered = registration == "hooks.json"
         (console.print if registered else warning)(
-            f"  hooks.json lifecycle hooks: {'registered' if registered else 'NOT REGISTERED'}",
+            f"  lifecycle registration: {registration}",
         )
         if not registered:
             failures += 1
@@ -720,7 +732,6 @@ def _dash_agent_summary(profile: str, config: dict[str, Any]) -> None:
 
 def _dash_registration(agent: str, cfg_dir: Path) -> str:
     """How the agent is wired to call the hook, as a table cell."""
-    from vibepod.core import codex_hooks
     from vibepod.core import dash as dash_core
 
     marker = "dash-agent-state.sh"
@@ -732,8 +743,7 @@ def _dash_registration(agent: str, cfg_dir: Path) -> str:
         )
         return "settings.json" if ok else "MISSING"
     if agent == "codex":
-        ok = codex_hooks.registered(cfg_dir, dash_core.CODEX_HOOK_COMMAND)
-        return "hooks.json" if ok else "MISSING"
+        return _codex_registration(cfg_dir, dash_core.CODEX_HOOK_COMMAND)
     return "auto"
 
 

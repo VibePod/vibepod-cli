@@ -505,9 +505,53 @@ def test_doctor_herdr_command_registered() -> None:
 def test_doctor_detects_complete_codex_lifecycle_registration(tmp_path: Path) -> None:
     from vibepod.commands.doctor import _herdr_registration
 
-    assert _herdr_registration("codex", tmp_path) == "MISSING"
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    assert _herdr_registration("codex", tmp_path) == "MISSING hooks.json"
+
+    hooks_path.parent.mkdir(parents=True)
+    hooks_path.write_text("{broken", encoding="utf-8")
+    assert _herdr_registration("codex", tmp_path) == "INVALID hooks.json"
+
+    hooks_path.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+    assert _herdr_registration("codex", tmp_path) == "MISSING handler"
+
     herdr.register_codex_hooks(tmp_path)
     assert _herdr_registration("codex", tmp_path) == "hooks.json"
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("missing", "MISSING hooks.json"),
+        ("malformed", "INVALID hooks.json"),
+        ("handler-absent", "MISSING handler"),
+    ],
+)
+def test_doctor_herdr_codex_deep_dive_distinguishes_hook_failures(
+    status: str,
+    expected: str,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from typer.testing import CliRunner
+
+    from vibepod.cli import app
+
+    config_dir = tmp_path / "agents" / "codex"
+    hooks_path = config_dir / ".codex" / "hooks.json"
+    if status != "missing":
+        hooks_path.parent.mkdir(parents=True)
+        content = "{broken" if status == "malformed" else json.dumps({"hooks": {}})
+        hooks_path.write_text(content, encoding="utf-8")
+
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    for key in ("HERDR_ENV", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HERDR_SOCKET_PATH", str(tmp_path / "missing.sock"))
+
+    result = CliRunner().invoke(app, ["doctor", "herdr", "codex"])
+    assert result.exit_code == 1
+    assert expected in result.output
 
 
 def test_doctor_herdr_reports_missing_pane(monkeypatch) -> None:
@@ -816,6 +860,47 @@ def test_doctor_herdr_summary_lists_all_agents(monkeypatch, tmp_path: Path) -> N
     result = CliRunner().invoke(app, ["doctor", "herdr"])
     for agent_name in SUPPORTED_AGENTS:
         assert agent_name in result.output
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("missing", "MISSING hooks.json"),
+        ("malformed", "INVALID hooks.json"),
+        ("handler-absent", "MISSING handler"),
+        ("registered", "hooks.json"),
+    ],
+)
+def test_doctor_herdr_summary_distinguishes_codex_hook_states(
+    status: str,
+    expected: str,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from typer.testing import CliRunner
+
+    from vibepod.cli import app
+
+    config_dir = tmp_path / "agents" / "codex"
+    hooks_path = config_dir / ".codex" / "hooks.json"
+    if status != "missing":
+        hooks_path.parent.mkdir(parents=True)
+        content = "{broken" if status == "malformed" else json.dumps({"hooks": {}})
+        hooks_path.write_text(content, encoding="utf-8")
+    if status == "registered":
+        herdr.register_codex_hooks(config_dir)
+
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("HERDR_ENV", "1")
+    monkeypatch.setenv("HERDR_PANE_ID", "w1:p1")
+    monkeypatch.setenv("HERDR_TAB_ID", "w1:t1")
+    monkeypatch.setenv("HERDR_WORKSPACE_ID", "w1")
+    monkeypatch.setenv("HERDR_SOCKET_PATH", str(_make_socket(tmp_path / "herdr.sock")))
+    monkeypatch.setenv("HERDR_BIN_PATH", "/nonexistent/herdr")
+
+    result = CliRunner().invoke(app, ["doctor", "herdr"])
+    assert result.exit_code == 0
+    assert expected in result.output
 
 
 def test_release_agent_reports_error_reply(monkeypatch, sock_dir: Path, capsys) -> None:
