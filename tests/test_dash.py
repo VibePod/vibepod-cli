@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import subprocess
 import threading
+import urllib.error
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,7 +22,16 @@ DASH_CONFIG: dict[str, Any] = {"dash": {"url": "http://dash.local:8765", "token"
 
 
 class _Recorder(BaseHTTPRequestHandler):
-    """Collects every POST body in ``server.received``."""
+    """Collects every POST body in ``server.received``; answers /healthz."""
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.path != "/healthz":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok": true}')
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         length = int(self.headers.get("Content-Length") or 0)
@@ -51,6 +62,14 @@ def dash_server() -> Iterator[Any]:
 
 def server_url(server: Any) -> str:
     return f"http://127.0.0.1:{server.server_address[1]}"
+
+
+@pytest.fixture(autouse=True)
+def _clean_dash_state() -> Iterator[None]:
+    """The warn-once and host-URL caches are process-global."""
+    dash.reset_state()
+    yield
+    dash.reset_state()
 
 
 # -- configuration --------------------------------------------------------
@@ -139,6 +158,72 @@ def test_container_url_defaults_to_the_gateway_rewrite() -> None:
         dash.resolve_container_url({}, "http://localhost:8765")
         == "http://host.docker.internal:8765"
     )
+
+
+def test_a_container_only_url_falls_back_to_the_published_port(
+    dash_server: Any,
+    capsys,
+) -> None:
+    """`dash.url: http://vibepod-dash:8765` is what people naturally configure
+    once the board is on the VibePod network; the CLI must still be able to
+    report from the host."""
+    port = dash_server.server_address[1]
+    config = {"dash": {"url": f"http://vibepod-dash.invalid:{port}"}}
+
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    # Agents keep the name they can resolve...
+    assert target.container_url == f"http://vibepod-dash.invalid:{port}"
+    # ...the CLI switches to the loopback address that answered.
+    assert target.host_url == f"http://127.0.0.1:{port}"
+    assert "container-only" in capsys.readouterr().out
+
+    assert dash.report(target, "idle") is True
+    assert dash_server.received[0][0]["state"] == "idle"
+
+
+def test_the_fallback_is_only_used_when_something_answers(capsys) -> None:
+    # Nothing is listening on port 1, so the configured URL is kept and the
+    # failure is reported honestly rather than papered over.
+    url = "http://vibepod-dash.invalid:1"
+    assert dash.usable_host_url(url) == url
+    assert "container-only" not in capsys.readouterr().out
+
+
+def test_a_resolvable_url_is_never_probed(monkeypatch) -> None:
+    def fail(*args: Any, **kwargs: Any) -> bool:
+        raise AssertionError("should not probe a URL whose host resolves")
+
+    monkeypatch.setattr(dash, "_answers", fail)
+    assert dash.usable_host_url("http://localhost:8765") == "http://localhost:8765"
+
+
+def test_report_failures_are_only_warned_about_once(capsys) -> None:
+    target = dash.make_target("claude", Path("/work/proj"), {"dash": {"url": "http://127.0.0.1:1"}})
+    assert target is not None
+    dash.report(target, "idle")
+    first = capsys.readouterr().out
+    dash.report(target, "done")
+    assert first != ""
+    assert capsys.readouterr().out == ""
+
+
+def test_name_resolution_errors_are_recognized() -> None:
+    gai = socket.gaierror(-3, "Temporary failure in name resolution")
+    assert dash.is_name_resolution_error(gai) is True
+    assert dash.is_name_resolution_error(urllib.error.URLError(gai)) is True
+    assert dash.is_name_resolution_error(urllib.error.URLError(ConnectionRefusedError())) is False
+
+
+def test_an_unresolvable_host_explains_itself(capsys) -> None:
+    """What `vp run` printed before this hint existed was just errno -3."""
+    failure = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+    dash._warn_once("http://vibepod-dash:8765", "idle", failure)
+
+    out = capsys.readouterr().out
+    assert "vibepod-dash" in out
+    assert "does not resolve" in out
+    assert "dash.container_url" in out
 
 
 def test_agent_id_is_stable_per_workspace() -> None:
