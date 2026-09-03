@@ -57,31 +57,26 @@ VibePod maps that name to the host gateway on every run. The CLI keeps using
 the original URL for its own reports. A dash server on another machine (or in
 another container) is passed through unchanged.
 
-With the dash server in Docker and its port published (the default
-`docker compose up`), that is all you need: no shared network, no changes to
-its compose file.
+That rewrite is enough on its own when the dash server's port is published on
+the host, and it needs no configuration.
 
-If you would rather not publish the port — or the host gateway is awkward, as
-it can be under rootless Podman — put the dash container on the VibePod
-network and address it by name. The CLI still needs a URL *it* can resolve, so
-the two sides are configured separately:
-
-```yaml
-# vibepod-dash's docker-compose.yml
-services:
-  dash:
-    networks: [vibepod-network]
-networks:
-  vibepod-network:
-    external: true        # `vp run` creates it; or: docker network create vibepod-network
-```
+The dash server's own `docker-compose.yml` goes one better: it joins
+`vibepod-network`, the network VibePod creates for its containers, so agents
+can address it by container name instead of going back out through the host —
+which also survives a rootless Podman setup, where the host gateway is the
+flakiest part of the chain. The CLI still needs a URL *it* can resolve, so the
+two sides are configured separately:
 
 ```yaml
 # ~/.config/vibepod/config.yaml
 dash:
-  url: http://localhost:8765          # how the CLI reports
-  container_url: http://vibepod-dash:8765   # how agents report
+  url: http://localhost:8765                 # how the CLI reports
+  container_url: http://vibepod-dash:8765    # how agents report
+  token: <ingest token>
 ```
+
+If you run agents on a custom network (`network:` in the config), put the dash
+container on that one instead.
 
 ## Identity on the board
 
@@ -128,8 +123,9 @@ curl -sS -X POST "$VPDASH_URL/api/v1/events" \
 answers, and summarises every agent's integration state. `vp doctor dash
 <agent>` goes deeper: injected files, registration, the hook trace log
 (`<agent config dir>/dash-hook.log`), a live host-side report, and a probe that
-runs the real hook inside the agent image — which is what proves the container
-can reach the dashboard.
+runs the real hook inside the agent image, on the same network a real run uses
+— which is what proves the container can reach the dashboard, by name or
+through the host gateway.
 
 ## Limitations
 

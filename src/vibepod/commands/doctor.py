@@ -898,6 +898,10 @@ def dash_doctor(
 
             manager = DockerManager()
             image = effective_agent_image(agent, config)
+            # The probe must sit on the network a real run uses: a
+            # container_url like http://vibepod-dash:8765 only resolves there.
+            network_name = str(config.get("network", "vibepod-network"))
+            manager.ensure_network(network_name)
             hook_dest = dash_core.BUILTIN_INTEGRATIONS[agent][1][1]
             hook_path = f"{spec.config_mount_path}/{hook_dest}"
             payload = probe_payloads[agent]
@@ -915,6 +919,7 @@ def dash_doctor(
                     **dash_core.container_env(target, spec.config_mount_path),
                 },
                 user=_host_user(),
+                network=network_name,
                 extra_hosts={"host.docker.internal": "host-gateway"},
                 remove=True,
                 stdout=True,
