@@ -17,7 +17,6 @@ import importlib.resources
 import json
 import os
 import socket
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,11 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - exercised on Python 3.10 CI
-    import tomli as tomllib
-
+from vibepod.core.codex_hooks import register as register_codex_lifecycle_hooks
 from vibepod.core.hooksync import sync_integration_files
 from vibepod.utils.console import info, warning
 
@@ -50,21 +45,21 @@ AGENT_ID_LABEL = "vibepod.dash.agent-id"
 AGENT_LABEL = "vibepod.dash.agent"
 REQUEST_TIMEOUT = 3
 
-#: agent -> list of (path relative to resources/dash, dest relative to the
+#: agent -> list of (path relative to resources, dest relative to the
 #: agent config dir). Dests follow each agent's in-container home layout, the
 #: same way the herdr integration does.
 BUILTIN_INTEGRATIONS: dict[str, list[tuple[str, str]]] = {
     "claude": [
-        ("vpdash-report.sh", "hooks/vpdash-report.sh"),
-        ("claude/dash-agent-state.sh", "hooks/dash-agent-state.sh"),
+        ("dash/vpdash-report.sh", "hooks/vpdash-report.sh"),
+        ("dash/claude/dash-agent-state.sh", "hooks/dash-agent-state.sh"),
     ],
     "codex": [
-        ("vpdash-report.sh", ".codex/vpdash-report.sh"),
+        ("dash/vpdash-report.sh", ".codex/vpdash-report.sh"),
         ("codex/dash-agent-state.sh", ".codex/dash-agent-state.sh"),
     ],
     "copilot": [
-        ("vpdash-report.sh", ".copilot/hooks/vpdash-report.sh"),
-        ("copilot/dash-agent-state.sh", ".copilot/hooks/dash-agent-state.sh"),
+        ("dash/vpdash-report.sh", ".copilot/hooks/vpdash-report.sh"),
+        ("dash/copilot/dash-agent-state.sh", ".copilot/hooks/dash-agent-state.sh"),
     ],
 }
 
@@ -242,8 +237,8 @@ def container_env(target: DashTarget, config_mount_path: str) -> dict[str, str]:
 
 
 def resource_root() -> Path:
-    """Root of the vendored dash client files inside the package."""
-    return Path(str(importlib.resources.files("vibepod"))) / "resources" / "dash"
+    """Root of the packaged integration files used by dash."""
+    return Path(str(importlib.resources.files("vibepod"))) / "resources"
 
 
 def sync_dash_files(agent: str, config_dir: Path, config: dict[str, Any]) -> int:
@@ -274,7 +269,7 @@ _CLAUDE_EVENTS = (
     "Stop",
     "SessionEnd",
 )
-_CODEX_NOTIFY_LINE = 'notify = ["/config/.codex/dash-agent-state.sh"]'
+CODEX_HOOK_COMMAND = "/config/.codex/dash-agent-state.sh"
 
 
 def _claude_hook_entry() -> dict[str, Any]:
@@ -321,40 +316,9 @@ def register_claude_hooks(config_dir: Path) -> None:
         settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
 
 
-def register_codex_notify(config_dir: Path) -> None:
-    """Point codex's notify program at the dash hook when nothing else claims it.
-
-    Codex allows exactly one notify program, so an existing one (herdr's, or
-    the user's) is left alone — the dashboard then relies on the CLI-side
-    start/stop reports instead of turn-level events. The line must live in the
-    TOML root table, so it goes at the top of the file.
-    """
-    config_path = config_dir / ".codex" / "config.toml"
-    content = ""
-    if config_path.is_file():
-        try:
-            content = config_path.read_text(encoding="utf-8")
-        except OSError:
-            warning("dash: could not read codex config.toml, skipping notify registration")
-            return
-    try:
-        parsed = tomllib.loads(content)
-    except tomllib.TOMLDecodeError:
-        warning("dash: codex config.toml is not valid TOML, skipping notify registration")
-        return
-    if "notify" in parsed:
-        if _CODEX_NOTIFY_LINE not in content:
-            warning("dash: codex config.toml already sets 'notify', leaving it untouched")
-        return
-
-    new_content = _CODEX_NOTIFY_LINE + "\n" + content
-    try:
-        tomllib.loads(new_content)
-    except tomllib.TOMLDecodeError:
-        warning("dash: notify registration would corrupt codex config.toml, skipping")
-        return
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(new_content, encoding="utf-8")
+def register_codex_hooks(config_dir: Path) -> None:
+    """Register dash for Codex lifecycle events, preserving other hooks."""
+    register_codex_lifecycle_hooks(config_dir, CODEX_HOOK_COMMAND, label="dash")
 
 
 def details(**fields: Any) -> dict[str, str]:
@@ -483,7 +447,7 @@ def apply_dash_if_enabled(
         if agent == "claude":
             register_claude_hooks(config_dir)
         elif agent == "codex":
-            register_codex_notify(config_dir)
+            register_codex_hooks(config_dir)
     except Exception as exc:  # noqa: BLE001 - dash problems must never block a run
         warning(f"dash: could not prepare integration files: {exc}")
         return target, container_env(target, config_mount_path)

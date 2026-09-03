@@ -288,6 +288,13 @@ def test_packaged_resources_exist_for_every_integration() -> None:
             assert (root / resource_rel).is_file(), resource_rel
 
 
+def test_codex_uses_vibepod_owned_lifecycle_adapter() -> None:
+    assert dash.BUILTIN_INTEGRATIONS["codex"] == [
+        ("dash/vpdash-report.sh", ".codex/vpdash-report.sh"),
+        ("codex/dash-agent-state.sh", ".codex/dash-agent-state.sh"),
+    ]
+
+
 def test_custom_integration_entries_are_copied(tmp_path: Path) -> None:
     source = tmp_path / "mine.sh"
     source.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -353,28 +360,44 @@ def test_claude_hooks_survive_unparsable_settings(tmp_path: Path) -> None:
     assert (tmp_path / "settings.json").read_text(encoding="utf-8") == "{not json"
 
 
-def test_codex_notify_goes_into_the_root_table(tmp_path: Path) -> None:
-    config_path = tmp_path / ".codex" / "config.toml"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text('[profile]\nmodel = "gpt"\n', encoding="utf-8")
+def test_codex_lifecycle_hooks_are_registered_once(tmp_path: Path) -> None:
+    dash.register_codex_hooks(tmp_path)
+    dash.register_codex_hooks(tmp_path)
 
-    dash.register_codex_notify(tmp_path)
-    dash.register_codex_notify(tmp_path)
-
-    content = config_path.read_text(encoding="utf-8")
-    assert content.splitlines()[0] == dash._CODEX_NOTIFY_LINE
-    assert content.count("dash-agent-state.sh") == 1
+    data = json.loads((tmp_path / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    for groups in data["hooks"].values():
+        commands = [hook["command"] for group in groups for hook in group["hooks"]]
+        assert commands == [dash.CODEX_HOOK_COMMAND]
 
 
-def test_codex_notify_leaves_an_existing_program_alone(tmp_path: Path) -> None:
-    """herdr registers the same key; whoever got there first keeps it."""
-    config_path = tmp_path / ".codex" / "config.toml"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text('notify = ["/config/.codex/herdr-agent-state.sh"]\n', encoding="utf-8")
+def test_codex_lifecycle_hooks_coexist_with_herdr(tmp_path: Path) -> None:
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    hooks_path.parent.mkdir(parents=True)
+    hooks_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "/config/.codex/herdr-agent-state.sh",
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
 
-    dash.register_codex_notify(tmp_path)
+    dash.register_codex_hooks(tmp_path)
 
-    assert "dash-agent-state.sh" not in config_path.read_text(encoding="utf-8")
+    data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    commands = [hook["command"] for group in data["hooks"]["Stop"] for hook in group["hooks"]]
+    assert commands == ["/config/.codex/herdr-agent-state.sh", dash.CODEX_HOOK_COMMAND]
 
 
 # -- reporting ------------------------------------------------------------
@@ -535,6 +558,133 @@ def test_vendored_claude_hook_reports_over_http(dash_server: Any, tmp_path: Path
     assert headers["Authorization"] == "Bearer t0ken"
     # The trace log `vp doctor dash` reads back.
     assert "state=blocked" in (tmp_path / "dash-hook.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    shutil.which("curl") is None or os.name == "nt",
+    reason="the lifecycle adapter needs POSIX sh and curl",
+)
+@pytest.mark.parametrize(
+    ("event", "state", "message"),
+    [
+        ("SessionStart", "idle", "session started"),
+        ("UserPromptSubmit", "working", "fix it"),
+        ("PreToolUse", "working", "Bash"),
+        ("PostToolUse", "working", "Bash"),
+        ("PermissionRequest", "blocked", "run the build"),
+        ("Stop", "idle", "finished this turn"),
+        ("Interrupt", "idle", "turn interrupted"),
+        ("SessionEnd", "done", "session ended"),
+    ],
+)
+def test_codex_lifecycle_hook_reports_over_http(
+    event: str,
+    state: str,
+    message: str,
+    dash_server: Any,
+    tmp_path: Path,
+) -> None:
+    config = {"dash": {"url": server_url(dash_server), "token": "t0ken"}}
+    target = dash.make_target("codex", Path("/work/proj"), config)
+    assert target is not None
+    dash.sync_dash_files("codex", tmp_path, {})
+    payload = json.dumps(
+        {
+            "hook_event_name": event,
+            "session_id": "s1",
+            "cwd": "/work/proj",
+            "prompt": "fix it",
+            "tool_name": "Bash",
+            "tool_input": {"description": "run the build"},
+            "last_assistant_message": "finished this turn",
+        },
+    )
+
+    proc = subprocess.run(
+        [str(tmp_path / ".codex" / "dash-agent-state.sh")],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            **dash.container_env(target, str(tmp_path)),
+            "VPDASH_URL": server_url(dash_server),
+        },
+        check=True,
+        timeout=30,
+    )
+
+    assert proc.stdout == ""
+    body, headers = dash_server.received[0]
+    assert body["state"] == state
+    assert body["event"] == event
+    assert body["message"] == message
+    assert body["session_id"] == "s1"
+    assert headers["Authorization"] == "Bearer t0ken"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the lifecycle adapter needs POSIX sh")
+@pytest.mark.parametrize(
+    ("event", "state", "message"),
+    [
+        ("SessionStart", "idle", "session started"),
+        ("UserPromptSubmit", "working", "fix it"),
+        ("PreToolUse", "working", "Bash"),
+        ("PostToolUse", "working", "Bash"),
+        ("PermissionRequest", "blocked", "run the build"),
+        ("Stop", "idle", "finished this turn"),
+        ("Interrupt", "idle", "turn interrupted"),
+        ("SessionEnd", "done", "session ended"),
+    ],
+)
+def test_codex_lifecycle_adapter_maps_reporter_arguments(
+    event: str,
+    state: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    dash.sync_dash_files("codex", tmp_path, {})
+    capture = tmp_path / "args.txt"
+    reporter = tmp_path / ".codex" / "vpdash-report.sh"
+    reporter.write_text(
+        '#!/bin/sh\nfor arg do printf "%s\\n" "$arg"; done >"$CAPTURE"\n',
+        encoding="utf-8",
+    )
+    reporter.chmod(0o755)
+    payload = json.dumps(
+        {
+            "hook_event_name": event,
+            "session_id": "s1",
+            "cwd": "/work/proj",
+            "prompt": "fix it",
+            "tool_name": "Bash",
+            "tool_input": {"description": "run the build"},
+            "last_assistant_message": "finished this turn",
+        },
+    )
+
+    proc = subprocess.run(
+        ["sh", str(tmp_path / ".codex" / "dash-agent-state.sh")],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "CAPTURE": str(capture),
+            "VPDASH_URL": "http://dash.invalid",
+        },
+        check=True,
+        timeout=15,
+    )
+
+    args = capture.read_text(encoding="utf-8").splitlines()
+    values = dict(zip(args[::2], args[1::2], strict=True))
+    assert proc.stdout == ""
+    assert values["--state"] == state
+    assert values["--event"] == event
+    assert values["--message"] == message
+    assert values["--session"] == "s1"
+    assert values["--cwd"] == "/work/proj"
 
 
 # -- doctor ---------------------------------------------------------------
