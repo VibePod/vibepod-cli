@@ -502,6 +502,14 @@ def test_doctor_herdr_command_registered() -> None:
     assert "herdr" in result.output
 
 
+def test_doctor_detects_complete_codex_lifecycle_registration(tmp_path: Path) -> None:
+    from vibepod.commands.doctor import _herdr_registration
+
+    assert _herdr_registration("codex", tmp_path) == "MISSING"
+    herdr.register_codex_hooks(tmp_path)
+    assert _herdr_registration("codex", tmp_path) == "hooks.json"
+
+
 def test_doctor_herdr_reports_missing_pane(monkeypatch) -> None:
     from typer.testing import CliRunner
 

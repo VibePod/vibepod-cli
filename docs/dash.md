@@ -49,6 +49,23 @@ hooks need only `curl` inside the image.
 `blocked` is the state worth a phone notification: the agent is waiting for
 your approval.
 
+Codex is registered through `.codex/hooks.json`, so Dash and herdr can both
+receive the same lifecycle events. Its mapping is:
+
+| Codex hook event   | reported state          |
+| ------------------ | ----------------------- |
+| `SessionStart`     | `idle`                  |
+| `UserPromptSubmit` | `working` (your prompt) |
+| `PreToolUse`       | `working` (tool name)   |
+| `PostToolUse`      | `working` (tool name)   |
+| `PermissionRequest` | `blocked` (the request) |
+| `Stop`             | `idle`                  |
+| `Interrupt`        | `idle`                  |
+| `SessionEnd`       | `done`                  |
+
+Codex may ask you to trust newly registered hooks once. Review them with
+`/hooks` in Codex and approve the VibePod-managed commands.
+
 ## What lands on the card
 
 Beyond the state, VibePod attaches the context only it knows. Tap a card on
@@ -164,8 +181,6 @@ through the host gateway.
 
 ## Limitations
 
-- Codex allows a single `notify` program. When herdr already claimed it, dash
-  leaves it alone and falls back to container start/stop reports.
 - Reports are HTTP calls from inside the container; an agent image without
   `curl` can only be tracked by the CLI-side start/stop reports.
 - The dashboard sees whatever the agent reports — prompts, tool names,

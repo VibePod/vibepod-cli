@@ -250,9 +250,9 @@ def reexec_with_agent_hint(agent: str, config: dict[str, Any], *, no_herdr: bool
     Herdr reads the foreground process's /proc/<pid>/environ, which is a
     snapshot taken at exec time — setting os.environ later is invisible to
     it. The hint lets herdr use the named agent's screen manifest even
-    though the pane runs `vp` (agents like codex have no working/blocked
-    hook events, so screen detection is their only state source). No-op
-    when the hint already matches (post-re-exec) or herdr is inactive.
+    though the pane runs `vp`, including before an agent's lifecycle hooks
+    begin reporting state. No-op when the hint already matches (post-re-exec)
+    or herdr is inactive.
     """
     if no_herdr or not herdr_enabled(config) or not herdr_active():
         return

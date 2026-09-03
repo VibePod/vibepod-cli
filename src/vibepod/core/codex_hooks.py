@@ -37,16 +37,14 @@ def _entry(command: str) -> dict[str, Any]:
     return {"hooks": [{"type": "command", "command": command}]}
 
 
-def _commands(data: object) -> list[str]:
-    if not isinstance(data, dict):
+def _commands(data: object, event: str) -> list[str]:
+    if not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
         return []
-    hooks = data.get("hooks")
-    if not isinstance(hooks, dict):
+    groups = data["hooks"].get(event)
+    if not isinstance(groups, list):
         return []
     return [
         command
-        for groups in hooks.values()
-        if isinstance(groups, list)
         for group in groups
         if isinstance(group, dict)
         for hook in group.get("hooks", [])
@@ -128,7 +126,7 @@ def register(config_dir: Path, command: str, *, label: str) -> bool:
 
 
 def registered(config_dir: Path, command: str) -> bool:
-    """Return whether *command* appears in the Codex lifecycle hook file."""
+    """Return whether *command* is registered for every lifecycle event."""
     path = config_dir / ".codex" / "hooks.json"
     if not path.is_file():
         return False
@@ -136,4 +134,4 @@ def registered(config_dir: Path, command: str) -> bool:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
-    return command in _commands(data)
+    return all(command in _commands(data, event) for event in LIFECYCLE_EVENTS)
