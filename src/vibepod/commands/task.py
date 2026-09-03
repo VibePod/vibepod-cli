@@ -17,7 +17,7 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from vibepod import __version__
-from vibepod.commands.stop import _release_herdr_entries
+from vibepod.commands.stop import _release_agent_entries
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.agents import (
     AGENT_SPECS,
@@ -28,6 +28,11 @@ from vibepod.core.agents import (
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config, get_config_root
+from vibepod.core.dash import AGENT_ID_LABEL as DASH_ID_LABEL
+from vibepod.core.dash import AGENT_LABEL as DASH_AGENT_LABEL
+from vibepod.core.dash import apply_dash_if_enabled, target_from_labels
+from vibepod.core.dash import details as dash_details
+from vibepod.core.dash import report as dash_report
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.herdr import PANE_LABEL, apply_herdr_if_enabled
 from vibepod.core.launch import (
@@ -134,6 +139,7 @@ def _record_with_container_state(
     store: TaskStore,
     record: TaskRecord,
     state: dict[str, Any],
+    container: Any | None = None,
 ) -> TaskRecord:
     if record.status == TASK_STATUS_CANCELLED:
         return record
@@ -145,7 +151,7 @@ def _record_with_container_state(
         and record.finished_at == finished_at
     ):
         return record
-    return (
+    updated = (
         store.update(
             record.id,
             status=status,
@@ -154,6 +160,33 @@ def _record_with_container_state(
             finished_at=finished_at,
         )
         or record
+    )
+    # Only reached the first time a task crosses into a terminal status (the
+    # unchanged-record shortcut above returns early on every later sync), so
+    # the dashboard sees exactly one finish report.
+    if container is not None and updated.status in TERMINAL_TASK_STATUSES:
+        _report_dash_finished(container, updated)
+    return updated
+
+
+def _report_dash_finished(container: Any, record: TaskRecord, message: str | None = None) -> None:
+    """Mark a finished task done on the dashboard, when one is configured."""
+    labels = getattr(container, "labels", {}) or {}
+    if not labels.get(DASH_ID_LABEL):
+        return
+    target = target_from_labels(labels, get_config())
+    if target is None:
+        return
+    detail = f" (exit {record.exit_code})" if record.exit_code is not None else ""
+    dash_report(
+        target,
+        "error" if record.status == TASK_STATUS_FAILED else "done",
+        event="task.finished",
+        message=message or f"task {record.status}{detail}",
+        cwd=record.workspace,
+        # Status syncs run from `vp task list`; a down dashboard must not
+        # print a warning per task per listing.
+        quiet=True,
     )
 
 
@@ -237,7 +270,7 @@ def _enforce_task_timeout(
         state = container.attrs.get("State", {}) or {}
         if not isinstance(state, dict):
             state = {}
-        record = _record_with_container_state(store, record, state)
+        record = _record_with_container_state(store, record, state, container)
     except DockerClientError:
         if record.status not in TERMINAL_TASK_STATUSES:
             store.update(
@@ -256,13 +289,14 @@ def _enforce_task_timeout(
         container.stop(timeout=10)
     except Exception as exc:  # docker SDK raises APIError / DockerException
         warning(f"Failed to stop timed-out task {record.id[:12]}: {exc}")
-    store.update(
+    timed_out = store.update(
         record.id,
         status=TASK_STATUS_FAILED,
         exit_code=record.exit_code,
         started_at=record.started_at,
         finished_at=_utcnow(),
     )
+    _report_dash_finished(container, timed_out or record, message="task timed out")
 
 
 @app.command("_watch-timeout", hidden=True)
@@ -318,6 +352,10 @@ def task_create_command(
         bool,
         typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
     ] = False,
+    no_dash: Annotated[
+        bool,
+        typer.Option("--no-dash", help="Skip VibePod Dash state reporting"),
+    ] = False,
     ikwid: Annotated[
         bool,
         typer.Option(
@@ -343,6 +381,7 @@ def task_create_command(
         no_overlay=no_overlay,
         rebuild_overlay=rebuild_overlay,
         no_herdr=no_herdr,
+        no_dash=no_dash,
         ikwid=ikwid,
         profile=profile,
         passthrough_args=_context_args(ctx),
@@ -394,6 +433,10 @@ def task_run_command(
         bool,
         typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
     ] = False,
+    no_dash: Annotated[
+        bool,
+        typer.Option("--no-dash", help="Skip VibePod Dash state reporting"),
+    ] = False,
     ikwid: Annotated[
         bool,
         typer.Option(
@@ -419,6 +462,7 @@ def task_run_command(
         no_overlay=no_overlay,
         rebuild_overlay=rebuild_overlay,
         no_herdr=no_herdr,
+        no_dash=no_dash,
         ikwid=ikwid,
         profile=profile,
         passthrough_args=_context_args(ctx),
@@ -464,6 +508,10 @@ def task_create(
     no_herdr: Annotated[
         bool,
         typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
+    ] = False,
+    no_dash: Annotated[
+        bool,
+        typer.Option("--no-dash", help="Skip VibePod Dash state reporting"),
     ] = False,
     ikwid: Annotated[
         bool,
@@ -702,6 +750,17 @@ def task_create(
     for key, value in herdr_env.items():
         merged_env.setdefault(key, value)
 
+    dash_target, dash_env = apply_dash_if_enabled(
+        selected,
+        config_dir,
+        workspace_path,
+        config,
+        config_mount_path=spec.config_mount_path,
+        no_dash=no_dash,
+    )
+    for key, value in dash_env.items():
+        merged_env.setdefault(key, value)
+
     proxy_cfg = config.get("proxy", {})
     proxy_enabled = bool(proxy_cfg.get("enabled", True))
     proxy_ca_dir_value = str(proxy_cfg.get("ca_dir", "")).strip()
@@ -760,6 +819,9 @@ def task_create(
     launch_labels["vibepod.profile"] = active_profile
     if proxy_policy_id is not None:
         launch_labels["vibepod.proxy-policy"] = proxy_policy_id
+    if dash_target is not None:
+        launch_labels[DASH_AGENT_LABEL] = dash_target.agent
+        launch_labels[DASH_ID_LABEL] = dash_target.agent_id
     try:
         container = manager.run_agent(
             agent=selected,
@@ -792,6 +854,14 @@ def task_create(
         error("Container exited immediately after start.")
         if recent.strip():
             print(recent)
+        if dash_target is not None:
+            dash_report(
+                dash_target,
+                "error",
+                event="task.start",
+                message="container exited immediately after start",
+                cwd=workspace_path,
+            )
         raise typer.Exit(1)
 
     if network and network != network_name:
@@ -841,6 +911,26 @@ def task_create(
         except Exception as cleanup_exc:
             warning(f"Container {container.name} may be orphaned: {cleanup_exc}")
         raise typer.Exit(1) from exc
+    if dash_target is not None:
+        # Reported here rather than right after start so the card carries the
+        # task id — the handle for `vp task logs` / `vp task cancel`. A task is
+        # also head-down from its first second, unlike an interactive run.
+        dash_report(
+            dash_target,
+            "working",
+            event="task.start",
+            message=prompt,
+            cwd=workspace_path,
+            data=dash_details(
+                workspace=workspace_path,
+                image=image,
+                profile=active_profile,
+                container=container.name,
+                task=record.id,
+                vibepod=__version__,
+            ),
+        )
+
     success(f"Task started: {record.id}")
     info(f"  container: {container.name}")
     if timeout_seconds is None:
@@ -887,7 +977,7 @@ def task_list(
                 state = container.attrs.get("State", {}) or {}
                 if not isinstance(state, dict):
                     state = {}
-                record = _record_with_container_state(store, record, state)
+                record = _record_with_container_state(store, record, state, container)
                 display_status = _format_task_status(record)
             except DockerClientError:
                 if record.status not in TERMINAL_TASK_STATUSES:
@@ -989,7 +1079,7 @@ def task_status(
             state = container.attrs.get("State", {}) or {}
             if not isinstance(state, dict):
                 state = {}
-            record = _record_with_container_state(store, record, state)
+            record = _record_with_container_state(store, record, state, container)
             payload = record.as_dict()
         except DockerClientError:
             payload = record.as_dict()
@@ -1035,7 +1125,7 @@ def task_cancel(
         state = container.attrs.get("State", {}) or {}
         if not isinstance(state, dict):
             state = {}
-        record = _record_with_container_state(store, record, state)
+        record = _record_with_container_state(store, record, state, container)
     except DockerClientError:
         store.update(
             record.id,
@@ -1067,7 +1157,7 @@ def task_cancel(
                 state = container.attrs.get("State", {}) or {}
                 if not isinstance(state, dict):
                     state = {}
-                record = _record_with_container_state(store, record, state)
+                record = _record_with_container_state(store, record, state, container)
             else:
                 error(f"Failed to cancel task {record.id[:12]}: {exc}")
                 raise typer.Exit(1) from exc
@@ -1078,7 +1168,7 @@ def task_cancel(
             error(f"Failed to remove created task container {record.id[:12]}: {exc}")
             raise typer.Exit(1) from exc
 
-    _release_herdr_entries([container])
+    _release_agent_entries([container])
 
     updated: TaskRecord | None
     if record.status in TERMINAL_TASK_STATUSES:
@@ -1193,7 +1283,7 @@ def _remove_task_record(
                 "Use --force to kill and remove, or wait for it to finish.",
             )
             raise typer.Exit(1)
-        _release_herdr_entries([container])
+        _release_agent_entries([container])
         try:
             container.remove(force=True)
         except Exception as exc:  # docker SDK raises APIError / DockerException

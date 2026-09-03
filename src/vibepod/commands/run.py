@@ -24,6 +24,21 @@ from vibepod.core.agents import (
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
+from vibepod.core.dash import (
+    AGENT_ID_LABEL as _DASH_ID_LABEL,
+)
+from vibepod.core.dash import (
+    AGENT_LABEL as _DASH_AGENT_LABEL,
+)
+from vibepod.core.dash import (
+    apply_dash_if_enabled as _apply_dash_if_enabled,
+)
+from vibepod.core.dash import (
+    details as _dash_details,
+)
+from vibepod.core.dash import (
+    report as _dash_report,
+)
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.herdr import (
     PANE_LABEL as _HERDR_PANE_LABEL,
@@ -333,6 +348,10 @@ def run(
         bool,
         typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
     ] = False,
+    no_dash: Annotated[
+        bool,
+        typer.Option("--no-dash", help="Skip VibePod Dash state reporting"),
+    ] = False,
     detach: Annotated[
         bool,
         typer.Option("-d", "--detach", help="Run container in background"),
@@ -627,6 +646,20 @@ def run(
     for key, value in herdr_env.items():
         merged_env.setdefault(key, value)
 
+    dash_target, dash_env = _apply_dash_if_enabled(
+        selected_agent,
+        config_dir,
+        workspace_path,
+        config,
+        config_mount_path=spec.config_mount_path,
+        no_dash=no_dash,
+    )
+    # setdefault: explicit -e VPDASH_* overrides win, same as for herdr
+    for key, value in dash_env.items():
+        merged_env.setdefault(key, value)
+    # Filled once the container exists, then reused by the stop report.
+    dash_details: dict[str, str] = {}
+
     if paste_images:
         display = os.environ.get("DISPLAY", "")
         if not display:
@@ -691,6 +724,10 @@ def run(
         container_user = _host_user()
     launch_labels = dict(herdr_labels)
     launch_labels["vibepod.profile"] = active_profile
+    if dash_target is not None:
+        # `vp stop` reads these back to mark the agent finished on the board.
+        launch_labels[_DASH_AGENT_LABEL] = dash_target.agent
+        launch_labels[_DASH_ID_LABEL] = dash_target.agent_id
     if proxy_policy_id is not None:
         launch_labels["vibepod.proxy-policy"] = proxy_policy_id
     try:
@@ -728,7 +765,36 @@ def run(
         if herdr_volumes:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
+        if dash_target is not None:
+            _dash_report(
+                dash_target,
+                "error",
+                event="container.start",
+                message="container exited immediately after start",
+                cwd=workspace_path,
+            )
         raise typer.Exit(1)
+
+    if dash_target is not None:
+        # Everything the board cannot know on its own, sent once at start and
+        # kept on the card for the life of the session.
+        dash_details.update(
+            _dash_details(
+                workspace=workspace_path,
+                image=image,
+                profile=active_profile,
+                container=container.name,
+                vibepod=__version__,
+            ),
+        )
+        _dash_report(
+            dash_target,
+            "idle",
+            event="container.start",
+            message=f"{selected_agent} started in {workspace_path.name}",
+            cwd=workspace_path,
+            data=dash_details,
+        )
 
     # Prefer the inspected bindings (they resolve ephemeral 0-port publishes to
     # the daemon-assigned port); fall back to the requested bindings when the
@@ -775,6 +841,8 @@ def run(
             if herdr_volumes:
                 _release_herdr_agent(selected_agent)
                 _clear_herdr_metadata(selected_agent)
+            if dash_target is not None:
+                _dash_report(dash_target, "done", event="container.stop", cwd=workspace_path)
             raise typer.Exit(1)
         success(f"Started {container.name}")
         return
@@ -814,6 +882,15 @@ def run(
         if herdr_volumes:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
+        if dash_target is not None:
+            _dash_report(
+                dash_target,
+                "error" if exit_reason == "error" else "done",
+                event="container.stop",
+                message=f"session ended ({exit_reason})",
+                cwd=workspace_path,
+                data=dash_details,
+            )
 
     if selected_agent == "claude" and "setup-token" in passthrough_args and exit_reason == "normal":
         _capture_claude_setup_token(config_dir)

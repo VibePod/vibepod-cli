@@ -25,6 +25,12 @@ no documented hook or extension API for live state transitions.
 No setup is needed. Detection uses `HERDR_ENV=1`, which herdr sets only
 inside its panes.
 
+Codex uses `.codex/hooks.json`, allowing the herdr and Dash integrations to
+coexist. It reports `working` for prompts and tool activity, `blocked` for
+permission requests, and `idle` for session start, stop, interruption, and
+session end. Codex may show a one-time trust prompt for the registered hooks;
+use `/hooks` to review and approve the VibePod-managed command.
+
 ## Opting out
 
 - `vp run <agent> --no-herdr` — skip wiring for one run

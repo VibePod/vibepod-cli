@@ -284,6 +284,35 @@ def _herdr_log_relpath(agent: str) -> str | None:
     }.get(agent)
 
 
+def _herdr_registration(agent: str, cfg_dir: Path) -> str:
+    """How the agent is wired to report Herdr state, as a table cell."""
+    from vibepod.core import herdr as herdr_core
+
+    if agent == "claude":
+        settings = cfg_dir / "settings.json"
+        ok = settings.is_file() and "herdr-agent-state.sh" in settings.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+        return "settings.json" if ok else "MISSING"
+    if agent == "codex":
+        return _codex_registration(cfg_dir, herdr_core.CODEX_HOOK_COMMAND)
+    return "auto"
+
+
+def _codex_registration(cfg_dir: Path, command: str) -> str:
+    """Render a Codex lifecycle-hook inspection as a diagnostic label."""
+    from vibepod.core import codex_hooks
+
+    status = codex_hooks.registration_status(cfg_dir, command)
+    return {
+        "missing": "MISSING hooks.json",
+        "malformed": "INVALID hooks.json",
+        "handler-absent": "MISSING handler",
+        "registered": "hooks.json",
+    }[status]
+
+
 def _herdr_agent_summary(profile: str) -> None:
     """One line per supported agent: integration, injection, registration, activity."""
     from rich.table import Table
@@ -322,24 +351,7 @@ def _herdr_agent_summary(profile: str) -> None:
             present = sum(1 for dest in dests if (cfg_dir / dest).is_file())
             injected = "yes" if present == len(dests) else f"{present}/{len(dests)}"
 
-        if name == "claude":
-            settings = cfg_dir / "settings.json"
-            ok = settings.is_file() and "herdr-agent-state.sh" in settings.read_text(
-                encoding="utf-8",
-                errors="replace",
-            )
-            registration = "settings.json" if ok else "MISSING"
-        elif name == "codex":
-            toml_path = cfg_dir / ".codex" / "config.toml"
-            ok = toml_path.is_file() and "herdr-agent-state.sh" in toml_path.read_text(
-                encoding="utf-8",
-                errors="replace",
-            )
-            registration = "notify" if ok else "MISSING"
-        elif dests:
-            registration = "auto"
-        else:
-            registration = "-"
+        registration = _herdr_registration(name, cfg_dir) if dests else "-"
 
         activity = "-"
         log_rel = _herdr_log_relpath(name)
@@ -518,13 +530,10 @@ def herdr_doctor(
         if not registered:
             failures += 1
     if agent == "codex":
-        toml_path = cfg_dir / ".codex" / "config.toml"
-        registered = toml_path.is_file() and "herdr-agent-state.sh" in toml_path.read_text(
-            encoding="utf-8",
-            errors="replace",
-        )
+        registration = _herdr_registration(agent, cfg_dir)
+        registered = registration == "hooks.json"
         (console.print if registered else warning)(
-            f"  config.toml notify: {'registered' if registered else 'NOT REGISTERED'}",
+            f"  lifecycle registration: {registration}",
         )
         if not registered:
             failures += 1
@@ -552,7 +561,7 @@ def herdr_doctor(
     #: replays the exact in-container call path the agent itself would take.
     probe_payloads = {
         "claude": '{"hook_event_name":"Stop"}',
-        "codex": '{"type":"agent-turn-complete"}',
+        "codex": '{"hook_event_name":"Stop","session_id":"doctor"}',
         "copilot": '{"type":"stop"}',
     }
     probe_reported = False
@@ -583,10 +592,7 @@ def herdr_doctor(
             hook_dest = herdr_core.BUILTIN_INTEGRATIONS[agent][0][1]
             hook_path = f"{spec.config_mount_path}/{hook_dest}"
             payload = probe_payloads[agent]
-            if agent == "codex":
-                shell_line = f"{hook_path} '{payload}'"
-            else:
-                shell_line = f"printf '%s' '{payload}' | {hook_path}"
+            shell_line = f"printf '%s' '{payload}' | {hook_path}"
             output = manager.client.containers.run(
                 image,
                 entrypoint=["/bin/sh"],
@@ -670,4 +676,278 @@ def herdr_doctor(
     success(
         "herdr wiring looks healthy — if the sidebar stays empty, the reports reach "
         "herdr but it does not surface them; check `herdr agent list` output above",
+    )
+
+
+def _dash_agent_summary(profile: str, config: dict[str, Any]) -> None:
+    """One line per supported agent: integration, injection, registration, activity."""
+    from rich.table import Table
+
+    from vibepod.constants import SUPPORTED_AGENTS
+    from vibepod.core import dash as dash_core
+
+    dash_cfg = config.get("dash")
+    custom = (dash_cfg or {}).get("integrations", {}) if isinstance(dash_cfg, dict) else {}
+
+    table = Table(title="dash integration per agent")
+    for column in ("agent", "integration", "injected", "registration", "last activity"):
+        table.add_column(column)
+
+    for name in SUPPORTED_AGENTS:
+        builtin = dash_core.BUILTIN_INTEGRATIONS.get(name, [])
+        custom_entries = custom.get(name) or []
+        if builtin and custom_entries:
+            integration = f"built-in +{len(custom_entries)} custom"
+        elif builtin:
+            integration = "built-in"
+        elif custom_entries:
+            integration = f"custom ({len(custom_entries)})"
+        else:
+            # Still visible on the board: `vp run` reports start and stop itself.
+            integration = "start/stop only"
+
+        cfg_dir = agent_config_dir(name, profile)
+        dests = [dest for _, dest in builtin] + [
+            str(entry.get("dest")) for entry in custom_entries if isinstance(entry, dict)
+        ]
+        if not dests:
+            injected = "n.a."
+        else:
+            present = sum(1 for dest in dests if (cfg_dir / dest).is_file())
+            injected = "yes" if present == len(dests) else f"{present}/{len(dests)}"
+
+        registration = _dash_registration(name, cfg_dir) if dests else "-"
+
+        activity = "-"
+        log_path = cfg_dir / dash_core.HOOK_LOG_NAME
+        if log_path.is_file():
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if lines:
+                activity = lines[-1][:70]
+
+        table.add_row(name, integration, injected, registration, activity)
+
+    console.print(table)
+
+
+def _dash_registration(agent: str, cfg_dir: Path) -> str:
+    """How the agent is wired to call the hook, as a table cell."""
+    from vibepod.core import dash as dash_core
+
+    marker = "dash-agent-state.sh"
+    if agent == "claude":
+        settings = cfg_dir / "settings.json"
+        ok = settings.is_file() and marker in settings.read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+        return "settings.json" if ok else "MISSING"
+    if agent == "codex":
+        return _codex_registration(cfg_dir, dash_core.CODEX_HOOK_COMMAND)
+    return "auto"
+
+
+def _dash_reachable(url: str) -> tuple[bool, str, bool]:
+    """GET {url}/healthz; (ok, detail, hostname-does-not-resolve)."""
+    import urllib.error
+    import urllib.request
+
+    from vibepod.core import dash as dash_core
+
+    try:
+        with urllib.request.urlopen(f"{url}/healthz", timeout=5) as response:
+            body = response.read(200).decode("utf-8", errors="replace").strip()
+            return True, f"HTTP {response.status} {body}", False
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}", False
+    except (urllib.error.URLError, OSError) as exc:
+        return False, str(exc), dash_core.is_name_resolution_error(exc)
+
+
+@app.command("dash")
+def dash_doctor(
+    agent: Annotated[
+        str | None,
+        typer.Argument(help="Agent to inspect in depth; omit for an all-agents summary"),
+    ] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to inspect (see `vp profile list`)"),
+    ] = None,
+    workspace: Annotated[
+        Path,
+        typer.Option("-w", "--workspace", help="Workspace the probe reports for"),
+    ] = Path("."),
+) -> None:
+    """Diagnose VibePod Dash reporting end to end.
+
+    Without an agent: resolved configuration, a reachability check and a
+    per-agent summary. With an agent: the injected files, their registration,
+    the hook trace log, a live host-side report and — when a container runtime
+    is available — the exact in-container hook call, which is what proves the
+    dashboard URL is reachable from inside the container.
+    """
+    from vibepod.constants import SUPPORTED_AGENTS
+    from vibepod.core import dash as dash_core
+    from vibepod.core.agents import effective_agent_image, get_agent_spec, resolve_agent_name
+    from vibepod.core.config import get_config
+    from vibepod.core.launch import host_user as _host_user
+
+    if agent is not None:
+        resolved = resolve_agent_name(agent)
+        if resolved is None:
+            error(f"Unknown agent '{agent}'. Supported: {', '.join(SUPPORTED_AGENTS)}")
+            raise typer.Exit(1)
+        agent = resolved
+
+    config = get_config()
+    try:
+        active_profile = resolve_profile(profile, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+    workspace_path = workspace.expanduser().resolve()
+    failures = 0
+
+    console.print("[bold]Configuration[/bold]")
+    if not dash_core.dash_enabled(config):
+        warning("  disabled by config (dash: false)")
+    url = dash_core.resolve_url(config)
+    if url is None:
+        error("  no dashboard URL (set VPDASH_URL or dash.url in the config)")
+        console.print("  see https://github.com/VibePod/vibepod-dash to run one")
+        raise typer.Exit(1)
+    host_url = dash_core.usable_host_url(url)
+    console.print(f"  configured:    {url}")
+    if host_url != url:
+        console.print(f"  host URL:      {host_url} (fell back: '{url}' is container-only)")
+    else:
+        console.print(f"  host URL:      {host_url}")
+    console.print(f"  container URL: {dash_core.resolve_container_url(config, url)}")
+    console.print(f"  token:         {'set' if dash_core.resolve_token(config) else 'not set'}")
+
+    console.print()
+    console.print("[bold]Reachability from this host[/bold]")
+    ok, detail, unresolvable = _dash_reachable(host_url)
+    if ok:
+        success(f"  {detail}")
+    else:
+        error(f"  {detail}")
+        if unresolvable:
+            warning(
+                "  → this looks like a container-network name. dash.url is the URL the "
+                "CLI itself posts to; put the container-side name in dash.container_url.",
+            )
+        failures += 1
+
+    if agent is None:
+        console.print()
+        _dash_agent_summary(active_profile, config)
+        console.print()
+        if failures:
+            error(f"{failures} problem(s) found")
+            raise typer.Exit(1)
+        console.print("Deep-dive one agent with `vp doctor dash <agent>`")
+        return
+
+    target = dash_core.make_target(agent, workspace_path, config)
+    assert target is not None  # a URL was resolved above
+    cfg_dir = agent_config_dir(agent, active_profile)
+    spec = get_agent_spec(agent)
+
+    console.print()
+    console.print(f"[bold]Injected files[/bold] ({cfg_dir})")
+    entries = dash_core.BUILTIN_INTEGRATIONS.get(agent, [])
+    if not entries:
+        warning(f"  no built-in hook for {agent}; it reports container start/stop only")
+    for _, dest_rel in entries:
+        dest = cfg_dir / dest_rel
+        if dest.is_file():
+            console.print(f"  {dest_rel}: {_format_mtime(dest)}")
+        else:
+            warning(f"  {dest_rel}: MISSING (run `vp run {agent}` once to inject it)")
+
+    if entries:
+        console.print()
+        console.print("[bold]Registration[/bold]")
+        console.print(f"  {_dash_registration(agent, cfg_dir)}")
+
+    console.print()
+    console.print("[bold]Hook trace log[/bold]")
+    log_path = cfg_dir / dash_core.HOOK_LOG_NAME
+    if not log_path.is_file():
+        warning(f"  {log_path} missing — hooks never fired in the container")
+    else:
+        console.print(f"  {log_path} (last 10 lines):")
+        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-10:]:
+            console.print(f"    {line}")
+
+    console.print()
+    console.print("[bold]Host-side live report[/bold] (watch the board)")
+    if dash_core.report(
+        target,
+        "idle",
+        event="doctor",
+        message="probe from vp doctor dash",
+        cwd=workspace_path,
+    ):
+        success(f"  reported '{target.name}' as idle")
+    else:
+        failures += 1
+
+    console.print()
+    console.print("[bold]Container-side probe[/bold]")
+    #: hook payload per sh-hook agent; the probe replays the exact call the
+    #: agent itself would make, which is what exercises the container URL.
+    probe_payloads = {
+        "claude": '{"hook_event_name":"Stop"}',
+        "codex": '{"hook_event_name":"Stop","session_id":"doctor"}',
+        "copilot": '{"type":"stop"}',
+    }
+    if agent not in probe_payloads:
+        warning("  skipped (sh-hook agents only)")
+    else:
+        try:
+            from vibepod.core.docker import DockerManager
+
+            manager = DockerManager()
+            image = effective_agent_image(agent, config)
+            # The probe must sit on the network a real run uses: a
+            # container_url like http://vibepod-dash:8765 only resolves there.
+            network_name = str(config.get("network", "vibepod-network"))
+            manager.ensure_network(network_name)
+            hook_dest = dash_core.BUILTIN_INTEGRATIONS[agent][1][1]
+            hook_path = f"{spec.config_mount_path}/{hook_dest}"
+            payload = probe_payloads[agent]
+            shell_line = f"printf '%s' '{payload}' | {hook_path}"
+            output = manager.client.containers.run(
+                image,
+                entrypoint=["/bin/sh"],
+                command=["-c", f"{shell_line}; echo rc=$?"],
+                volumes={str(cfg_dir): {"bind": spec.config_mount_path, "mode": "rw"}},
+                environment={
+                    **spec.extra_env,
+                    **dash_core.container_env(target, spec.config_mount_path),
+                },
+                user=_host_user(),
+                network=network_name,
+                extra_hosts={"host.docker.internal": "host-gateway"},
+                remove=True,
+                stdout=True,
+                stderr=True,
+            )
+            text = output.decode("utf-8", errors="replace").strip()
+            console.print(f"  {text or '(no output)'}")
+            console.print("  (check the log above for the reporter's own trace line)")
+        except Exception as exc:  # noqa: BLE001 - the probe is best-effort
+            warning(f"  skipped: {exc}")
+
+    console.print()
+    if failures:
+        error(f"{failures} problem(s) found")
+        raise typer.Exit(1)
+    success(
+        "dash wiring looks healthy — if a card stays stale, the agent is not "
+        "firing hooks; check the trace log above",
     )

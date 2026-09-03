@@ -13,16 +13,12 @@ import importlib.resources
 import json
 import os
 import shutil
-import stat
 import sys
 from pathlib import Path
 from typing import Any
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover - exercised on Python 3.10 CI
-    import tomli as tomllib
-
+from vibepod.core.codex_hooks import register as register_codex_lifecycle_hooks
+from vibepod.core.hooksync import sync_integration_files
 from vibepod.utils.console import info, warning
 
 DEFAULT_SOCKET = Path("~/.config/herdr/herdr.sock")
@@ -107,18 +103,6 @@ def resource_root() -> Path:
     return Path(str(importlib.resources.files("vibepod"))) / "resources" / "herdr"
 
 
-def _copy_into(config_dir: Path, dest_rel: str, content: bytes, executable: bool) -> bool:
-    dest = (config_dir / dest_rel).resolve()
-    if config_dir.resolve() not in dest.parents:
-        warning(f"herdr: destination '{dest_rel}' escapes the agent config dir, skipping")
-        return False
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(content)
-    if executable:
-        dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return True
-
-
 def sync_herdr_files(agent: str, config_dir: Path, config: dict[str, Any]) -> int:
     """Copy herdr integration files for *agent* into its config dir.
 
@@ -127,31 +111,16 @@ def sync_herdr_files(agent: str, config_dir: Path, config: dict[str, Any]) -> in
     VibePod-owned dests are overwritten each run; other files untouched.
     Returns the number of files synced.
     """
-    synced = 0
-    root = resource_root()
-    for resource_rel, dest_rel in BUILTIN_INTEGRATIONS.get(agent, []):
-        source = root / resource_rel
-        if not source.is_file():
-            warning(f"herdr: packaged resource missing: {resource_rel}")
-            continue
-        executable = resource_rel.endswith(".sh")
-        if _copy_into(config_dir, dest_rel, source.read_bytes(), executable):
-            synced += 1
-
     herdr_cfg = config.get("herdr")
     entries = (herdr_cfg or {}).get("integrations", {}) if isinstance(herdr_cfg, dict) else {}
-    for entry in entries.get(agent, []) or []:
-        if not isinstance(entry, dict) or "source" not in entry or "dest" not in entry:
-            warning(f"herdr: invalid integration entry for '{agent}': {entry!r}")
-            continue
-        source = Path(str(entry["source"])).expanduser()
-        if not source.is_file():
-            warning(f"herdr: integration source not found: {source}")
-            continue
-        executable = os.access(source, os.X_OK)
-        if _copy_into(config_dir, str(entry["dest"]), source.read_bytes(), executable):
-            synced += 1
-    return synced
+    return sync_integration_files(
+        label="herdr",
+        root=resource_root(),
+        builtin=BUILTIN_INTEGRATIONS.get(agent, []),
+        config_dir=config_dir,
+        custom=entries.get(agent, []) or [],
+        agent=agent,
+    )
 
 
 _HERDR_MARKER = "herdr-agent-state.sh"
@@ -164,7 +133,7 @@ _CLAUDE_EVENTS = (
     "Stop",
     "SessionEnd",
 )
-_CODEX_NOTIFY_LINE = 'notify = ["/config/.codex/herdr-agent-state.sh"]'
+CODEX_HOOK_COMMAND = "/config/.codex/herdr-agent-state.sh"
 
 
 def _claude_hook_entry() -> dict[str, Any]:
@@ -214,50 +183,9 @@ def register_claude_hooks(config_dir: Path) -> None:
         settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
 
 
-def register_codex_notify(config_dir: Path) -> None:
-    """Point codex's notify program at our hook script, idempotently.
-
-    The line must live in the TOML root table, so it is inserted at the top
-    of the file — appending would place it inside the last ``[section]``.
-    A previously misplaced line (early VibePod versions appended) is moved.
-    """
-    config_path = config_dir / ".codex" / "config.toml"
-    content = ""
-    if config_path.is_file():
-        try:
-            content = config_path.read_text(encoding="utf-8")
-        except OSError:
-            warning("herdr: could not read codex config.toml, skipping notify registration")
-            return
-
-    lines = content.splitlines()
-    marker_at = next(
-        (i for i, line in enumerate(lines) if line.strip() == _CODEX_NOTIFY_LINE),
-        None,
-    )
-    if marker_at is not None:
-        if not any(line.lstrip().startswith("[") for line in lines[:marker_at]):
-            return
-        del lines[marker_at]
-        content = "\n".join(lines) + ("\n" if lines else "")
-
-    try:
-        parsed = tomllib.loads(content)
-    except tomllib.TOMLDecodeError:
-        warning("herdr: codex config.toml is not valid TOML, skipping notify registration")
-        return
-    if "notify" in parsed:
-        warning("herdr: codex config.toml already sets 'notify', leaving it untouched")
-        return
-
-    new_content = _CODEX_NOTIFY_LINE + "\n" + content
-    try:
-        tomllib.loads(new_content)
-    except tomllib.TOMLDecodeError:
-        warning("herdr: notify registration would corrupt codex config.toml, skipping")
-        return
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(new_content, encoding="utf-8")
+def register_codex_hooks(config_dir: Path) -> None:
+    """Register herdr for Codex lifecycle events, preserving other hooks."""
+    register_codex_lifecycle_hooks(config_dir, CODEX_HOOK_COMMAND, label="herdr")
 
 
 #: Container label carrying the herdr pane a run was started in, so
@@ -322,9 +250,9 @@ def reexec_with_agent_hint(agent: str, config: dict[str, Any], *, no_herdr: bool
     Herdr reads the foreground process's /proc/<pid>/environ, which is a
     snapshot taken at exec time — setting os.environ later is invisible to
     it. The hint lets herdr use the named agent's screen manifest even
-    though the pane runs `vp` (agents like codex have no working/blocked
-    hook events, so screen detection is their only state source). No-op
-    when the hint already matches (post-re-exec) or herdr is inactive.
+    though the pane runs `vp`, including before an agent's lifecycle hooks
+    begin reporting state. No-op when the hint already matches (post-re-exec)
+    or herdr is inactive.
     """
     if no_herdr or not herdr_enabled(config) or not herdr_active():
         return
@@ -460,7 +388,7 @@ def apply_herdr_if_enabled(
         if agent == "claude":
             register_claude_hooks(config_dir)
         elif agent == "codex":
-            register_codex_notify(config_dir)
+            register_codex_hooks(config_dir)
     except Exception as exc:  # noqa: BLE001 - herdr problems must never block a run
         warning(f"herdr: could not prepare integration files: {exc}")
         return volumes, env
