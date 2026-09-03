@@ -35,6 +35,7 @@ from vibepod.utils.console import info, warning
 
 ENV_URL = "VPDASH_URL"
 ENV_TOKEN = "VPDASH_TOKEN"
+ENV_CONTAINER_URL = "VPDASH_CONTAINER_URL"
 #: Every VibePod container gets host.docker.internal mapped to the host gateway
 #: (see core/docker.py), so a dashboard on the host is reachable under it even
 #: though `localhost` inside the container is the container itself.
@@ -125,6 +126,25 @@ def container_url(url: str) -> str:
     return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+def resolve_container_url(config: dict[str, Any], host_url: str) -> str:
+    """The dashboard URL to hand the container.
+
+    Defaults to the loopback rewrite above, which suits a dash server whose
+    port is published on the host. Set ``dash.container_url`` (or
+    ``VPDASH_CONTAINER_URL``) when the container reaches it some other way —
+    e.g. ``http://vibepod-dash:8765`` when the dash container joins the
+    VibePod network, where the host name would not resolve for the CLI's own
+    reports.
+    """
+    raw = os.environ.get(ENV_CONTAINER_URL) or str(
+        _dash_section(config).get("container_url", "") or "",
+    )
+    raw = raw.strip().rstrip("/")
+    if not raw:
+        return container_url(host_url)
+    return raw if "://" in raw else f"http://{raw}"
+
+
 def agent_id(agent: str, workspace: Path, host: str) -> str:
     """Stable dashboard id for *agent* working in *workspace* on *host*.
 
@@ -149,7 +169,7 @@ def make_target(agent: str, workspace: Path, config: dict[str, Any]) -> DashTarg
     host = os.environ.get("VPDASH_HOST") or socket.gethostname()
     return DashTarget(
         host_url=url,
-        container_url=container_url(url),
+        container_url=resolve_container_url(config, url),
         token=resolve_token(config),
         agent=agent,
         agent_id=os.environ.get("VPDASH_AGENT_ID") or agent_id(agent, workspace, host),
@@ -379,7 +399,7 @@ def target_from_labels(labels: dict[str, str], config: dict[str, Any]) -> DashTa
         return None
     return DashTarget(
         host_url=url,
-        container_url=container_url(url),
+        container_url=resolve_container_url(config, url),
         token=resolve_token(config),
         agent=agent,
         agent_id=dash_agent_id,

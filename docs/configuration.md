@@ -177,6 +177,8 @@ dash:
   enabled: true
   url: ""            # e.g. http://localhost:8765; empty disables reporting
   token: ""          # ingest token of the dash server
+  container_url: ""  # Override the URL agents use; defaults to `url` with
+                     # localhost rewritten to host.docker.internal
   integrations: {}   # Extra hook files per agent, {agent: [{source, dest}]}
 
 proxy:
@@ -211,6 +213,7 @@ These variables override the corresponding config keys without editing any file:
 | `VP_LLM_MODEL` | `llm.model` | `VP_LLM_MODEL=qwen3:14b` |
 | `VPDASH_URL` | `dash.url` | `VPDASH_URL=http://localhost:8765` |
 | `VPDASH_TOKEN` | `dash.token` | `VPDASH_TOKEN=s3cret` |
+| `VPDASH_CONTAINER_URL` | `dash.container_url` | `VPDASH_CONTAINER_URL=http://vibepod-dash:8765` |
 | `VP_CONFIG_DIR` | *(config root)* | `VP_CONFIG_DIR=/custom/path` |
 | `VP_PROFILE` | `profile` | `VP_PROFILE=work` |
 

@@ -118,6 +118,29 @@ def test_loopback_urls_are_rewritten_for_the_container(configured: str, expected
     assert dash.container_url(configured) == expected
 
 
+def test_container_url_can_be_pinned_for_a_shared_network() -> None:
+    """The dash container on vibepod-network is reachable by name — but only
+    from other containers, so the CLI keeps posting to the host URL."""
+    config = {"dash": {"url": "http://localhost:8765", "container_url": "http://vibepod-dash:8765"}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    assert target.host_url == "http://localhost:8765"
+    assert target.container_url == "http://vibepod-dash:8765"
+    assert dash.container_env(target, "/claude")["VPDASH_URL"] == "http://vibepod-dash:8765"
+
+
+def test_container_url_override_from_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("VPDASH_CONTAINER_URL", "vibepod-dash:8765")
+    assert dash.resolve_container_url({}, "http://localhost:8765") == "http://vibepod-dash:8765"
+
+
+def test_container_url_defaults_to_the_gateway_rewrite() -> None:
+    assert (
+        dash.resolve_container_url({}, "http://localhost:8765")
+        == "http://host.docker.internal:8765"
+    )
+
+
 def test_agent_id_is_stable_per_workspace() -> None:
     first = dash.agent_id("claude", Path("/work/proj"), "box")
     assert first == dash.agent_id("claude", Path("/work/proj"), "box")
