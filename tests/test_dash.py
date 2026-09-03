@@ -577,3 +577,13 @@ def test_run_and_task_expose_the_opt_out() -> None:
     runner = CliRunner()
     assert "--no-dash" in runner.invoke(app, ["run", "--help"]).output
     assert "--no-dash" in runner.invoke(app, ["task", "create", "--help"]).output
+
+
+def test_a_rejected_token_says_where_to_find_the_right_one(capsys) -> None:
+    rejection = urllib.error.HTTPError("http://d:8765", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
+    dash._warn_once("http://d:8765", "idle", rejection)
+
+    out = capsys.readouterr().out
+    assert "rejected the token" in out
+    assert "VPDASH_TOKEN" in out
+    assert "ingest token" in out

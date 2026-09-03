@@ -68,15 +68,23 @@ payload=$(
     printf '"cwd":"%s"}' "$(esc "$cwd")"
 )
 
-# -S keeps curl's error message even in silent mode; callers (hooks) route
-# stderr into their trace log.
+# -S keeps curl's error message even in silent mode, and http_code exposes a
+# rejection (401 without a token, say) that curl itself would call success.
+# Callers (hooks) route stderr into their trace log.
 out=$(
-    curl -sS -o /dev/null --connect-timeout 1 --max-time 3 \
+    curl -sS -o /dev/null -w 'http_code=%{http_code}' --connect-timeout 1 --max-time 3 \
         -X POST "${url%/}/api/v1/events" \
         -H "Content-Type: application/json" \
         ${VPDASH_TOKEN:+-H "Authorization: Bearer $VPDASH_TOKEN"} \
         -d "$payload" 2>&1
 ) || true
-[ -z "$out" ] || printf 'vpdash-report: %s\n' "$out" >&2
+
+case "$out" in
+    *http_code=2*) ;;  # accepted
+    *http_code=401* | *http_code=403*)
+        printf 'vpdash-report: %s (is VPDASH_TOKEN the dash ingest token?)\n' "$out" >&2
+        ;;
+    *) printf 'vpdash-report: %s\n' "$out" >&2 ;;
+esac
 
 exit 0
