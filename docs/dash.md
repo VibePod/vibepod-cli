@@ -57,6 +57,32 @@ VibePod maps that name to the host gateway on every run. The CLI keeps using
 the original URL for its own reports. A dash server on another machine (or in
 another container) is passed through unchanged.
 
+With the dash server in Docker and its port published (the default
+`docker compose up`), that is all you need: no shared network, no changes to
+its compose file.
+
+If you would rather not publish the port — or the host gateway is awkward, as
+it can be under rootless Podman — put the dash container on the VibePod
+network and address it by name. The CLI still needs a URL *it* can resolve, so
+the two sides are configured separately:
+
+```yaml
+# vibepod-dash's docker-compose.yml
+services:
+  dash:
+    networks: [vibepod-network]
+networks:
+  vibepod-network:
+    external: true        # `vp run` creates it; or: docker network create vibepod-network
+```
+
+```yaml
+# ~/.config/vibepod/config.yaml
+dash:
+  url: http://localhost:8765          # how the CLI reports
+  container_url: http://vibepod-dash:8765   # how agents report
+```
+
 ## Identity on the board
 
 One card per agent *and* workspace: the id is derived from host, agent and
