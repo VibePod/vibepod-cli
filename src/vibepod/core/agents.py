@@ -34,6 +34,10 @@ class AgentSpec:
     headless_command: list[str] | None = None
     preview: bool = False
     web_container_port: int | None = None
+    # acp_command replaces `command` entirely for `vp run --acp` (Zed Agent
+    # Panel via the Agent Client Protocol). None means the agent does not ship
+    # an ACP adapter and `--acp` aborts with the list of supported agents.
+    acp_command: list[str] | None = None
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -58,6 +62,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         },
         llm_model_args=["--model"],
         headless_prefix=["-p"],
+        acp_command=["npx", "-y", "@agentclientprotocol/claude-agent-acp"],
     ),
     "gemini": AgentSpec(
         "gemini",
@@ -70,6 +75,17 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config"},
         ikwid_args=["--approval-mode=yolo"],
+        # Same launcher as `command`: --acp replaces it wholesale, so the
+        # shebang/HOME workaround above has to be repeated here. Keep
+        # --experimental-acp (the `--acp` alias only exists in gemini-cli
+        # >= 0.33; the image tracks upstream and is not pinned).
+        acp_command=[
+            "env",
+            "HOME=/config",
+            "node",
+            "/usr/local/bin/gemini",
+            "--experimental-acp",
+        ],
     ),
     "opencode": AgentSpec(
         "opencode",
@@ -86,6 +102,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
             "XDG_STATE_HOME": "/config/.local/state",
             "XDG_CACHE_HOME": "/config/.cache",
         },
+        acp_command=["opencode", "acp"],
     ),
     "devstral": AgentSpec(
         "devstral",
@@ -98,6 +115,9 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         platform="linux/amd64",
         run_as_host_user=True,
         ikwid_args=["--auto-approve"],
+        # Separate console script shipped by the same mistral-vibe package,
+        # not a flag on `devstral`.
+        acp_command=["vibe-acp"],
     ),
     "auggie": AgentSpec(
         "auggie",
@@ -108,6 +128,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config"},
         headless_prefix=["--print"],
+        acp_command=["auggie", "--acp"],
     ),
     "copilot": AgentSpec(
         "copilot",
@@ -118,6 +139,10 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config"},
         ikwid_args=["--yolo"],
+        # --stdio is the default transport, but it is mutually exclusive with
+        # --port: pass it so an inherited config cannot move the adapter onto
+        # a socket the attach stream never sees.
+        acp_command=["copilot", "--acp", "--stdio"],
     ),
     "codex": AgentSpec(
         "codex",
@@ -133,6 +158,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         },
         llm_model_args=["--oss", "-m"],
         headless_prefix=["exec"],
+        acp_command=["npx", "-y", "@agentclientprotocol/codex-acp"],
     ),
     "pi": AgentSpec(
         "pi",
@@ -180,6 +206,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # so pointing HOME at the persisted /config mount covers both.
         {"HOME": "/config", "JCODE_NO_AUTO_UPDATE": "1"},
         headless_prefix=["run"],
+        acp_command=["jcode", "acp"],
     ),
     "freebuff": AgentSpec(
         "freebuff",
@@ -205,6 +232,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         {"QWEN_CONFIG_DIR": "/qwen"},
         ikwid_args=["--approval-mode=yolo"],
         headless_prefix=["-p"],
+        acp_command=["qwen", "--experimental-acp"],
     ),
     "dsh": AgentSpec(
         "dsh",

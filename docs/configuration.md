@@ -48,12 +48,18 @@ agents:
   claude:
     enabled: true
     image: vibepod/claude:latest
-    auto_pull: null  # Per-agent override: true/false, or null to use global auto_pull
-    env: {}       # Extra environment variables passed to the container
-    volumes: []   # Reserved for future use
-    ports: []     # Ports to publish on the host, `docker run -p` syntax
-    init: []      # Optional shell commands run before agent startup
+    auto_pull: null # Per-agent override: true/false, or null to use global auto_pull
+    env: {} # Extra environment variables passed to the container
+    volumes: [] # Reserved for future use
+    ports: [] # Ports to publish on the host, `docker run -p` syntax
+    init: [] # Optional shell commands run before agent startup
     overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
+    # acp_command: ACP adapter command for `vp run <agent> --acp` (editor
+    # integration via the Agent Client Protocol). Defaults exist for claude,
+    # gemini, qwen, codex, opencode, copilot, auggie, jcode and devstral;
+    # override with a list, or a string parsed with shell quoting rules. Not
+    # present by default — just add the key to override.
+    # acp_command: ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
 
   gemini:
     enabled: true
@@ -156,21 +162,21 @@ agents:
     env: {}
     volumes: []
     ports:
-      - "127.0.0.1:3080:3081"   # Web UI; container side must stay 3081
+      - "127.0.0.1:3080:3081" # Web UI; container side must stay 3081
     init: []
 
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
   enabled: false
-  base_url: ""       # Server endpoint URL
-  api_key: ""        # Auth token (set to "ollama" for Ollama)
-  model: ""          # Model name passed to the agent
+  base_url: "" # Server endpoint URL
+  api_key: "" # Auth token (set to "ollama" for Ollama)
+  model: "" # Model name passed to the agent
 
 logging:
   enabled: true
   image: vibepod/datasette:latest
   db_path: ~/.config/vibepod/logs.db
-  ui_port: 8001         # Port for the Datasette UI
+  ui_port: 8001 # Port for the Datasette UI
 
 proxy:
   enabled: true
@@ -179,7 +185,7 @@ proxy:
   ca_dir: ~/.config/vibepod/proxy/mitmproxy
   ca_path: ~/.config/vibepod/proxy/mitmproxy/mitmproxy-ca-cert.pem
   filter:
-    mode: open        # open | allow | deny
+    mode: open # open | allow | deny
     allow: []
     deny: []
 ```
@@ -188,22 +194,22 @@ proxy:
 
 These variables override the corresponding config keys without editing any file:
 
-| Variable | Config key | Example |
-|---|---|---|
-| `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=vibe` |
-| `VP_AUTO_PULL` | `auto_pull` | `VP_AUTO_PULL=true` |
-| `VP_AUTO_CLEAN` | `auto_clean` | `VP_AUTO_CLEAN=false` |
-| `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
-| `VP_NO_COLOR` | `no_color` | `VP_NO_COLOR=true` |
-| `VP_DATASETTE_PORT` | `logging.ui_port` | `VP_DATASETTE_PORT=9001` |
-| `VP_PROXY_ENABLED` | `proxy.enabled` | `VP_PROXY_ENABLED=false` |
-| `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow` |
-| `VP_LLM_ENABLED` | `llm.enabled` | `VP_LLM_ENABLED=true` |
-| `VP_LLM_BASE_URL` | `llm.base_url` | `VP_LLM_BASE_URL=http://localhost:11434` |
-| `VP_LLM_API_KEY` | `llm.api_key` | `VP_LLM_API_KEY=ollama` |
-| `VP_LLM_MODEL` | `llm.model` | `VP_LLM_MODEL=qwen3:14b` |
-| `VP_CONFIG_DIR` | *(config root)* | `VP_CONFIG_DIR=/custom/path` |
-| `VP_PROFILE` | `profile` | `VP_PROFILE=work` |
+| Variable               | Config key          | Example                                  |
+| ---------------------- | ------------------- | ---------------------------------------- |
+| `VP_DEFAULT_AGENT`     | `default_agent`     | `VP_DEFAULT_AGENT=vibe`                  |
+| `VP_AUTO_PULL`         | `auto_pull`         | `VP_AUTO_PULL=true`                      |
+| `VP_AUTO_CLEAN`        | `auto_clean`        | `VP_AUTO_CLEAN=false`                    |
+| `VP_LOG_LEVEL`         | `log_level`         | `VP_LOG_LEVEL=debug`                     |
+| `VP_NO_COLOR`          | `no_color`          | `VP_NO_COLOR=true`                       |
+| `VP_DATASETTE_PORT`    | `logging.ui_port`   | `VP_DATASETTE_PORT=9001`                 |
+| `VP_PROXY_ENABLED`     | `proxy.enabled`     | `VP_PROXY_ENABLED=false`                 |
+| `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow`             |
+| `VP_LLM_ENABLED`       | `llm.enabled`       | `VP_LLM_ENABLED=true`                    |
+| `VP_LLM_BASE_URL`      | `llm.base_url`      | `VP_LLM_BASE_URL=http://localhost:11434` |
+| `VP_LLM_API_KEY`       | `llm.api_key`       | `VP_LLM_API_KEY=ollama`                  |
+| `VP_LLM_MODEL`         | `llm.model`         | `VP_LLM_MODEL=qwen3:14b`                 |
+| `VP_CONFIG_DIR`        | _(config root)_     | `VP_CONFIG_DIR=/custom/path`             |
+| `VP_PROFILE`           | `profile`           | `VP_PROFILE=work`                        |
 
 The `profile` key selects the active [credential profile](profiles.md); the
 `--profile` flag on `vp run`, `vp task create`, and `vp doctor claude` takes
@@ -213,24 +219,24 @@ precedence over both the variable and the config key.
 
 Each agent image can be overridden individually:
 
-| Variable | Agent |
-|---|---|
-| `VP_IMAGE_CLAUDE` | claude |
-| `VP_IMAGE_GEMINI` | gemini |
-| `VP_IMAGE_OPENCODE` | opencode |
-| `VP_IMAGE_DEVSTRAL` | devstral |
-| `VP_IMAGE_AUGGIE` | auggie |
-| `VP_IMAGE_COPILOT` | copilot |
-| `VP_IMAGE_CODEX` | codex |
-| `VP_IMAGE_PI` | pi |
-| `VP_IMAGE_AGY` | agy |
-| `VP_IMAGE_TAU` | tau |
-| `VP_IMAGE_JCODE` | jcode |
-| `VP_IMAGE_FREEBUFF` | freebuff |
-| `VP_IMAGE_QWEN` | qwen |
-| `VP_IMAGE_DSH` | dsh |
-| `VP_DATASETTE_IMAGE` | datasette (logs UI) |
-| `VP_PROXY_IMAGE` | proxy |
+| Variable                 | Agent                               |
+| ------------------------ | ----------------------------------- |
+| `VP_IMAGE_CLAUDE`        | claude                              |
+| `VP_IMAGE_GEMINI`        | gemini                              |
+| `VP_IMAGE_OPENCODE`      | opencode                            |
+| `VP_IMAGE_DEVSTRAL`      | devstral                            |
+| `VP_IMAGE_AUGGIE`        | auggie                              |
+| `VP_IMAGE_COPILOT`       | copilot                             |
+| `VP_IMAGE_CODEX`         | codex                               |
+| `VP_IMAGE_PI`            | pi                                  |
+| `VP_IMAGE_AGY`           | agy                                 |
+| `VP_IMAGE_TAU`           | tau                                 |
+| `VP_IMAGE_JCODE`         | jcode                               |
+| `VP_IMAGE_FREEBUFF`      | freebuff                            |
+| `VP_IMAGE_QWEN`          | qwen                                |
+| `VP_IMAGE_DSH`           | dsh                                 |
+| `VP_DATASETTE_IMAGE`     | datasette (logs UI)                 |
+| `VP_PROXY_IMAGE`         | proxy                               |
 | `VP_SKILLS_ENGINE_IMAGE` | skills-engine (used by `vp skills`) |
 
 Set `VP_IMAGE_NAMESPACE` to change the prefix for all default images at once:
@@ -293,10 +299,10 @@ By default no user-defined ports are published, so anything the agent starts ins
 agents:
   claude:
     ports:
-      - "8000:8000"            # host:container
-      - "127.0.0.1:9229:9229"  # bind to a specific host interface
-      - "6000:6000/udp"        # UDP
-      - "3000"                 # container port on a random host port
+      - "8000:8000" # host:container
+      - "127.0.0.1:9229:9229" # bind to a specific host interface
+      - "6000:6000/udp" # UDP
+      - "3000" # container port on a random host port
 ```
 
 !!! warning "Always quote port entries"

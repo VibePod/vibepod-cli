@@ -6,9 +6,11 @@ import os
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -460,7 +462,11 @@ class DockerManager:
                     raise DockerClientError(f"Failed to build image {tag}: {chunk['error']}")
                 stream = chunk.get("stream")
                 if stream and stream.strip():
-                    print(stream, end="" if stream.endswith("\n") else "\n")
+                    # Through the shared console so ACP mode's stderr routing
+                    # keeps build logs off the JSON-RPC stream on stdout.
+                    from vibepod.utils.console import console
+
+                    console.out(stream, end="" if stream.endswith("\n") else "\n", highlight=False)
         except DockerClientError:
             raise
         except (APIError, DockerException) as exc:
@@ -609,6 +615,9 @@ class DockerManager:
         entrypoint: list[str] | None = None,
         userns_mode: str | None = None,
         extra_labels: dict[str, str] | None = None,
+        workspace_mount_path: str | None = None,
+        start: bool = True,
+        tty: bool = True,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -626,11 +635,20 @@ class DockerManager:
             f"{workspace}:/workspace:rw",
             f"{config_dir}:{config_mount_path}:rw",
         ]
+        if workspace_mount_path:
+            # ACP path parity: bind the workspace a second time onto its own
+            # host path so host-side absolute paths (ACP session cwd, @-mentions,
+            # diffs) resolve identically inside the container.
+            volumes.insert(1, f"{workspace}:{workspace_mount_path}:rw")
         if extra_volumes:
             volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
 
         try:
-            if userns_mode is not None:
+            if userns_mode is not None or not start:
+                # Low-level create path: needed for Podman's `keep-id` (docker-py
+                # rejects it) and for ACP's create-without-start ordering, and
+                # because the high-level containers.create/run does not accept
+                # `stdin_once` (the stdin-EOF lifecycle hook).
                 host_config = self.client.api.create_host_config(
                     binds=volumes,
                     auto_remove=auto_remove,
@@ -641,19 +659,23 @@ class DockerManager:
                 # docker-py validates userns_mode against Docker's enum and rejects
                 # Podman's `keep-id`, so set the Docker-compatible HostConfig field
                 # directly for Podman engines.
-                host_config["UsernsMode"] = userns_mode
+                if userns_mode is not None:
+                    host_config["UsernsMode"] = userns_mode
 
                 create_kwargs: dict[str, Any] = {
                     "image": image,
                     "name": container_name,
                     "command": command,
-                    "tty": True,
+                    "tty": tty,
                     "stdin_open": True,
                     "labels": labels,
                     "environment": environment,
-                    "working_dir": "/workspace",
+                    "working_dir": workspace_mount_path or "/workspace",
                     "host_config": host_config,
                 }
+                # Note: docker-py derives StdinOnce=true itself from
+                # detach=False + stdin_open=True (ContainerConfig), which is
+                # the ACP lifecycle hook — no explicit flag exists.
                 if ports:
                     # (port, proto) tuples: raw "1456/tcp" keys would be
                     # re-suffixed by docker-py's exposed-port normalization
@@ -668,7 +690,8 @@ class DockerManager:
 
                 created = self.client.api.create_container(**create_kwargs)
                 container_id = created["Id"]
-                self.client.api.start(container_id)
+                if start:
+                    self.client.api.start(container_id)
                 return self.client.containers.get(container_id)
 
             run_kwargs: dict[str, Any] = {
@@ -676,13 +699,13 @@ class DockerManager:
                 "name": container_name,
                 "command": command,
                 "detach": True,
-                "tty": True,
+                "tty": tty,
                 "stdin_open": True,
                 "auto_remove": auto_remove,
                 "labels": labels,
                 "environment": environment,
                 "volumes": volumes,
-                "working_dir": "/workspace",
+                "working_dir": workspace_mount_path or "/workspace",
                 "network": network,
                 # Docker Desktop resolves host.docker.internal natively, but Docker
                 # Engine on Linux and Podman only do so with an explicit
@@ -838,6 +861,37 @@ class DockerManager:
         )
         return containers[0] if containers else None
 
+    def remove_proxy(self, existing: Any, timeout: float = 15.0) -> None:
+        """Force-remove a proxy container and wait for it to disappear.
+
+        Concurrent launches (e.g. an editor spawning `vp run` twice) can race
+        on the removal; Docker then answers 409 "removal ... is already in
+        progress", or 404 if the peer already finished. Treat both as success
+        and wait until the container is gone so the caller can create its
+        replacement.
+
+        The wait tracks *this* container, not any proxy: a peer's replacement
+        carries the same labels, so waiting for `find_proxy()` to go empty
+        would never be satisfied once one exists.
+        """
+        target_id = getattr(existing, "id", None)
+        try:
+            existing.remove(force=True)
+        except NotFound:
+            return
+        except APIError as exc:
+            if "already in progress" not in str(exc):
+                raise
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            current = self.find_proxy()
+            if current is None or getattr(current, "id", None) != target_id:
+                return
+            time.sleep(0.2)
+        raise DockerClientError(
+            "Timed out waiting for the previous vibepod-proxy container to be removed.",
+        )
+
     def ensure_proxy(
         self,
         image: str,
@@ -852,7 +906,7 @@ class DockerManager:
                 if policy_schema is not None:
                     self.require_proxy_policy_schema(existing.image, policy_schema)
                 return existing
-            existing.remove(force=True)
+            self.remove_proxy(existing)
 
         if hasattr(self.client, "images"):
             try:
@@ -992,3 +1046,167 @@ class DockerManager:
             if stdin_fd is not None and old_tty is not None and termios is not None:
                 termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_tty)
         return bytes(output_tail)
+
+    def attach_stdio(
+        self,
+        container: Any,
+        logger: Any = None,
+        on_attached: Any = None,
+        auto_remove: bool = False,
+    ) -> int:
+        """Attach local stdin/stdout to a container without a TTY (ACP mode).
+
+        Unlike ``attach_interactive`` this performs no raw-mode switching, no
+        resize handling and no ``logs`` replay; instead it demultiplexes the
+        Docker stream frame protocol so container stdout goes to our stdout
+        and stderr to our stderr, keeping the JSON-RPC stream clean.
+        Returns the container's exit code, also when the container was
+        stopped by the SIGINT/SIGTERM handling. ``auto_remove`` must match the
+        container's AutoRemove setting so the exit code survives its removal.
+        """
+        try:
+            sock_wrapper = self.client.api.attach_socket(
+                container.id,
+                params={
+                    "stdin": 1,
+                    "stdout": 1,
+                    "stderr": 1,
+                    "stream": 1,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - runtime Docker behavior
+            raise DockerClientError(f"Failed to attach to container: {exc}") from exc
+
+        sock = getattr(sock_wrapper, "_sock", sock_wrapper)
+
+        # Register the exit-code wait before the container starts. With
+        # AutoRemove the container can be gone by the time the stream closes,
+        # so inspecting it afterwards races the daemon; a wait opened up front
+        # is answered with the status code even once the container is removed
+        # (docker's own CLI waits for "removed" under --rm for the same reason).
+        wait_result: dict[str, Any] = {}
+
+        def _wait_for_exit() -> None:
+            try:
+                result = self.client.api.wait(
+                    container.id,
+                    timeout=None,
+                    condition="removed" if auto_remove else "next-exit",
+                )
+            except Exception:
+                return
+            if isinstance(result, dict):
+                wait_result.update(result)
+
+        waiter = threading.Thread(target=_wait_for_exit, name="vibepod-acp-wait", daemon=True)
+        waiter.start()
+
+        if on_attached is not None:
+            # Create-attach-start ordering: the ACP adapter emits its first
+            # JSON-RPC frames immediately once the entrypoint runs, so the
+            # caller starts the container only after the attach is in place.
+            on_attached()
+        stdin_fd = None
+        if sys.stdin is not None and not sys.stdin.closed:
+            try:
+                stdin_fd = sys.stdin.fileno()
+            except (OSError, ValueError):
+                stdin_fd = None
+
+        stop_requested = False
+        old_sigterm = None
+        old_sigint = None
+
+        def _request_stop(signum: int, frame: Any) -> None:
+            del signum, frame
+            nonlocal stop_requested
+            stop_requested = True
+            try:
+                container.stop(timeout=5)
+            except Exception:  # pragma: no cover - best effort
+                pass
+
+        try:
+            old_sigterm = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, _request_stop)
+            old_sigint = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, _request_stop)
+        except ValueError:  # pragma: no cover - not in main thread (tests)
+            old_sigterm = old_sigint = None
+
+        buffer = b""
+        try:
+            while True:
+                if stop_requested:
+                    break
+                readers: list[Any] = [sock]
+                if stdin_fd is not None:
+                    readers.append(sys.stdin)
+                ready, _, _ = select.select(readers, [], [])
+
+                if sock in ready:
+                    data = sock.recv(65536)
+                    if not data:
+                        break
+                    buffer += data
+                    # Docker (no TTY) frames each stream chunk with an 8-byte
+                    # header: stream byte, 3 padding bytes, 4-byte big-endian
+                    # payload length. Frames can split across recv() bounds,
+                    # so buffer until header and payload are complete.
+                    while len(buffer) >= 8:
+                        stream_type = buffer[0]
+                        length = int.from_bytes(buffer[4:8], "big")
+                        if len(buffer) < 8 + length:
+                            break
+                        payload = buffer[8 : 8 + length]
+                        buffer = buffer[8 + length :]
+                        if stream_type == 1:
+                            sys.stdout.buffer.write(payload)
+                            sys.stdout.buffer.flush()
+                        elif stream_type == 2:
+                            sys.stderr.buffer.write(payload)
+                            sys.stderr.buffer.flush()
+                        if logger is not None:
+                            logger.log_output(payload)
+
+                if stdin_fd is not None and sys.stdin in ready:
+                    try:
+                        user_data = os.read(stdin_fd, 65536)
+                    except OSError:
+                        user_data = b""
+                    if not user_data:
+                        # stdin EOF (ACP client went away): close our write
+                        # side so the adapter sees EOF and exits, but keep
+                        # draining the container stream until it ends.
+                        try:
+                            sock.shutdown(socket.SHUT_WR)
+                        except OSError:  # pragma: no cover - already closed
+                            pass
+                        stdin_fd = None
+                    else:
+                        try:
+                            sock.sendall(user_data)
+                        except OSError:
+                            stdin_fd = None
+        finally:
+            try:
+                sock_wrapper.close()
+            except Exception:  # pragma: no cover - best effort
+                pass
+            if old_sigterm is not None:
+                signal.signal(signal.SIGTERM, old_sigterm)
+            if old_sigint is not None:
+                signal.signal(signal.SIGINT, old_sigint)
+
+        waiter.join(timeout=10)
+        status = wait_result.get("StatusCode")
+        if status is None:
+            # No wait answer (daemon without wait conditions, or the stream
+            # ended without an exit): fall back to an inspect, which only
+            # works while the container still exists.
+            try:
+                container.reload()
+                status = container.attrs.get("State", {}).get("ExitCode", 0)
+            except Exception:  # pragma: no cover - auto-removed containers
+                status = 0
+        return int(status or 0)

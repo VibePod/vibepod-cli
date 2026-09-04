@@ -7,6 +7,18 @@ from rich.console import Console
 console = Console()
 
 
+def route_to_stderr() -> None:
+    """Redirect all console output to stderr.
+
+    Used by ACP mode: stdout must carry only the JSON-RPC stream, so every
+    info()/error() line is routed to stderr instead. The shared ``console``
+    object is flipped in place rather than rebound: several modules bind the
+    object itself at import time (``from vibepod.utils.console import
+    console``), and a rebound module global would never reach those.
+    """
+    console.stderr = True
+
+
 def info(message: str) -> None:
     console.print(f"[cyan]{message}[/cyan]")
 

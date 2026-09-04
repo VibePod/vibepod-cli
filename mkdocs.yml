@@ -54,13 +54,14 @@ nav:
   - Agents: agents/index.md
   - Profiles: profiles.md
   - Skills:
-    - Overview: skills/index.md
-    - Locator format: skills/locators.md
-    - Authoring: skills/authoring.md
+      - Overview: skills/index.md
+      - Locator format: skills/locators.md
+      - Authoring: skills/authoring.md
   - Project overlays:
-    - Overview: overlays/index.md
-    - Recipes: overlays/recipes.md
+      - Overview: overlays/index.md
+      - Recipes: overlays/recipes.md
   - Herdr integration: herdr.md
+  - Editor integration (ACP): acp.md
   - Configuration: configuration.md
   - LLM Integration: llm.md
   - CLI Reference: cli-reference.md

@@ -308,6 +308,25 @@ def test_alias_forwards_extra_option_args_after_delimiter(monkeypatch) -> None:
     assert called["passthrough"] == ["--model", "sonnet", "hello"]
 
 
+def test_run_command_forwards_acp_flag(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["acp"] = kwargs.get("acp")
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["run", "claude", "--acp"])
+    assert result.exit_code == 0
+    assert called["acp"] is True
+
+    result = runner.invoke(app, ["claude", "--acp"])
+    assert result.exit_code == 0
+    assert called["agent"] == "claude"
+    assert called["acp"] is True
+
+
 def test_run_command_forwards_overlay_flags(monkeypatch) -> None:
     called: dict[str, object] = {}
 
