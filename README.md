@@ -22,7 +22,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes & more
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
@@ -91,6 +91,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `freebuff`          | Not supported                                |
 | `qwen`              | `--approval-mode=yolo`                       |
 | `dsh`               | Not supported                                |
+| `hermes`            | `--yolo`                                     |
 
 ## Editor integration (`--acp`)
 
@@ -183,6 +184,7 @@ Current defaults:
 - `freebuff` -> `vibepod/freebuff:latest`
 - `qwen` -> `vibepod/qwen:latest`
 - `dsh` -> `vibepod/dsh:latest`
+- `hermes` -> `vibepod/hermes:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 

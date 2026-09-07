@@ -20,10 +20,11 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `freebuff` | CodebuffAI | `vp fb` | `vibepod/freebuff:latest` |
 | `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
 | `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
+| `hermes` (alias: `nous`) | Nous Research | `vp h` | `vibepod/hermes:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`, `vp run qwen-cli`
-resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
-resolve to `vp run dsh`.
+resolves to `vp run qwen`, `vp run deepseek` / `vp run deepseek-harness`
+resolve to `vp run dsh`, and `vp run nous` resolves to `vp run hermes`.
 
 ## DeepSeek Harness (`dsh`) — Web UI agent
 
@@ -157,7 +158,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), `deepseek` / `deepseek-harness` (→ `dsh`), and `nous` (→ `hermes`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -288,6 +289,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `freebuff` | Not supported |
 | `qwen` | `--approval-mode=yolo` |
 | `dsh` | Not supported |
+| `hermes` | `--yolo` |
 
 Example:
 
@@ -407,6 +409,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `jcode` | `jcode run "<prompt>"` |
 | `qwen` | `qwen -p "<prompt>"` |
 | `dsh` | `dsh --profile headless "<prompt>"` |
+| `hermes` | `hermes -z "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
@@ -1121,4 +1124,45 @@ already mounted.
 ```bash
 vp run qwen --ikwid
 vp task create qwen "fix the failing test" --ikwid
+```
+
+## Hermes Agent (`hermes`) — developer preview
+
+Hermes is Nous Research's self-improving agent: it keeps cross-session memory,
+writes its own skills, and is not primarily a coding TUI. VibePod runs its
+interactive CLI; the `gateway` daemon, cron jobs and messaging bridges are out
+of scope.
+
+`vp run hermes` starts the classic Python REPL. The Ink TUI is available with
+`vp run hermes -- --tui`.
+
+> The default `vibepod/hermes` image pins an exact PyPI version, which trails
+> upstream's git main. Hermes is pre-1.0, so `vp run` and `vp task` print a
+> developer-preview warning.
+
+**First run.** Hermes has no usable provider until it is given credentials. Run
+`hermes setup` once inside the container — it persists to the mounted config at
+`~/.config/vibepod/agents/hermes/.hermes/` — or pass an OpenAI-compatible
+endpoint through VibePod's LLM wiring, which maps to `OPENAI_BASE_URL` and
+`OPENAI_API_KEY`.
+
+**Headless one-shot:**
+
+```bash
+vp task create hermes "summarize this repository"
+```
+
+**Skills.** Hermes scans `~/.agents/skills/` only when `skills.external_dirs`
+is set in its `config.yaml` — there is no environment-variable override — so
+the image entrypoint seeds that key on first start. Skills installed via
+`vp skills` are then mounted at `/config/.agents/skills/<id>` and picked up
+automatically. Editing `external_dirs` yourself disables the seeding; VibePod
+never overwrites a value you set.
+
+**IKWID mode.** Hermes auto-approves tool calls in YOLO mode, which `--ikwid`
+enables via `--yolo`:
+
+```bash
+vp run hermes --ikwid
+vp task create hermes "fix the failing test" --ikwid
 ```

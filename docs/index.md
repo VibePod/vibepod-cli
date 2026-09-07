@@ -29,6 +29,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 | `freebuff`                 | CodebuffAI     | `vp fb`  |
 | `qwen`                     | Qwen (Alibaba) | `vp q`   |
 | `dsh` (DeepSeek Harness)   | DeepSeek       | `vp ds`  |
+| `hermes` (alias: `nous`)   | Nous Research  | `vp h`   |
 
 ## Next Steps
 
