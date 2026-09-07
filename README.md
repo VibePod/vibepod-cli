@@ -25,6 +25,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 - 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh & more
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
+- 🔌 **External tools** — LiteLLM, Headroom, RTK, Graphify and other tooling plug in through the shared `vibepod-network` or a project overlay ([docs](https://vibepod.dev/docs/integrations/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
 - 🐑 **Herdr aware** — `vp run` inside a [herdr](https://herdr.dev/) pane reports agent state automatically
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
