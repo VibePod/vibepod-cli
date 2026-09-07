@@ -48,8 +48,13 @@ that is also how you pin an `npx` adapter to a version).
 
 Register `vp` as an external or custom ACP agent in your editor. Use an
 absolute path to the executable because GUI applications do not necessarily
-inherit your shell `PATH`. Pass `-w` explicitly when the editor's subprocess
-working directory is not guaranteed to be the open project.
+inherit your shell `PATH`. `-w` can be omitted: Zed, PyCharm and the VS Code
+ACP Client all start the agent in the open project (the first worktree or
+workspace folder), and `vp run` takes its working directory as the workspace,
+so one entry serves every project. Pass `-w` when the project is not the
+first folder of a multi-root workspace, or when the editor runs the agent on a
+remote host and sets no working directory (Zed's remote projects, including
+the WSL setup below).
 
 Allow the project directory before opening the first editor session, or
 answer the question in the editor: editor stdin is a protocol pipe, so the
@@ -87,9 +92,7 @@ Open Agent Settings, select **External Agents**, then **Add Agent** →
       "args": [
         "run",
         "claude",
-        "--acp",
-        "-w",
-        "/absolute/path/to/project"
+        "--acp"
       ],
       "env": {}
     }
@@ -116,20 +119,13 @@ through the AI Assistant plugin. In AI Chat, open the **More** menu and select
       "args": [
         "run",
         "claude",
-        "--acp",
-        "-w",
-        "/absolute/path/to/project"
+        "--acp"
       ],
       "env": {}
     }
   }
 }
 ```
-
-PyCharm starts the agent process in the project directory, so `-w` can be
-omitted: `vp run` then takes the open project as the workspace and one entry
-serves every project. Keep the explicit path when a project must always map
-to one directory.
 
 Select **VibePod Claude** in AI Chat. Use **Get ACP Logs** from the AI Chat
 **More** menu for diagnostics. It asks the allow-dir and compose-network
@@ -157,9 +153,7 @@ add this to your user or workspace `settings.json`:
       "args": [
         "run",
         "claude",
-        "--acp",
-        "-w",
-        "/absolute/path/to/project"
+        "--acp"
       ],
       "env": {}
     }
@@ -235,9 +229,9 @@ every path on both sides is POSIX, and the parity mount lines up.
 ```
 
 Use an absolute path to `vp` (the spawn environment is not a login shell) and
-pass `-w` explicitly: VibePod picks the workspace from `--workspace` at launch
-and never reads the cwd the ACP client sends, and the spawn cwd is not
-guaranteed to be your project.
+pass `-w` explicitly here: Zed treats a WSL project as remote and starts the
+agent without a working directory, and VibePod never reads the cwd the ACP
+client sends.
 
 !!! warning "Do not bridge a Windows-side project through `wsl.exe`"
 
