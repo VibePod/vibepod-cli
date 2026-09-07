@@ -3332,3 +3332,9 @@ def test_resolve_acp_command_parses_string_overrides_like_a_shell() -> None:
     # An empty override is "no adapter", not "run the image default".
     assert run_cmd._resolve_acp_command(spec, {"acp_command": ""}) is None
     assert run_cmd._resolve_acp_command(spec, {"acp_command": []}) is None
+
+
+def test_hermes_skill_paths_use_shared_agents_dir() -> None:
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("hermes") == ["/config/.agents/skills"]
