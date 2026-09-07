@@ -118,6 +118,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["tau"].headless_prefix == ["-p"]
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
     assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
+    assert AGENT_SPECS["hermes"].headless_prefix == ["-z"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -1240,3 +1241,35 @@ def test_task_create_materializes_source_policy_and_wires_identity(
         (tmp_path / "proxy" / "policies" / "containers" / f"{'2' * 32}.json").read_text(),
     )
     assert record["profile"] == "default"
+
+
+def test_hermes_headless_command_is_not_overridden() -> None:
+    # -z/--oneshot takes the prompt as its value, so the generic
+    # base_command + ikwid + headless_prefix + [prompt] path is correct and no
+    # headless_command override is needed.
+    assert AGENT_SPECS["hermes"].headless_command is None
+
+
+def test_task_create_hermes_places_yolo_before_oneshot(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """`-z` consumes the next token as its value, so --yolo must come first."""
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="hermes",
+        prompt="summarize this repository",
+        workspace=tmp_path,
+        ikwid=True,
+    )
+
+    assert stub.run_kwargs["command"] == [
+        "hermes",
+        "--yolo",
+        "-z",
+        "summarize this repository",
+    ]
