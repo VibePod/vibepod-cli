@@ -18,7 +18,9 @@ from typer.testing import CliRunner
 from vibepod.cli import app
 from vibepod.commands import run as run_cmd
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.core import acp as acp_mod
 from vibepod.core import launch, skills_engine
+from vibepod.core.acp import AcpClientChannel
 from vibepod.core.agents import get_agent_spec
 from vibepod.core.docker import DockerClientError, DockerManager
 
@@ -2765,13 +2767,16 @@ class _AcpContainer:
         self.removed.append(force)
 
 
-def _make_acp_manager(captured: dict):
+def _make_acp_manager(captured: dict, networks: list[str] | None = None):
     class _AcpCapturingDockerManager:
         def ensure_network(self, name: str) -> None:
             pass
 
         def networks_with_running_containers(self) -> list[str]:
-            return []
+            return list(networks or [])
+
+        def connect_network(self, container, network: str) -> None:  # type: ignore[no-untyped-def]
+            captured["connected_network"] = network
 
         def pull_image(self, image: str, auto_clean: bool = False) -> None:
             pass
@@ -2791,9 +2796,11 @@ def _make_acp_manager(captured: dict):
             logger=None,
             on_attached=None,
             auto_remove=False,
+            initial_stdin=b"",
         ) -> int:
             captured["attach_stdio_called"] = True
             captured["attach_auto_remove"] = auto_remove
+            captured["initial_stdin"] = initial_stdin
             if on_attached is not None:
                 on_attached()
                 captured["container_started_by_attach"] = container.started
@@ -2829,9 +2836,68 @@ def _acp_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Common stubs for ACP run tests; returns the workspace dir."""
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(run_cmd, "SessionLogger", _FakeSessionLogger)
+    # No editor on the test's stdin: run() then skips the ACP handshake, as it
+    # does when stdin has no fd. Tests that script an editor override this.
+    monkeypatch.setattr(run_cmd, "_open_acp_channel", lambda: None)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     return workspace
+
+
+def _acp_line(message: dict) -> bytes:
+    return json.dumps(message).encode() + b"\n"
+
+
+def _acp_initialize(request_id: object = 7, *, form: bool = True) -> bytes:
+    capabilities: dict = {"fs": {"readTextFile": True, "writeTextFile": True}}
+    if form:
+        capabilities["elicitation"] = {"form": {}, "url": {}}
+    return _acp_line(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": capabilities},
+        },
+    )
+
+
+def _acp_form_answer(content: dict | None, request_id: str = "vp-1") -> bytes:
+    result: dict = {"action": "decline"}
+    if content is not None:
+        result = {"action": "accept", "content": content}
+    return _acp_line({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+
+def _script_acp_editor(
+    monkeypatch: pytest.MonkeyPatch,
+    script: bytes,
+) -> tuple[list[dict], list]:
+    """Wire run() to an editor that wrote *script* on a pipe and then hung up.
+
+    Returns the frames vp sends back (parsed) and the exit guards it
+    registered, so a test can fire the guard the way interpreter exit would.
+    """
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, script)
+    os.close(write_fd)
+    raw: list[bytes] = []
+    channel = AcpClientChannel(read_fd, raw.append)
+    monkeypatch.setattr(run_cmd, "_open_acp_channel", lambda: channel)
+    guards: list = []
+    monkeypatch.setattr(acp_mod.atexit, "register", guards.append)
+
+    class _Sent(list):
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            return iter(json.loads(item) for item in raw)
+
+        def __len__(self) -> int:
+            return len(raw)
+
+        def __getitem__(self, index):  # type: ignore[no-untyped-def]
+            return json.loads(raw[index])
+
+    return _Sent(), guards
 
 
 @_requires_posix_workspace
@@ -2920,6 +2986,181 @@ def test_acp_ignores_ikwid_with_warning(monkeypatch, _acp_env) -> None:
 
 
 @_requires_posix_workspace
+@_requires_posix_workspace
+def test_acp_replays_the_editor_initialize_into_the_container(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+    sent, guards = _script_acp_editor(monkeypatch, _acp_initialize(7))
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    # The adapter gets the untouched request and answers it itself: vp wrote
+    # nothing, and its exit guard stays quiet once the container took over.
+    assert captured["initial_stdin"] == _acp_initialize(7)
+    assert len(sent) == 0
+    guards[0]()
+    assert len(sent) == 0
+
+
+@_requires_posix_workspace
+def test_acp_asks_the_editor_before_allowing_the_workspace(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    allowed: list[Path] = []
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    monkeypatch.setattr(run_cmd, "add_allowed_dir", allowed.append)
+    sent, _ = _script_acp_editor(
+        monkeypatch,
+        _acp_initialize(7) + _acp_form_answer({"decision": "allow_always"}),
+    )
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    question = sent[0]
+    assert question["method"] == "elicitation/create"
+    assert question["params"]["mode"] == "form"
+    assert question["params"]["requestId"] == 7
+    assert str(_acp_env) in question["params"]["message"]
+    decision = question["params"]["requestedSchema"]["properties"]["decision"]
+    assert decision["enum"] == ["allow_always", "allow_once", "reject"]
+    assert allowed == [_acp_env]
+    assert captured["workspace"] == _acp_env
+    # The editor's answer was for vp; only initialize reaches the adapter.
+    assert captured["initial_stdin"] == _acp_initialize(7)
+
+
+@_requires_posix_workspace
+def test_acp_allow_once_runs_without_touching_the_allow_list(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    allowed: list[Path] = []
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    monkeypatch.setattr(run_cmd, "add_allowed_dir", allowed.append)
+    _script_acp_editor(
+        monkeypatch,
+        _acp_initialize() + _acp_form_answer({"decision": "allow_once"}),
+    )
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    assert allowed == []
+    assert captured["attach_stdio_called"] is True
+
+
+@_requires_posix_workspace
+def test_acp_rejected_workspace_becomes_an_initialize_error(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    sent, guards = _script_acp_editor(monkeypatch, _acp_initialize(7) + _acp_form_answer(None))
+
+    with pytest.raises(typer.Exit) as excinfo:
+        run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    assert excinfo.value.exit_code == 1
+    assert "container" not in captured
+    guards[0]()  # what interpreter exit does
+    reply = sent[1]
+    assert reply["id"] == 7
+    assert reply["error"]["code"] == -32603
+    assert "was not allowed" in reply["error"]["message"]
+
+
+@_requires_posix_workspace
+def test_acp_editor_without_forms_gets_the_allow_dir_hint(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    sent, guards = _script_acp_editor(monkeypatch, _acp_initialize(7, form=False))
+
+    with pytest.raises(typer.Exit):
+        run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    guards[0]()
+    assert len(sent) == 1
+    assert sent[0]["id"] == 7
+    assert f"vp config allow-dir {_acp_env}" in sent[0]["error"]["message"]
+
+
+@_requires_posix_workspace
+def test_acp_compose_network_question_goes_to_the_editor(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    (_acp_env / "compose.yml").write_text("services: {}\n")
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(
+        run_cmd,
+        "DockerManager",
+        _make_acp_manager(captured, networks=["web_default", "vibepod-network"]),
+    )
+    sent, _ = _script_acp_editor(
+        monkeypatch,
+        _acp_initialize() + _acp_form_answer({"network": "web_default"}),
+    )
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    network = sent[0]["params"]["requestedSchema"]["properties"]["network"]
+    assert network["enum"] == ["none", "web_default"]
+    assert captured["connected_network"] == "web_default"
+
+
+@_requires_posix_workspace
+def test_acp_declined_network_question_connects_nothing(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    (_acp_env / "compose.yml").write_text("services: {}\n")
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured, networks=["web"]))
+    _script_acp_editor(monkeypatch, _acp_initialize() + _acp_form_answer(None))
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    assert "connected_network" not in captured
+    assert captured["attach_stdio_called"] is True
+
+
+@_requires_posix_workspace
+def test_acp_editor_hanging_up_before_initialize_aborts(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+    _script_acp_editor(monkeypatch, b"")
+
+    with pytest.raises(typer.Exit):
+        run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+
+    assert "container" not in captured
+
+
+def test_open_acp_channel_requires_a_real_stdin_fd(monkeypatch) -> None:
+    import io
+    import types
+
+    class _NoFd:
+        def fileno(self) -> int:
+            raise ValueError("no fd")
+
+    monkeypatch.setattr(run_cmd.sys, "stdin", _NoFd())
+    assert run_cmd._open_acp_channel() is None
+
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, _acp_initialize(5))
+    os.close(write_fd)
+    out = io.BytesIO()
+    monkeypatch.setattr(run_cmd.sys, "stdin", types.SimpleNamespace(fileno=lambda: read_fd))
+    monkeypatch.setattr(run_cmd.sys, "stdout", types.SimpleNamespace(buffer=out))
+    channel = run_cmd._open_acp_channel()
+    assert channel is not None
+    assert channel.wait_for_initialize() is True
+    channel.fail_initialize("x")
+    assert json.loads(out.getvalue())["id"] == 5
+    os.close(read_fd)
+
+
 def test_acp_workspace_mount_path_accepts_a_posix_workspace(tmp_path: Path) -> None:
     spec = get_agent_spec("claude")
     good = run_cmd._acp_workspace_mount_path(tmp_path / "proj", spec)
@@ -3010,6 +3251,7 @@ def test_acp_adapter_exit_code_propagates(monkeypatch, _acp_env) -> None:
             logger=None,
             on_attached=None,
             auto_remove=False,
+            initial_stdin=b"",
         ) -> int:
             if on_attached is not None:
                 on_attached()
@@ -3036,6 +3278,7 @@ def test_acp_attach_failure_removes_the_created_container(monkeypatch, _acp_env)
             logger=None,
             on_attached=None,
             auto_remove=False,
+            initial_stdin=b"",
         ) -> int:
             raise DockerClientError("attach failed")
 

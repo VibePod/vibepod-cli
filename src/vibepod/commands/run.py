@@ -16,6 +16,7 @@ from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.core.acp import AcpClientChannel
 from vibepod.core.agents import (
     AGENT_SPECS,
     AgentSpec,
@@ -107,7 +108,7 @@ from vibepod.core.profiles import resolve_profile
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
-from vibepod.utils.console import error, info, route_to_stderr, success, warning
+from vibepod.utils.console import error, info, last_error, route_to_stderr, success, warning
 
 _SAFE_SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
@@ -358,14 +359,103 @@ def _compose_file_present(workspace: Path) -> bool:
     return (workspace / "docker-compose.yml").exists() or (workspace / "compose.yml").exists()
 
 
+def _open_acp_channel() -> AcpClientChannel | None:
+    """Bind the ACP client channel to our stdin/stdout; None without a real stdin fd."""
+    try:
+        read_fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        return None
+
+    def _write(data: bytes) -> None:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+
+    return AcpClientChannel(read_fd, _write)
+
+
+def _acp_abort_message() -> str:
+    """Text for the JSON-RPC error the editor gets when run() aborts before launch."""
+    return (
+        last_error()
+        or "vp run --acp aborted before the agent started; see the editor's ACP logs (stderr)."
+    )
+
+
+def _acp_choice_schema(
+    title: str,
+    options: list[tuple[str, str]],
+    default: str | None = None,
+) -> dict[str, Any]:
+    """Single-select form field: ``enum`` for plain clients, ``oneOf`` for labelled ones."""
+    schema: dict[str, Any] = {
+        "type": "string",
+        "title": title,
+        "enum": [value for value, _ in options],
+        "oneOf": [{"const": value, "title": label} for value, label in options],
+    }
+    if default is not None:
+        schema["default"] = default
+    return schema
+
+
+_ACP_ALLOW_DIR_OPTIONS = [
+    ("allow_always", "Allow and remember"),
+    ("allow_once", "Allow this run only"),
+    ("reject", "Do not allow"),
+]
+
+
+def _acp_ask_allow_dir(channel: AcpClientChannel, workspace: Path, agent: str) -> str | None:
+    """Ask the editor whether *workspace* may be mounted.
+
+    Returns ``allow_always``, ``allow_once`` or ``reject``; None when the
+    editor cannot show the question, which callers treat like a missing TTY.
+    """
+    outcome = channel.elicit(
+        f"VibePod: '{workspace}' is not in the allowed directories for `vp run`. "
+        f"Mount it into the {agent} container?",
+        {
+            "decision": _acp_choice_schema(
+                "Workspace access",
+                _ACP_ALLOW_DIR_OPTIONS,
+                default="allow_always",
+            ),
+        },
+        ["decision"],
+    )
+    if outcome.status == "unavailable":
+        return None
+    if outcome.status != "accepted":
+        return "reject"
+    decision = outcome.content.get("decision")
+    return decision if decision in {"allow_always", "allow_once"} else "reject"
+
+
+def _acp_select_network(channel: AcpClientChannel, candidates: list[str]) -> str | None:
+    """Editor-side variant of the compose network picker."""
+    options = [("none", "Do not connect"), *[(name, name) for name in candidates]]
+    outcome = channel.elicit(
+        "VibePod: a compose file was found in the workspace. Connect the agent container "
+        "to a network with running containers?",
+        {"network": _acp_choice_schema("Network", options, default="none")},
+        ["network"],
+    )
+    if outcome.status == "unavailable":
+        warning("Compose file detected but the editor cannot show forms; skipping network prompt.")
+        return None
+    choice = outcome.content.get("network") if outcome.status == "accepted" else None
+    return choice if isinstance(choice, str) and choice in candidates else None
+
+
 def _maybe_select_network(
     workspace: Path,
     manager: DockerManager,
     primary_network: str,
+    acp_channel: AcpClientChannel | None = None,
 ) -> str | None:
     if not _compose_file_present(workspace):
         return None
-    if not sys.stdin.isatty():
+    if acp_channel is None and not sys.stdin.isatty():
         warning("Compose file detected but stdin is not interactive; skipping network prompt.")
         return None
 
@@ -374,6 +464,9 @@ def _maybe_select_network(
     candidates = [name for name in networks if name not in excluded]
     if not candidates:
         return None
+
+    if acp_channel is not None:
+        return _acp_select_network(acp_channel, candidates)
 
     if not Confirm.ask(
         "Compose file detected. Connect this container to a network with running containers?",
@@ -497,8 +590,22 @@ def run(
 
     _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
 
+    acp_channel: AcpClientChannel | None = None
+    if acp:
+        acp_channel = _open_acp_channel()
+    if acp_channel is not None:
+        # Hold the editor's initialize: the questions and aborts below reach
+        # the editor through it, and the container answers it once it runs.
+        if not acp_channel.wait_for_initialize():
+            error("ACP client closed the connection before sending initialize.")
+            raise typer.Exit(1)
+        acp_channel.install_exit_guard(_acp_abort_message)
+
     workspace_path = workspace.expanduser().resolve()
     if not workspace_path.exists() or not workspace_path.is_dir():
+        if acp_channel is not None:
+            error(f"Workspace not found: {workspace_path}")
+            raise typer.Exit(1)
         raise typer.BadParameter(f"Workspace not found: {workspace_path}")
 
     if is_protected_dir(workspace_path):
@@ -509,23 +616,39 @@ def run(
         raise typer.Exit(1)
 
     if not is_dir_allowed(workspace_path):
-        if not sys.stdin.isatty():
-            error(
-                f"'{workspace_path}' is not in the allowed directories list. "
-                "Run `vp config allow-dir` to add it.",
-            )
+        allow_hint = (
+            f"'{workspace_path}' is not in the allowed directories list. "
+            f"Run `vp config allow-dir {workspace_path}` to add it."
+        )
+        decision = "allow_always"
+        if acp_channel is not None:
+            # Editor stdin is the protocol pipe, so the question goes out as
+            # an ACP form instead of a TTY prompt.
+            answer = _acp_ask_allow_dir(acp_channel, workspace_path, selected_agent)
+            if answer is None:
+                error(allow_hint)
+                raise typer.Exit(1)
+            if answer == "reject":
+                error(f"'{workspace_path}' was not allowed for `vp run`. Aborting.")
+                raise typer.Exit(1)
+            decision = answer
+        elif not sys.stdin.isatty():
+            error(allow_hint)
             raise typer.Exit(1)
-        if not Confirm.ask(
+        elif not Confirm.ask(
             f"'{workspace_path}' is not allowed for `vp run`. Would you like to allow it?",
             default=True,
         ):
             error("Directory not allowed. Aborting.")
             raise typer.Exit(1)
-        try:
-            add_allowed_dir(workspace_path)
-        except OSError as exc:
-            error(f"Could not update allow list for '{workspace_path}': {exc}")
-            raise typer.Exit(1) from exc
+        if decision == "allow_always":
+            try:
+                add_allowed_dir(workspace_path)
+            except OSError as exc:
+                error(f"Could not update allow list for '{workspace_path}': {exc}")
+                raise typer.Exit(1) from exc
+        else:
+            warning(f"'{workspace_path}' allowed for this run only; not added to the allow list.")
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
@@ -640,7 +763,12 @@ def run(
 
     network_name = str(config.get("network", "vibepod-network"))
     manager.ensure_network(network_name)
-    extra_network = network or _maybe_select_network(workspace_path, manager, network_name)
+    extra_network = network or _maybe_select_network(
+        workspace_path,
+        manager,
+        network_name,
+        acp_channel=acp_channel,
+    )
 
     agent_auto_pull = agent_cfg.get("auto_pull")
     auto_pull_enabled = (
@@ -910,6 +1038,8 @@ def run(
         nonlocal acp_started
         container.start()
         acp_started = True
+        if acp_channel is not None:
+            acp_channel.mark_handed_over()
         # The pre-start inspect carries no network settings yet.
         container.reload()
         _wire_started_container()
@@ -969,6 +1099,7 @@ def run(
                 container,
                 on_attached=_finish_acp_launch,
                 auto_remove=auto_remove,
+                initial_stdin=acp_channel.take_replay() if acp_channel is not None else b"",
             )
         else:
             output_tail = manager.attach_interactive(container, logger=logger)

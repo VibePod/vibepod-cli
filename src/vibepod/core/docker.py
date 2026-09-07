@@ -1053,6 +1053,7 @@ class DockerManager:
         logger: Any = None,
         on_attached: Any = None,
         auto_remove: bool = False,
+        initial_stdin: bytes = b"",
     ) -> int:
         """Attach local stdin/stdout to a container without a TTY (ACP mode).
 
@@ -1063,6 +1064,8 @@ class DockerManager:
         Returns the container's exit code, also when the container was
         stopped by the SIGINT/SIGTERM handling. ``auto_remove`` must match the
         container's AutoRemove setting so the exit code survives its removal.
+        ``initial_stdin`` is written to the container first: the client bytes
+        the ACP handshake already read from our stdin (see ``core.acp``).
         """
         try:
             sock_wrapper = self.client.api.attach_socket(
@@ -1106,6 +1109,11 @@ class DockerManager:
             # JSON-RPC frames immediately once the entrypoint runs, so the
             # caller starts the container only after the attach is in place.
             on_attached()
+        if initial_stdin:
+            # Sent after start so the adapter's stdin pipe exists to hold it;
+            # the loop below continues from wherever the handshake stopped
+            # reading our stdin.
+            sock.sendall(initial_stdin)
         stdin_fd = None
         if sys.stdin is not None and not sys.stdin.closed:
             try:

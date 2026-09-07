@@ -160,6 +160,7 @@ class _FakeStreamSocket:
     def __init__(self, chunks: list[bytes]) -> None:
         self._chunks = list(chunks)
         self.shutdown_calls: list[int] = []
+        self.sent: list[bytes] = []
 
     def recv(self, _size: int) -> bytes:
         if self._chunks:
@@ -170,7 +171,7 @@ class _FakeStreamSocket:
         self.shutdown_calls.append(how)
 
     def sendall(self, data: bytes) -> None:
-        del data
+        self.sent.append(data)
 
 
 class _FakeSocketWrapper:
@@ -220,6 +221,8 @@ def _run_attach_stdio(
     client: _AttachClient | None = None,
     container: Any = None,
     auto_remove: bool = False,
+    on_attached: Any = None,
+    initial_stdin: bytes = b"",
 ) -> tuple[bytes, bytes, int]:
     import types
 
@@ -257,8 +260,38 @@ def _run_attach_stdio(
     exit_code = manager.attach_stdio(
         container if container is not None else _AttachContainer(),
         auto_remove=auto_remove,
+        on_attached=on_attached,
+        initial_stdin=initial_stdin,
     )
     return out.getvalue(), err.getvalue(), exit_code
+
+
+def test_attach_stdio_replays_initial_stdin_only_after_the_container_starts(
+    monkeypatch,
+) -> None:
+    client = _AttachClient([])
+    sock = client.wrapper._sock
+    sent_at_start: list[list[bytes]] = []
+
+    def _start() -> None:
+        sent_at_start.append(list(sock.sent))
+
+    _run_attach_stdio(
+        monkeypatch,
+        [],
+        client=client,
+        on_attached=_start,
+        initial_stdin=b'{"method":"initialize"}\n',
+    )
+
+    assert sent_at_start == [[]]
+    assert sock.sent == [b'{"method":"initialize"}\n']
+
+
+def test_attach_stdio_sends_nothing_without_initial_stdin(monkeypatch) -> None:
+    client = _AttachClient([])
+    _run_attach_stdio(monkeypatch, [], client=client)
+    assert client.wrapper._sock.sent == []
 
 
 def test_attach_stdio_demuxes_split_frames(monkeypatch) -> None:
