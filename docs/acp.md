@@ -32,8 +32,12 @@ npx, which needs the package registry reachable through the proxy filter and
 adds startup latency: `claude` and `codex` download on every launch, `pi`
 only on the first one, because its npm cache lives in the config mount. The
 `pi` adapter is a community project, [svkozak/pi-acp](https://github.com/svkozak/pi-acp),
-that runs the `pi` installed in the image and needs pi 0.80.4 or newer. The
-claude and codex adapters bundle a copy of their agent CLI; VibePod points
+that runs the `pi` installed in the image and needs pi 0.80.4 or newer. It
+prints pi's startup info (version, skills, prompts) into the first session;
+`quietStartup: true` in pi's settings silences it (pi's settings live under
+`~/.config/vibepod/agents/pi/.pi/agent/` on the host, or in
+`<project>/.pi/settings.json`). The claude and codex adapters bundle a copy
+of their agent CLI; VibePod points
 them at the image's own binary instead
 (`CLAUDE_CODE_EXECUTABLE` and `CODEX_PATH`), so the version the image pins is
 the one that runs, and an optional platform package that npm skipped does not
@@ -127,9 +131,20 @@ through the AI Assistant plugin. In AI Chat, open the **More** menu and select
 }
 ```
 
-Select **VibePod Claude** in AI Chat. Use **Get ACP Logs** from the AI Chat
-**More** menu for diagnostics. It asks the allow-dir and compose-network
-questions as forms in the chat, since it advertises form elicitation.
+Add one entry per agent you want to use; they appear under **Agents** in the
+chat's agent picker next to the built-in ones:
+
+![PyCharm agent picker listing VibePod Claude, Codex and Pi](assets/acp-pycharm-agents.png)
+
+Select an entry in AI Chat. The agent works on the project through the
+path-parity mount, so file paths in its answers are the host paths PyCharm
+knows:
+
+![VibePod Claude answering a question about main.py in PyCharm](assets/acp-pycharm-claude.png)
+
+Use **Get ACP Logs** from the AI Chat **More** menu for diagnostics. PyCharm
+asks the allow-dir and compose-network questions as forms in the chat, since
+it advertises form elicitation.
 
 !!! warning "JetBrains IDEs do not currently support ACP agents through WSL"
 
@@ -189,6 +204,11 @@ remember" adds the directory to the allow list, "Allow this run only" mounts
 it without persisting, "Do not allow" aborts. The bytes read from the editor
 during this exchange are replayed into the container once it starts, so the
 adapter still answers the untouched `initialize` itself.
+
+![The allow-dir question rendered as a form in PyCharm's chat](assets/acp-pycharm-allow-dir.png)
+
+The form appears when the chat opens, not when you send the first prompt:
+editors create the ACP session as part of opening the chat.
 
 Editors that do not advertise `clientCapabilities.elicitation.form` fall back
 to the non-interactive behaviour: the allow-dir check aborts with the
