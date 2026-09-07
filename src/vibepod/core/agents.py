@@ -265,6 +265,34 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         preview=True,
         web_container_port=3081,
     ),
+    "hermes": AgentSpec(
+        "hermes",
+        "nousresearch",
+        DEFAULT_IMAGES["hermes"],
+        "hermes",
+        ["hermes"],
+        "/config",
+        # Hermes derives every durable path from $HERMES_HOME (config.yaml,
+        # .env, provider credentials, state.db, skills/, plugins/). It defaults
+        # to $HOME/.hermes, but is set explicitly so the state stays on the
+        # persisted mount even after gosu re-derives HOME from the passwd entry.
+        {"HOME": "/config", "HERMES_HOME": "/config/.hermes"},
+        ikwid_args=["--yolo"],
+        # Hermes talks to providers through the OpenAI SDK and reads these two
+        # variables directly (agent/auxiliary_client.py).
+        llm_env_map={
+            "base_url": "OPENAI_BASE_URL",
+            "api_key": "OPENAI_API_KEY",
+        },
+        llm_model_args=["-m"],
+        # `-z/--oneshot` takes the prompt as its value, and task.py emits
+        # base_command + ikwid_prefix + headless_prefix + [prompt], which yields
+        # `hermes --yolo -z "<prompt>"` — the prompt lands in -z's value slot and
+        # --yolo is never swallowed by it.
+        headless_prefix=["-z"],
+        # Hermes is pre-1.0 and its PyPI release line trails upstream main.
+        preview=True,
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

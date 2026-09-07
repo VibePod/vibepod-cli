@@ -384,3 +384,37 @@ def test_alias_forwards_overlay_flags(monkeypatch) -> None:
     assert called["no_overlay"] is True
     assert called["rebuild_overlay"] is True
     assert called["passthrough"] == []
+
+
+def test_hermes_shortcut_runs_hermes(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["h"])
+    assert result.exit_code == 0
+    assert called["agent"] == "hermes"
+    assert called["passthrough"] == []
+
+
+def test_hermes_nous_alias_is_forwarded_to_run(monkeypatch) -> None:
+    """`vp run nous` forwards the alias verbatim; `run` resolves it itself.
+
+    Matches the existing `vibe` / `deepseek` aliases: they are accepted as an
+    argument to `run`, not registered as top-level commands. The alias-to-agent
+    mapping is covered by `resolve_agent_name` in test_agents.py.
+    """
+    called: dict[str, object] = {"agent": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["run", "nous"])
+    assert result.exit_code == 0
+    assert called["agent"] == "nous"

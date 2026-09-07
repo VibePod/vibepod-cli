@@ -134,10 +134,37 @@ def test_dsh_spec_matches_container_contract() -> None:
     assert int(spec.extra_env["VIBEPOD_WEB_FORWARD_PORT"]) == spec.web_container_port
 
 
-def test_only_dsh_is_preview() -> None:
+def test_hermes_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("hermes")
+    assert spec.id == "hermes"
+    assert spec.provider == "nousresearch"
+    assert spec.image == DEFAULT_IMAGES["hermes"]
+    assert spec.config_subdir == "hermes"
+    assert spec.command == ["hermes"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env["HOME"] == "/config"
+    assert spec.extra_env["HERMES_HOME"] == "/config/.hermes"
+    assert spec.ikwid_args == ["--yolo"]
+    assert spec.headless_prefix == ["-z"]
+    assert spec.headless_command is None
+    assert spec.web_container_port is None
+    assert spec.preview is True
+
+
+def test_hermes_spec_maps_openai_compatible_llm_env() -> None:
+    spec = get_agent_spec("hermes")
+    assert spec.llm_env_map == {
+        "base_url": "OPENAI_BASE_URL",
+        "api_key": "OPENAI_API_KEY",
+    }
+    assert spec.llm_model_args == ["-m"]
+
+
+def test_preview_agents_are_exactly_the_expected_set() -> None:
+    preview_agents = {"dsh", "hermes"}
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)
-        assert spec.preview is (agent == "dsh"), f"{agent} preview flag unexpected"
+        assert spec.preview is (agent in preview_agents), f"{agent} preview flag unexpected"
 
 
 def test_get_agent_spec_unknown() -> None:
@@ -158,6 +185,8 @@ def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
     assert resolve_agent_name("QWEN-CLI") == "qwen"
     assert resolve_agent_name("deepseek") == "dsh"
     assert resolve_agent_name("DEEPSEEK-HARNESS") == "dsh"
+    assert resolve_agent_name("nous") == "hermes"
+    assert resolve_agent_name("NOUS") == "hermes"
     assert resolve_agent_name("unknown") is None
 
 
