@@ -16,6 +16,22 @@ if str(SRC) not in sys.path:
 
 
 @pytest.fixture(autouse=True)
+def _reset_console_routing():
+    """Undo `route_to_stderr()` (flipped by `vp run --acp`) after each test.
+
+    The console is one shared module object; without this, stdout assertions
+    in tests that run after an ACP test become order-dependent.
+    """
+    from vibepod.utils import console as console_mod
+
+    console = console_mod.console
+    was_stderr = console.stderr
+    yield
+    console_mod.console = console
+    console.stderr = was_stderr
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_herdr_env(monkeypatch):
     """Strip herdr pane env so tests are hermetic.
 

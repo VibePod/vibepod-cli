@@ -96,6 +96,13 @@ def run_command(
             help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
         ),
     ] = False,
+    acp: Annotated[
+        bool,
+        typer.Option(
+            "--acp",
+            help="Run as an Agent Client Protocol (ACP) adapter for ACP-capable editors",
+        ),
+    ] = False,
     profile: Annotated[
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
@@ -116,6 +123,7 @@ def run_command(
         network=network,
         paste_images=paste_images,
         ikwid=ikwid,
+        acp=acp,
         profile=profile,
         passthrough_args=_context_args(ctx),
     )
@@ -200,6 +208,13 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
                 help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
             ),
         ] = False,
+        acp: Annotated[
+            bool,
+            typer.Option(
+                "--acp",
+                help="Run as an Agent Client Protocol (ACP) adapter for ACP-capable editors",
+            ),
+        ] = False,
         profile: Annotated[
             str | None,
             typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
@@ -219,6 +234,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             network=network,
             paste_images=paste_images,
             ikwid=ikwid,
+            acp=acp,
             profile=profile,
             passthrough_args=_context_args(ctx),
         )
