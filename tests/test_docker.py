@@ -223,6 +223,7 @@ def _run_attach_stdio(
     auto_remove: bool = False,
     on_attached: Any = None,
     initial_stdin: bytes = b"",
+    select_script: list[Any] | None = None,
 ) -> tuple[bytes, bytes, int]:
     import types
 
@@ -246,8 +247,10 @@ def _run_attach_stdio(
 
     select_calls: list[list[Any]] = []
 
-    def _fake_select(readers, writ, exc):
+    def _fake_select(readers, writ, exc, timeout=None):
         select_calls.append(list(readers))
+        if select_script:
+            return select_script.pop(0)(readers)
         # Always report the stream socket ready; recv() returns b"" once the
         # scripted chunks are drained, which ends the attach loop.
         return ([readers[0]], [], [])
@@ -286,6 +289,26 @@ def test_attach_stdio_replays_initial_stdin_only_after_the_container_starts(
 
     assert sent_at_start == [[]]
     assert sock.sent == [b'{"method":"initialize"}\n']
+
+
+def test_attach_stdio_names_the_silence_once_when_the_adapter_says_nothing(
+    monkeypatch,
+) -> None:
+    from vibepod.utils import console as console_mod
+
+    warnings: list[str] = []
+    monkeypatch.setattr(console_mod, "warning", warnings.append)
+    frame = b"\x01\x00\x00\x00\x00\x00\x00\x02{}"
+    client = _AttachClient([frame])
+    # Two select timeouts, then the socket delivers a frame, then EOF.
+    script = [lambda r: ([], [], []), lambda r: ([], [], []), lambda r: ([r[0]], [], [])]
+
+    out, _, _ = _run_attach_stdio(monkeypatch, [frame], client=client, select_script=script)
+
+    assert out == b"{}"
+    assert len(warnings) == 1
+    assert "no output from the adapter" in warnings[0]
+    assert "docker logs abc123" in warnings[0]
 
 
 def test_attach_stdio_sends_nothing_without_initial_stdin(monkeypatch) -> None:

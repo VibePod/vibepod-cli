@@ -48,7 +48,10 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "claude",
         ["claude"],
         "/claude",
-        {"CLAUDE_CONFIG_DIR": "/claude"},
+        # CLAUDE_CODE_EXECUTABLE: the ACP adapter drives the image's Claude
+        # Code instead of the copy bundled with its agent SDK (same reason as
+        # CODEX_PATH below, and it keeps the version the image pins).
+        {"CLAUDE_CONFIG_DIR": "/claude", "CLAUDE_CODE_EXECUTABLE": "/usr/local/bin/claude"},
         ikwid_args=["--dangerously-skip-permissions"],
         llm_env_map={
             "base_url": "ANTHROPIC_BASE_URL",
@@ -151,7 +154,10 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "codex",
         ["codex"],
         "/config",
-        {"HOME": "/config"},
+        # CODEX_PATH: the ACP adapter runs the image's codex instead of the
+        # @openai/codex copy it bundles, whose optional platform package is
+        # not always installed by npx (a missing one aborts the launch).
+        {"HOME": "/config", "CODEX_PATH": "/usr/local/bin/codex"},
         ikwid_args=["--dangerously-bypass-approvals-and-sandbox"],
         llm_env_map={
             "base_url": "CODEX_OSS_BASE_URL",
@@ -169,6 +175,10 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config", "PI_CODING_AGENT_DIR": "/config/.pi/agent"},
         ikwid_args=["--approve"],
+        # Community adapter (svkozak/pi-acp) that runs the image's `pi`. npx
+        # uses a pre-installed copy when the image ships one and fetches it
+        # otherwise; the fetch is cached in the config mount (HOME=/config).
+        acp_command=["npx", "-y", "pi-acp"],
     ),
     "agy": AgentSpec(
         "agy",

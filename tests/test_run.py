@@ -2939,7 +2939,7 @@ def test_acp_unsupported_agent_aborts(monkeypatch, _acp_env) -> None:
     monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
 
     with pytest.raises(typer.Exit) as exc:
-        run_cmd.run(agent="pi", workspace=_acp_env, acp=True)
+        run_cmd.run(agent="tau", workspace=_acp_env, acp=True)
 
     assert exc.value.exit_code == 1
     assert "command" not in captured

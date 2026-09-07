@@ -71,6 +71,10 @@ _PODMAN_HINT = (
 #: Image namespace owned by vibepod; the only one auto_clean ever sweeps.
 IMAGE_NAMESPACE = "vibepod"
 
+#: ACP mode: seconds without any adapter output before attach_stdio explains
+#: the silence on stderr.
+_ACP_FIRST_OUTPUT_WARN_SECONDS = 30
+
 # How much trailing container output attach_interactive keeps for post-exit
 # inspection (resume hints appear in the last few lines of a session).
 ATTACH_TAIL_LIMIT = 64 * 1024
@@ -1142,7 +1146,13 @@ class DockerManager:
         except ValueError:  # pragma: no cover - not in main thread (tests)
             old_sigterm = old_sigint = None
 
+        from vibepod.utils.console import warning
+
         buffer = b""
+        # Until the adapter says anything the editor sits on a pending
+        # initialize with no visible reason; after a while, name the usual
+        # cause on stderr (the editor's ACP log) once.
+        first_output_deadline: float | None = time.monotonic() + _ACP_FIRST_OUTPUT_WARN_SECONDS
         try:
             while True:
                 if stop_requested:
@@ -1150,12 +1160,27 @@ class DockerManager:
                 readers: list[Any] = [sock]
                 if stdin_fd is not None:
                     readers.append(sys.stdin)
-                ready, _, _ = select.select(readers, [], [])
+                timeout: float | None = None
+                if first_output_deadline is not None:
+                    timeout = max(0.0, first_output_deadline - time.monotonic())
+                ready, _, _ = select.select(readers, [], [], timeout)
+                if not ready:
+                    if first_output_deadline is None:
+                        continue
+                    first_output_deadline = None
+                    warning(
+                        f"ACP: no output from the adapter after {_ACP_FIRST_OUTPUT_WARN_SECONDS}s; "
+                        "the editor is still waiting on initialize. For claude and codex the "
+                        "adapter is fetched with npx on every launch, so check "
+                        f"`docker logs {getattr(container, 'name', container.id)}`.",
+                    )
+                    continue
 
                 if sock in ready:
                     data = sock.recv(65536)
                     if not data:
                         break
+                    first_output_deadline = None
                     buffer += data
                     # Docker (no TTY) frames each stream chunk with an 8-byte
                     # header: stream byte, 3 padding bytes, 4-byte big-endian

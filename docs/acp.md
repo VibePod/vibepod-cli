@@ -10,7 +10,7 @@ metric collection — stays active.
 
 ## Supported agents
 
-Nine agents ship an ACP adapter command. They split into two kinds, which
+Ten agents ship an ACP adapter command. They split into two kinds, which
 differ in what has to happen before the first JSON-RPC frame:
 
 | Agent      | Adapter                                     |
@@ -24,11 +24,21 @@ differ in what has to happen before the first JSON-RPC frame:
 | `devstral` | `vibe-acp` — separate binary in the image    |
 | `claude`   | `npx @agentclientprotocol/claude-agent-acp`  |
 | `codex`    | `npx @agentclientprotocol/codex-acp`         |
+| `pi`       | `npx pi-acp` — community adapter             |
 
 The first seven run a binary that is already in the image, so they start
-offline and immediately. `claude` and `codex` fetch their adapter over the
-network on every launch, which adds startup latency and needs the package
-registry reachable through the proxy filter.
+offline and immediately. `claude`, `codex` and `pi` fetch their adapter with
+npx, which needs the package registry reachable through the proxy filter and
+adds startup latency: `claude` and `codex` download on every launch, `pi`
+only on the first one, because its npm cache lives in the config mount. The
+`pi` adapter is a community project, [svkozak/pi-acp](https://github.com/svkozak/pi-acp),
+that runs the `pi` installed in the image and needs pi 0.80.4 or newer. The
+claude and codex adapters bundle a copy of their agent CLI; VibePod points
+them at the image's own binary instead
+(`CLAUDE_CODE_EXECUTABLE` and `CODEX_PATH`), so the version the image pins is
+the one that runs, and an optional platform package that npm skipped does not
+abort the launch. Override the variable in `agents.<agent>.env` when a custom
+image installs the binary elsewhere.
 
 Other agents abort with an error listing the supported agents (you can still
 provide your own adapter via `agents.<agent>.acp_command` in the config —

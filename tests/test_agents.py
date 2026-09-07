@@ -267,6 +267,7 @@ def test_acp_commands_match_contract() -> None:
         ],
         "qwen": ["qwen", "--experimental-acp"],
         "codex": ["npx", "-y", "@agentclientprotocol/codex-acp"],
+        "pi": ["npx", "-y", "pi-acp"],
         "opencode": ["opencode", "acp"],
         "copilot": ["copilot", "--acp", "--stdio"],
         "auggie": ["auggie", "--acp"],
@@ -290,7 +291,7 @@ def test_in_image_acp_commands_extend_the_launch_command() -> None:
     Agents driven by an external adapter (npx packages, devstral's ``vibe-acp``
     console script) are exempt.
     """
-    external_adapters = {"claude", "codex", "devstral"}
+    external_adapters = {"claude", "codex", "devstral", "pi"}
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)
         if spec.acp_command is None or agent in external_adapters:
@@ -314,3 +315,9 @@ def test_opencode_spec_matches_container_contract() -> None:
     assert spec.extra_env["OPENCODE_CONFIG_DIR"] == "/config"
     assert spec.extra_env["XDG_CONFIG_HOME"] == "/config/.config"
     assert spec.extra_env["XDG_DATA_HOME"] == "/config/.local/share"
+
+
+def test_acp_adapters_drive_the_image_binaries() -> None:
+    """claude/codex adapters bundle their own CLI; the images point them at theirs."""
+    assert get_agent_spec("codex").extra_env["CODEX_PATH"] == "/usr/local/bin/codex"
+    assert get_agent_spec("claude").extra_env["CLAUDE_CODE_EXECUTABLE"] == "/usr/local/bin/claude"

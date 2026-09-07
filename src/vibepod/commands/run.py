@@ -1040,6 +1040,7 @@ def run(
         acp_started = True
         if acp_channel is not None:
             acp_channel.mark_handed_over()
+            info("ACP: container started; the adapter now answers the editor's initialize")
         # The pre-start inspect carries no network settings yet.
         container.reload()
         _wire_started_container()
