@@ -43,6 +43,19 @@ def _verbatim(match: re.Match[str]) -> str:
     return match.group(1)
 
 
+# Session titles are printed quoted because they contain spaces (Hermes prints
+# `hermes -c "my project"`). Re-emit the value quoted so the rebuilt command
+# stays a single argument after `--`.
+_QUOTED_VALUE = r'"([^"\n]+)"'
+
+
+def _with_quoted_value(prefix: str) -> Callable[[re.Match[str]], str]:
+    def _format(match: re.Match[str]) -> str:
+        return f'{prefix} "{match.group(1)}"'
+
+    return _format
+
+
 # Per-agent resume hint patterns. Hints must appear on a single line: patterns
 # only allow spaces/tabs between tokens so unrelated text on following lines is
 # never mistaken for a session identifier. Each formatter rebuilds the agent's
@@ -94,6 +107,26 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
             _with_id("--continue"),
         ),
         (re.compile(rf"{_BOUNDARY}freebuff[ \t]+--continue(?![\w-])"), _fixed("--continue")),
+    ),
+    # Hermes prints both forms on exit (hermes_cli/cli.py):
+    #   hermes --resume <session_id>
+    #   hermes -c "<session title>"
+    # The quoted pattern is listed before the bare one; build_resume_hint keeps
+    # the match with the greatest end() offset, and on the same line the quoted
+    # match ends later, so the titled form wins.
+    "hermes": (
+        (
+            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-r|--resume)[ \t]+({_TOKEN})"),
+            _with_id("--resume"),
+        ),
+        (
+            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue)[ \t]+{_QUOTED_VALUE}"),
+            _with_quoted_value("--continue"),
+        ),
+        (
+            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue)(?![\w-])"),
+            _fixed("--continue"),
+        ),
     ),
 }
 

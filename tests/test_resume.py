@@ -134,3 +134,28 @@ def test_show_resume_hint_handles_undecodable_bytes(capsys: pytest.CaptureFixtur
 
     show_resume_hint("claude", b"\xff\xfe claude --resume abc-123\r\n")
     assert "vp run claude -- --resume abc-123" in capsys.readouterr().out
+
+
+def test_detects_hermes_resume_hint() -> None:
+    output = "  hermes --resume 01JABCDEF\n"
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --resume 01JABCDEF"
+
+
+def test_detects_hermes_short_resume_hint() -> None:
+    output = "  hermes -r 01JABCDEF\n"
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --resume 01JABCDEF"
+
+
+def test_detects_hermes_quoted_continue_hint() -> None:
+    output = '  hermes -c "my project"\n'
+    assert build_resume_hint("hermes", output) == 'vp run hermes -- --continue "my project"'
+
+
+def test_detects_hermes_bare_continue_hint() -> None:
+    output = "  hermes -c\n"
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --continue"
+
+
+def test_hermes_quoted_continue_beats_bare_continue() -> None:
+    output = '  hermes -c\n  hermes -c "my project"\n'
+    assert build_resume_hint("hermes", output) == 'vp run hermes -- --continue "my project"'
