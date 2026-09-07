@@ -2986,7 +2986,6 @@ def test_acp_ignores_ikwid_with_warning(monkeypatch, _acp_env) -> None:
 
 
 @_requires_posix_workspace
-@_requires_posix_workspace
 def test_acp_replays_the_editor_initialize_into_the_container(monkeypatch, _acp_env) -> None:
     captured: dict = {}
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
@@ -3161,6 +3160,7 @@ def test_open_acp_channel_requires_a_real_stdin_fd(monkeypatch) -> None:
     os.close(read_fd)
 
 
+@_requires_posix_workspace
 def test_acp_workspace_mount_path_accepts_a_posix_workspace(tmp_path: Path) -> None:
     spec = get_agent_spec("claude")
     good = run_cmd._acp_workspace_mount_path(tmp_path / "proj", spec)
