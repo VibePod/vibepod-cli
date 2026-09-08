@@ -95,7 +95,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 
 ## Editor integration (`--acp`)
 
-`vp run <agent> --acp` turns VibePod into an [Agent Client Protocol](https://agentclientprotocol.com/) adapter, so the containerized agent appears directly in the AI panel of any editor with ACP support (e.g. [Zed](https://zed.dev/docs/ai/external-agents)) — with isolation, profiles, overlays and proxy metrics intact. Supported out of the box: `claude`, `gemini`, `qwen`, `codex`, `opencode`, `copilot`, `auggie`, `jcode`, `devstral` and `pi`.
+`vp run <agent> --acp` turns VibePod into an [Agent Client Protocol](https://agentclientprotocol.com/) adapter, so the containerized agent appears directly in the AI panel of any editor with ACP support (e.g. [Zed](https://zed.dev/docs/ai/external-agents)) — with isolation, profiles, overlays and proxy metrics intact. Supported out of the box: `claude`, `gemini`, `qwen`, `codex`, `opencode`, `copilot`, `auggie`, `jcode`, `devstral`, `hermes` and `pi`.
 
 Register `vp` as a custom/external agent server in your editor. Zed example (`settings.json`):
 

@@ -290,6 +290,11 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # `hermes --yolo -z "<prompt>"` — the prompt lands in -z's value slot and
         # --yolo is never swallowed by it.
         headless_prefix=["-z"],
+        # `hermes-acp` is a separate console script from the same wheel (like
+        # devstral's `vibe-acp`), not a flag on `hermes`, so it does not extend
+        # spec.command. The image installs the package's [acp] extra, which
+        # provides the `acp` module the adapter imports at startup.
+        acp_command=["hermes-acp"],
         # Hermes is pre-1.0 and its PyPI release line trails upstream main.
         preview=True,
     ),

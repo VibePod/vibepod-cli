@@ -1152,6 +1152,11 @@ endpoint through VibePod's LLM wiring, which maps to `OPENAI_BASE_URL` and
 vp task create hermes "summarize this repository"
 ```
 
+**Editor integration.** Hermes ships its own ACP adapter as the separate
+`hermes-acp` console script (the image installs the package's `[acp]` extra
+that the adapter needs), so `vp run hermes --acp` works in any ACP editor —
+see the [ACP docs](../acp.md).
+
 **Skills.** Hermes scans `~/.agents/skills/` only when `skills.external_dirs`
 is set in its `config.yaml` — there is no environment-variable override — so
 the image entrypoint seeds that key on first start. Skills installed via

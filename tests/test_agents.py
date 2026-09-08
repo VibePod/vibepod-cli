@@ -147,6 +147,7 @@ def test_hermes_spec_matches_container_contract() -> None:
     assert spec.ikwid_args == ["--yolo"]
     assert spec.headless_prefix == ["-z"]
     assert spec.headless_command is None
+    assert spec.acp_command == ["hermes-acp"]
     assert spec.web_container_port is None
     assert spec.preview is True
 
@@ -302,6 +303,7 @@ def test_acp_commands_match_contract() -> None:
         "auggie": ["auggie", "--acp"],
         "jcode": ["jcode", "acp"],
         "devstral": ["vibe-acp"],
+        "hermes": ["hermes-acp"],
     }
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)
@@ -320,7 +322,7 @@ def test_in_image_acp_commands_extend_the_launch_command() -> None:
     Agents driven by an external adapter (npx packages, devstral's ``vibe-acp``
     console script) are exempt.
     """
-    external_adapters = {"claude", "codex", "devstral", "pi"}
+    external_adapters = {"claude", "codex", "devstral", "pi", "hermes"}
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)
         if spec.acp_command is None or agent in external_adapters:
