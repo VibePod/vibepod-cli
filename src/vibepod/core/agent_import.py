@@ -227,11 +227,14 @@ def plan_import(
     dest_root: Path,
     categories: frozenset[Category] | set[Category],
     entries: tuple[ImportEntry, ...] | None = None,
+    unclassified_roots: tuple[str, ...] | None = None,
 ) -> ImportPlan:
     """Resolve *agent*'s entries under *source_root* into a concrete plan.
 
     Pure: reads the filesystem, writes nothing. *entries* overrides the table,
-    which is how a profile-to-profile copy reuses the same classification.
+    which is how a profile-to-profile copy reuses the same classification;
+    *unclassified_roots* overrides where unmapped files are looked for, which a
+    profile copy needs because its entries no longer name the host dotdirs.
     """
     resolved_entries = entries if entries is not None else agent_import_entries(agent)
     files: list[PlannedFile] = []
@@ -265,7 +268,11 @@ def plan_import(
             if dest.exists():
                 conflicts.append(planned)
 
-    unclassified = _unclassified(agent, source_root, claimed)
+    if unclassified_roots is None:
+        roots = tuple(entry.source.split("/")[0] for entry in resolved_entries)
+    else:
+        roots = unclassified_roots
+    unclassified = _unclassified(source_root, roots, claimed)
     return ImportPlan(agent, source_root, dest_root, files, skipped, conflicts, unclassified)
 
 
@@ -311,12 +318,11 @@ def apply_import(plan: ImportPlan, *, force: bool) -> ImportResult:
     return ImportResult(copied, failed)
 
 
-def _unclassified(agent: str, source_root: Path, claimed: set[Path]) -> list[Path]:
-    """Files under the agent's source roots that no entry claimed."""
-    roots: set[Path] = set()
-    for entry in agent_import_entries(agent):
-        top = entry.source.split("/")[0]
-        roots.add(source_root / top)
+def _unclassified(
+    source_root: Path, relative_roots: tuple[str, ...], claimed: set[Path]
+) -> list[Path]:
+    """Files under *relative_roots* that no entry claimed."""
+    roots = {source_root / relative for relative in relative_roots}
     found: list[Path] = []
     for root in sorted(roots):
         for path in _iter_files(root):
