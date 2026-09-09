@@ -61,8 +61,15 @@ API: send a `pane.report_agent` JSON request over the unix socket at
 
 ## Limitations
 
-- Windows hosts are skipped: herdr uses named pipes there, which cannot be
-  bind-mounted into Linux containers.
+- Windows hosts are skipped entirely: herdr uses named pipes there (not a
+  filesystem Unix socket), so neither the container wiring nor the host-side
+  pane report works; `vp run` simply runs without herdr integration.
+- Podman on macOS runs the engine inside a VM and shares host paths over
+  virtiofs, which does not carry socket inodes — the socket mount fails
+  outright there. VibePod skips the container wiring on such engines and only
+  reports the `vp:<agent>` pane identity from the host, so the agent still
+  appears in herdr but without working/blocked/idle transitions. (On Windows
+  even this host-side report is unavailable, for the named-pipe reason above.)
 - Shell/JavaScript hooks need `node` in the agent image or a `herdr` binary
   that can run inside the container. Tau instead uses its installed Python
   runtime. Homebrew-on-Linux and musl-linked host binaries may not run in stock

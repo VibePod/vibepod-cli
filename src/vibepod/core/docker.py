@@ -264,6 +264,22 @@ class DockerManager:
                 ) from retry_exc
 
         self._rootless_podman: bool | None = None
+        self._podman: bool | None = None
+
+    def is_podman(self) -> bool:
+        """Return True when the Docker-compatible engine is Podman."""
+        cached = getattr(self, "_podman", None)
+        if isinstance(cached, bool):
+            return cached
+
+        try:
+            version = self.client.version()
+        except (APIError, DockerException, AttributeError):
+            self._podman = False
+            return False
+
+        self._podman = _version_is_podman(version)
+        return self._podman
 
     def is_rootless_podman(self) -> bool:
         """Return True for a rootless Podman engine exposed through the Docker API."""
@@ -273,7 +289,6 @@ class DockerManager:
 
         try:
             info = self.client.info()
-            version = self.client.version()
         except (APIError, DockerException, AttributeError):
             self._rootless_podman = False
             return False
@@ -287,8 +302,20 @@ class DockerManager:
             isinstance(security_options, list)
             and any(str(option).lower() == "name=rootless" for option in security_options)
         )
-        self._rootless_podman = rootless and _version_is_podman(version)
+        self._rootless_podman = rootless and self.is_podman()
         return self._rootless_podman
+
+    def supports_host_socket_mounts(self) -> bool:
+        """Return True when a host unix socket can be bind-mounted into a container.
+
+        Podman off Linux always runs the engine inside a VM and reaches host
+        paths through a virtiofs share, which does not carry socket inodes: the
+        bind fails with ``make volume mountpoint for volume …: operation not
+        supported`` and takes the whole run down with it (issue #170).
+        """
+        if sys.platform.startswith("linux"):
+            return True
+        return not self.is_podman()
 
     def _pull_image_with_progress(self, image: str) -> None:
         from rich.progress import (

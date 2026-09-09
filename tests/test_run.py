@@ -879,6 +879,69 @@ def test_run_publish_flag_rejects_invalid_entry(monkeypatch, _tmp_config_root) -
     assert stub.run_kwargs is None
 
 
+class _NoSocketMountManager(_PortCapturingManager):
+    """Engine that cannot bind-mount a host unix socket (Podman in a VM)."""
+
+    def supports_host_socket_mounts(self) -> bool:
+        return False
+
+
+def _run_in_herdr_pane(monkeypatch, workspace: Path, stub) -> dict:
+    """Invoke `vp run` as if inside a herdr pane, returning the wiring calls."""
+    calls: dict = {}
+
+    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+        calls["mount_socket"] = mount_socket
+        # what apply_herdr_if_enabled returns when the socket cannot be mounted
+        return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
+
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+    monkeypatch.setattr(run_cmd, "_reexec_with_herdr_hint", lambda *a, **kw: None)
+    monkeypatch.setattr(run_cmd, "_herdr_pane_reporting_enabled", lambda *a, **kw: True)
+    monkeypatch.setattr(run_cmd, "_apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(
+        run_cmd,
+        "_report_herdr_metadata",
+        lambda agent: calls.setdefault("reported", agent),
+    )
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "claude", "-w", str(workspace), "--detach"])
+    assert result.exit_code == 0, result.output
+    return calls
+
+
+def test_run_skips_herdr_socket_mount_on_vm_backed_engine(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _NoSocketMountManager()
+
+    calls = _run_in_herdr_pane(monkeypatch, workspace, stub)
+
+    assert calls["mount_socket"] is False
+    assert stub.run_kwargs is not None
+    assert all(dest != "/herdr/herdr.sock" for _, dest, _ in stub.run_kwargs["extra_volumes"])
+    # host-side pane identity survives: it never goes through the container
+    assert calls["reported"] == "claude"
+    assert stub.run_kwargs["extra_labels"]["vibepod.herdr.pane"] == "pane-1"
+
+
+def test_run_mounts_herdr_socket_on_native_engine(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+
+    calls = _run_in_herdr_pane(monkeypatch, workspace, stub)
+
+    assert calls["mount_socket"] is True
+    assert stub.run_kwargs is not None
+    assert any(dest == "/herdr/herdr.sock" for _, dest, _ in stub.run_kwargs["extra_volumes"])
+
+
 def test_run_agent_is_rootless_podman_detects_podman_engine() -> None:
     client = _EngineClient(
         {"Rootless": True, "SecurityOptions": ["name=rootless"]},
@@ -915,6 +978,41 @@ def test_run_agent_is_rootless_podman_requires_rootless_podman_evidence(
     manager.client = client  # type: ignore[assignment]
 
     assert manager.is_rootless_podman() is False
+
+
+@pytest.mark.parametrize(
+    ("platform", "version", "expected"),
+    [
+        # Podman off Linux is VM-backed: host paths arrive over virtiofs, which
+        # cannot carry the herdr socket (issue #170).
+        ("darwin", {"Components": [{"Name": "Podman Engine"}]}, False),
+        ("win32", {"Components": [{"Name": "Podman Engine"}]}, False),
+        ("linux", {"Components": [{"Name": "Podman Engine"}]}, True),
+        ("darwin", {"Components": [{"Name": "Docker Engine"}]}, True),
+    ],
+)
+def test_supports_host_socket_mounts(
+    monkeypatch,
+    platform: str,
+    version: dict,
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(sys, "platform", platform)
+    manager = object.__new__(DockerManager)
+    manager.client = _EngineClient({}, version)  # type: ignore[assignment]
+
+    assert manager.supports_host_socket_mounts() is expected
+
+
+def test_supports_host_socket_mounts_assumes_docker_when_engine_is_silent(monkeypatch) -> None:
+    class _NoVersionClient:
+        pass
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    manager = object.__new__(DockerManager)
+    manager.client = _NoVersionClient()  # type: ignore[assignment]
+
+    assert manager.supports_host_socket_mounts() is True
 
 
 def test_run_agent_is_rootless_podman_treats_sdk_failures_as_false() -> None:

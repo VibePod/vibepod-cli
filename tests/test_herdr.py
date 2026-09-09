@@ -376,6 +376,44 @@ def test_apply_wires_codex_notify(monkeypatch, tmp_path: Path) -> None:
     assert (config_dir / ".codex" / "config.toml").is_file()
 
 
+def test_apply_skips_wiring_when_socket_mounts_unsupported(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    _activate(monkeypatch, tmp_path)
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+
+    volumes, env = herdr.apply_herdr_if_enabled(
+        "claude",
+        config_dir,
+        {},
+        no_herdr=False,
+        mount_socket=False,
+    )
+
+    assert (volumes, env) == ([], {})
+    # no dead hook files left behind: they could only report through the socket
+    assert not (config_dir / "hooks" / "herdr-agent-state.sh").exists()
+    assert "cannot bind-mount the herdr socket" in capsys.readouterr().out
+
+
+def test_pane_reporting_enabled_ignores_socket_mount_support(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _activate(monkeypatch, tmp_path)
+    assert herdr.pane_reporting_enabled({}, no_herdr=False) is True
+    assert herdr.pane_reporting_enabled({}, no_herdr=True) is False
+    assert herdr.pane_reporting_enabled({"herdr": False}, no_herdr=False) is False
+
+
+def test_pane_reporting_disabled_outside_herdr(monkeypatch) -> None:
+    monkeypatch.delenv("HERDR_ENV", raising=False)
+    assert herdr.pane_reporting_enabled({}, no_herdr=False) is False
+
+
 def test_apply_warns_without_binary(monkeypatch, tmp_path: Path, capsys) -> None:
     _activate(monkeypatch, tmp_path, with_binary=False)
     config_dir = tmp_path / "cfg"
