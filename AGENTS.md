@@ -13,9 +13,13 @@ entry in `src/vibepod/core/agents.py` (mount contract must match the
 vibepod-agents image entrypoint; set `acp_command` when the agent ships an
 ACP adapter, see `docs/acp.md`), the per-agent defaults in
 `src/vibepod/core/config.py`, skills paths in
-`src/vibepod/commands/run.py::_agent_skill_paths`, and the docs + tests
+`src/vibepod/commands/run.py::_agent_skill_paths`, the `IMPORT_SPECS` entry in
+`src/vibepod/core/agent_import.py` (host config paths per category; destinations
+must match the same mount contract, and `scripts/check_import_docs.py` gates
+`docs/import.md`), and the docs + tests
 (`docs/agents/index.md`, `README.md`, `docs/quickstart.md`, `docs/index.md`,
-`docs/configuration.md`, `tests/test_{agents,cli,constants,run,task_cmd}.py`).
+`docs/configuration.md`, `docs/import.md`,
+`tests/test_{agents,cli,constants,run,task_cmd,agent_import}.py`).
 The local-image fallback (`VP_IMAGE_<AGENT>` override + pull-failure fallback
 in `run.py`/`task.py`) is how an unreleased image is exercised locally.
 
