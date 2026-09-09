@@ -302,3 +302,10 @@ def test_host_path_warnings_ignores_binaries_and_clean_config(tmp_path: Path) ->
     (tmp_path / "blob.bin").write_bytes(b"\x00\xff/Users/x")
 
     assert host_path_warnings([tmp_path / "clean.json", tmp_path / "blob.bin"]) == []
+
+
+def test_docs_table_matches_the_import_map() -> None:
+    """docs/import.md lists every agent; the CI script enforces the detail."""
+    docs = (Path(__file__).resolve().parents[1] / "docs" / "import.md").read_text()
+    for agent in SUPPORTED_AGENTS:
+        assert f"`{agent}`" in docs, f"docs/import.md does not mention {agent}"

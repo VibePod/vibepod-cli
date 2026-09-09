@@ -25,6 +25,9 @@ jobs:
       - name: Validate default images
         run: python scripts/check_default_images.py
 
+      - name: Validate import docs
+        run: python scripts/check_import_docs.py
+
   tests:
     runs-on: ${{ matrix.os }}
     strategy:

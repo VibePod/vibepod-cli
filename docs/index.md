@@ -36,6 +36,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 - [**Quickstart**](quickstart.md) — install and run your first agent in two minutes.
 - [**Development**](development.md) — local setup, tests, and docs workflow.
 - [**Agents**](agents/index.md) — per-agent setup and credential instructions.
+- [**Importing an existing setup**](import.md) — bring a host Claude Code, opencode or Codex install into a profile.
 - [**Configuration**](configuration.md) — full reference for global and project-level config.
 - [**Editor integration (ACP)**](acp.md) — run VibePod agents in ACP-capable editors (Zed & co.).
 - [**CLI Reference**](cli-reference.md) — every command and flag.
