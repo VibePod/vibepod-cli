@@ -271,12 +271,17 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         DEFAULT_IMAGES["hermes"],
         "hermes",
         ["hermes"],
-        "/config",
-        # Hermes derives every durable path from $HERMES_HOME (config.yaml,
-        # .env, provider credentials, state.db, skills/, plugins/). It defaults
-        # to $HOME/.hermes, but is set explicitly so the state stays on the
-        # persisted mount even after gosu re-derives HOME from the passwd entry.
-        {"HOME": "/config", "HERMES_HOME": "/config/.hermes"},
+        # The image is built on the official nousresearch/hermes-agent image,
+        # whose state volume is /opt/data — config.yaml, .env, credentials,
+        # sessions, skills and memories all live there, and the base image
+        # bakes both HOME and HERMES_HOME to it. VibePod therefore mounts the
+        # agent config directory at /opt/data and sets neither variable.
+        "/opt/data",
+        # Host-UID mapping goes through USER_UID/USER_GID, which VibePod
+        # already exports and the image's 00-vibepod-uid cont-init hook
+        # forwards as HERMES_UID/HERMES_GID. Do not set run_as_host_user:
+        # the base image rejects `docker run --user <uid>`.
+        {},
         ikwid_args=["--yolo"],
         # Hermes talks to providers through the OpenAI SDK and reads these two
         # variables directly (agent/auxiliary_client.py).

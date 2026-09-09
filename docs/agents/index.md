@@ -1136,15 +1136,17 @@ of scope.
 `vp run hermes` starts the classic Python REPL. The Ink TUI is available with
 `vp run hermes -- --tui`.
 
-> The default `vibepod/hermes` image pins an exact PyPI version, which trails
-> upstream's git main. Hermes is pre-1.0, so `vp run` and `vp task` print a
-> developer-preview warning.
+> The default `vibepod/hermes` image is built on the official
+> `nousresearch/hermes-agent` image and pins one of its CalVer release tags
+> (`v2026.9.7`). Upstream no longer publishes to PyPI, so the image tracks the
+> Docker release line instead. Hermes is pre-1.0, so `vp run` and `vp task`
+> print a developer-preview warning.
 
 **First run.** Hermes has no usable provider until it is given credentials. Run
 `hermes setup` once inside the container — it persists to the mounted config at
-`~/.config/vibepod/agents/hermes/.hermes/` — or pass an OpenAI-compatible
-endpoint through VibePod's LLM wiring, which maps to `OPENAI_BASE_URL` and
-`OPENAI_API_KEY`.
+`~/.config/vibepod/agents/hermes/`, which is the container's `/opt/data` state
+volume — or pass an OpenAI-compatible endpoint through VibePod's LLM wiring,
+which maps to `OPENAI_BASE_URL` and `OPENAI_API_KEY`.
 
 **Headless one-shot:**
 
@@ -1153,16 +1155,15 @@ vp task create hermes "summarize this repository"
 ```
 
 **Editor integration.** Hermes ships its own ACP adapter as the separate
-`hermes-acp` console script (the image installs the package's `[acp]` extra
-that the adapter needs), so `vp run hermes --acp` works in any ACP editor —
-see the [ACP docs](../acp.md).
+`hermes-acp` console script, which the official image already provides, so
+`vp run hermes --acp` works in any ACP editor — see the [ACP docs](../acp.md).
 
 **Skills.** Hermes scans `~/.agents/skills/` only when `skills.external_dirs`
 is set in its `config.yaml` — there is no environment-variable override — so
-the image entrypoint seeds that key on first start. Skills installed via
-`vp skills` are then mounted at `/config/.agents/skills/<id>` and picked up
-automatically. Editing `external_dirs` yourself disables the seeding; VibePod
-never overwrites a value you set.
+the image seeds that key on every start. Skills installed via `vp skills` are
+then mounted at `/opt/data/.agents/skills/<id>` and picked up automatically.
+Editing `external_dirs` yourself disables the seeding; VibePod never
+overwrites a value you set.
 
 **IKWID mode.** Hermes auto-approves tool calls in YOLO mode, which `--ikwid`
 enables via `--yolo`:

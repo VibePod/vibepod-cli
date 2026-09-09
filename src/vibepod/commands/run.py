@@ -237,9 +237,10 @@ def _agent_skill_paths(agent: str) -> list[str]:
       - jcode    reads ~/.agents/skills/ (also ~/.jcode/skills/)
       - freebuff reads ~/.agents/skills/ (also ~/.freebuff/skills/)
       - dsh      reads ~/.agents/skills/            → /config/.agents/skills/
-      - hermes   reads ~/.agents/skills/ once the image entrypoint seeds it
-        into skills.external_dirs in $HERMES_HOME/config.yaml (Hermes has no
-        env-var override for that key)  → /config/.agents/skills/
+      - hermes   reads ~/.agents/skills/ once the image seeds it into
+        skills.external_dirs in $HERMES_HOME/config.yaml (Hermes has no
+        env-var override for that key). Its state volume is the official
+        image's /opt/data, not /config  → /opt/data/.agents/skills/
       - qwen     reads ~/.qwen/skills/, which the image symlinks to /qwen/skills
         (also <project>/.qwen/skills/ in the workspace)
 
@@ -253,7 +254,9 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/config/.pi/agent/skills"]
     if agent == "qwen":
         return ["/qwen/skills"]
-    if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh", "hermes"):
+    if agent == "hermes":
+        return ["/opt/data/.agents/skills"]
+    if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh"):
         return ["/config/.agents/skills"]
     return []
 

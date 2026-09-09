@@ -141,9 +141,11 @@ def test_hermes_spec_matches_container_contract() -> None:
     assert spec.image == DEFAULT_IMAGES["hermes"]
     assert spec.config_subdir == "hermes"
     assert spec.command == ["hermes"]
-    assert spec.config_mount_path == "/config"
-    assert spec.extra_env["HOME"] == "/config"
-    assert spec.extra_env["HERMES_HOME"] == "/config/.hermes"
+    # The official image's state volume; HOME and HERMES_HOME are both baked
+    # to /opt/data by the base image, so VibePod sets neither.
+    assert spec.config_mount_path == "/opt/data"
+    assert "HOME" not in spec.extra_env
+    assert "HERMES_HOME" not in spec.extra_env
     assert spec.ikwid_args == ["--yolo"]
     assert spec.headless_prefix == ["-z"]
     assert spec.headless_command is None

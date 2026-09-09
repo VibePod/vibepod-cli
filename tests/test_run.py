@@ -3335,6 +3335,7 @@ def test_resolve_acp_command_parses_string_overrides_like_a_shell() -> None:
 
 
 def test_hermes_skill_paths_use_shared_agents_dir() -> None:
+    """Hermes' skills live under the official image's /opt/data state volume."""
     from vibepod.commands.run import _agent_skill_paths
 
-    assert _agent_skill_paths("hermes") == ["/config/.agents/skills"]
+    assert _agent_skill_paths("hermes") == ["/opt/data/.agents/skills"]
