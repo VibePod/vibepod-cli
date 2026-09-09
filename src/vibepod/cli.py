@@ -11,6 +11,7 @@ from vibepod.commands import (
     attach,
     config,
     doctor,
+    import_cmd,
     list_cmd,
     logs,
     profile,
@@ -150,6 +151,7 @@ app.command(
     name="run",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )(run_command)
+app.command(name="import")(import_cmd.import_config)
 app.command(name="stop")(stop.stop)
 app.command(name="attach")(attach.attach)
 app.command(name="list")(list_cmd.list_agents)
