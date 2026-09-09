@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from collections.abc import Callable
 
 from vibepod.utils.console import console, info
@@ -44,14 +45,16 @@ def _verbatim(match: re.Match[str]) -> str:
 
 
 # Session titles are printed quoted because they contain spaces (Hermes prints
-# `hermes -c "my project"`). Re-emit the value quoted so the rebuilt command
-# stays a single argument after `--`.
+# `hermes -c "my project"`). Re-emit the value shell-quoted so the rebuilt
+# command stays a single argument after `--` when copy-pasted: titles are
+# prompt-derived and can contain `$`, backticks or backslashes that double
+# quotes would re-expand.
 _QUOTED_VALUE = r'"([^"\n]+)"'
 
 
 def _with_quoted_value(prefix: str) -> Callable[[re.Match[str]], str]:
     def _format(match: re.Match[str]) -> str:
-        return f'{prefix} "{match.group(1)}"'
+        return f"{prefix} {shlex.quote(match.group(1))}"
 
     return _format
 

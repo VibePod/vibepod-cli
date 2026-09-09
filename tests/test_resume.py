@@ -148,7 +148,7 @@ def test_detects_hermes_short_resume_hint() -> None:
 
 def test_detects_hermes_quoted_continue_hint() -> None:
     output = '  hermes -c "my project"\n'
-    assert build_resume_hint("hermes", output) == 'vp run hermes -- --continue "my project"'
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --continue 'my project'"
 
 
 def test_detects_hermes_bare_continue_hint() -> None:
@@ -156,6 +156,14 @@ def test_detects_hermes_bare_continue_hint() -> None:
     assert build_resume_hint("hermes", output) == "vp run hermes -- --continue"
 
 
+def test_hermes_quoted_continue_shell_escapes_metacharacters() -> None:
+    """Prompt-derived titles must survive a copy-paste run unchanged."""
+    output = '  hermes -c "deploy $KEY from `pwd`"\n'
+    assert build_resume_hint("hermes", output) == (
+        "vp run hermes -- --continue 'deploy $KEY from `pwd`'"
+    )
+
+
 def test_hermes_quoted_continue_beats_bare_continue() -> None:
     output = '  hermes -c\n  hermes -c "my project"\n'
-    assert build_resume_hint("hermes", output) == 'vp run hermes -- --continue "my project"'
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --continue 'my project'"

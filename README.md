@@ -208,6 +208,7 @@ VP_IMAGE_JCODE=vibepod/jcode:latest vp run jcode
 VP_IMAGE_FREEBUFF=vibepod/freebuff:latest vp run freebuff
 VP_IMAGE_QWEN=vibepod/qwen:latest vp run qwen
 VP_IMAGE_DSH=vibepod/dsh:latest vp run dsh
+VP_IMAGE_HERMES=vibepod/hermes:latest vp run hermes
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list
 ```
