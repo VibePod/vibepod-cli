@@ -1136,8 +1136,6 @@ of scope.
 `vp run hermes` starts the classic Python REPL. The Ink TUI is available with
 `vp run hermes -- --tui`.
 
-![Hermes Agent running in VibePod](../assets/hermes.png)
-
 > The default `vibepod/hermes` image is built on the official
 > `nousresearch/hermes-agent` image and pins one of its CalVer release tags
 > (`v2026.9.7`). Upstream no longer publishes to PyPI, so the image tracks the
@@ -1158,6 +1156,14 @@ prioritizes saved provider settings, does not use `OPENAI_BASE_URL` for its
 main custom-provider endpoint, and restricts API keys by endpoint host. Its
 ACP adapter also has no provider/model launch flags. Hermes-native provider
 setup remains supported; VibePod does not rewrite Hermes's saved settings.
+
+**Rootless Podman is not supported.** The pinned Hermes image needs its own
+runtime user and exits before showing any output when launched under
+rootless Podman's `keep-id` user mapping, which VibePod uses for most agents.
+On a rootless Podman engine, `vp run hermes` and `vp task create hermes`
+(affecting interactive, task, and ACP) reject the launch before
+starting a container rather than crashing mid-boot. Run Hermes on rootful
+Docker or Podman instead.
 
 **Headless one-shot:**
 

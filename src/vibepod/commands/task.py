@@ -26,6 +26,7 @@ from vibepod.core.agents import (
     get_agent_spec,
     resolve_agent_name,
     validate_llm_support,
+    validate_rootless_runtime,
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config, get_config_root
@@ -618,6 +619,11 @@ def task_create(
 
     podman_probe = getattr(manager, "is_rootless_podman", None)
     rootless_podman = bool(podman_probe()) if callable(podman_probe) else False
+    try:
+        validate_rootless_runtime(selected, rootless_podman)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     agent_userns_mode = "keep-id" if rootless_podman else None
     if rootless_podman:
         merged_env["USER_UID"] = "0"

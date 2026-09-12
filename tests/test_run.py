@@ -1348,7 +1348,7 @@ def _make_config(
     }
 
 
-@pytest.mark.parametrize("agent", SUPPORTED_AGENTS)
+@pytest.mark.parametrize("agent", [agent for agent in SUPPORTED_AGENTS if agent != "hermes"])
 def test_run_uses_keep_id_for_rootless_podman_agents(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1368,6 +1368,34 @@ def test_run_uses_keep_id_for_rootless_podman_agents(
     assert stub.run_kwargs["user"] is None
     assert env["USER_UID"] == "0"
     assert env["USER_GID"] == "0"
+
+
+@pytest.mark.parametrize("acp", [False, True])
+@pytest.mark.parametrize("agent", ["hermes", "nous"])
+def test_hermes_rejects_rootless_podman_before_provisioning(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    acp,
+    agent,
+):
+    stub = _StubDockerManager(rootless_podman=True)
+    monkeypatch.setattr(run_cmd, "get_config", _make_config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(
+        stub,
+        "ensure_network",
+        lambda name: pytest.fail("must reject before provisioning"),
+    )
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent=agent, workspace=tmp_path, acp=acp)
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    assert stub.pulled == []
+    output = capsys.readouterr()
+    assert "Hermes does not support rootless Podman" in output.out + output.err
+    if acp:
+        assert output.out == ""
 
 
 def test_run_preserves_host_user_for_non_podman_devstral(
@@ -3202,6 +3230,18 @@ def test_acp_workspace_mount_path_accepts_wsl_paths() -> None:
     # these with backslashes and the assertion would test nothing.
     for wsl_path in ("/home/you/proj", "/mnt/c/dev/proj"):
         assert run_cmd._acp_workspace_mount_path(PurePosixPath(wsl_path), spec) == wsl_path
+
+
+@pytest.mark.parametrize("workspace", ["/opt/hermes", "/opt/hermes/project", "/opt"])
+def test_hermes_acp_rejects_installation_overlap(workspace: str) -> None:
+    with pytest.raises(typer.Exit):
+        run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("hermes"))
+
+
+@pytest.mark.parametrize("agent", ["hermes", "claude"])
+def test_acp_allows_unrelated_opt_workspace(agent: str) -> None:
+    workspace = PurePosixPath("/opt/hermes-project")
+    assert run_cmd._acp_workspace_mount_path(workspace, get_agent_spec(agent)) == str(workspace)
 
 
 def test_acp_workspace_mount_path_guard(tmp_path: Path) -> None:

@@ -141,7 +141,7 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
         ),
         (
             re.compile(
-                rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue)[ \t]+{_QUOTED_VALUE}{_HERMES_SUFFIX}"
+                rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue)[ \t]+{_QUOTED_VALUE}{_HERMES_SUFFIX}",
             ),
             _with_hermes_profile(_with_quoted_value("--continue")),
         ),

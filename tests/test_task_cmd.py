@@ -160,7 +160,11 @@ def test_task_create_rejects_agent_without_headless_prefix(
 
 @pytest.mark.parametrize("agent", ["hermes", "nous"])
 def test_hermes_rejects_global_llm_before_task_creation(
-    monkeypatch, tmp_path, tmp_task_store, capsys, agent
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    capsys,
+    agent,
 ):
     cfg = _make_config()
     cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
@@ -1097,6 +1101,32 @@ def test_task_create_uses_keep_id_on_rootless_podman(monkeypatch, tmp_path, tmp_
     assert stub.run_kwargs["user"] is None
     assert stub.run_kwargs["env"]["USER_UID"] == "0"
     assert stub.run_kwargs["env"]["USER_GID"] == "0"
+
+
+@pytest.mark.parametrize("agent", ["hermes", "nous"])
+def test_task_hermes_rejects_rootless_podman_before_provisioning(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    capsys,
+    agent,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(stub, "is_rootless_podman", lambda: True, raising=False)
+    monkeypatch.setattr(
+        stub,
+        "ensure_network",
+        lambda name: pytest.fail("must reject before provisioning"),
+    )
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    with pytest.raises(typer.Exit) as exc:
+        task_cmd.task_create(agent=agent, prompt="hello", workspace=tmp_path)
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+    output = capsys.readouterr()
+    assert "Hermes does not support rootless Podman" in output.out + output.err
 
 
 def test_task_create_preserves_host_user_for_non_podman(

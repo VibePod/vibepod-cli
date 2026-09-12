@@ -343,7 +343,26 @@ def validate_llm_support(agent: str, config: dict[str, Any]) -> None:
             "Hermes does not support VibePod's global LLM wiring in the pinned image. "
             "Set llm.enabled to false in your VibePod config and use Hermes-native "
             "provider/model setup (hermes setup inside the container). "
-            "This applies to interactive, task, and ACP modes."
+            "This applies to interactive, task, and ACP modes.",
+        )
+
+
+def validate_rootless_runtime(agent: str, rootless: bool) -> None:
+    """Reject Hermes on rootless Podman before it maps the container to a UID it rejects.
+
+    Rootless Podman launches the container with ``userns_mode=keep-id``, running as
+    the invoking user's UID, and VibePod overwrites USER_UID/USER_GID with 0 for the
+    entrypoint hooks. The pinned Hermes image needs its own bootstrap/runtime user:
+    its ``main-wrapper`` exits 1 on an arbitrary non-hermes UID, and its UID-mapping
+    hook ignores 0. Launching Hermes there would fail after the container starts, so
+    reject before provisioning any network, proxy, or image.
+    """
+    if agent == "hermes" and rootless:
+        raise ValueError(
+            "Hermes does not support rootless Podman: the pinned image requires its "
+            "own runtime user and rejects the arbitrary UID that rootless keep-id "
+            "maps the container to (it also ignores a UID of 0). "
+            "Run Hermes on rootful Docker/Podman instead.",
         )
 
 
