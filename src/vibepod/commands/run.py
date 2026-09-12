@@ -624,6 +624,15 @@ def run(
 
     _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
 
+    # Reject unsupported wiring before any herdr hint or workspace processing:
+    # the allow-dir prompt below persists a workspace to the allow list, which
+    # must never happen for an agent/config this launch is about to refuse.
+    try:
+        validate_llm_support(selected_agent, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
     acp_channel: AcpClientChannel | None = None
     if acp:
         acp_channel = _open_acp_channel()
@@ -686,11 +695,6 @@ def run(
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
-    try:
-        validate_llm_support(selected_agent, config)
-    except ValueError as exc:
-        error(str(exc))
-        raise typer.Exit(1) from exc
 
     acp_workspace_mount: str | None = None
     acp_workspace_alias: str | None = None

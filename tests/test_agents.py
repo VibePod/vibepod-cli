@@ -190,8 +190,6 @@ def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
     assert resolve_agent_name("QWEN-CLI") == "qwen"
     assert resolve_agent_name("deepseek") == "dsh"
     assert resolve_agent_name("DEEPSEEK-HARNESS") == "dsh"
-    assert resolve_agent_name("nous") == "hermes"
-    assert resolve_agent_name("NOUS") == "hermes"
     assert resolve_agent_name("unknown") is None
 
 

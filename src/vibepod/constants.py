@@ -61,7 +61,6 @@ AGENT_ALIASES: dict[str, str] = {
     "qwen-cli": "qwen",
     "deepseek": "dsh",
     "deepseek-harness": "dsh",
-    "nous": "hermes",
 }
 
 IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (

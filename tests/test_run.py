@@ -1371,7 +1371,7 @@ def test_run_uses_keep_id_for_rootless_podman_agents(
 
 
 @pytest.mark.parametrize("acp", [False, True])
-@pytest.mark.parametrize("agent", ["hermes", "nous"])
+@pytest.mark.parametrize("agent", ["hermes"])
 def test_hermes_rejects_rootless_podman_before_provisioning(
     monkeypatch,
     tmp_path,
@@ -1923,7 +1923,7 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("acp", [False, True])
-@pytest.mark.parametrize("agent", ["hermes", "nous"])
+@pytest.mark.parametrize("agent", ["hermes"])
 def test_hermes_rejects_global_llm_before_docker(monkeypatch, tmp_path, capsys, acp, agent):
     cfg = _make_config()
     cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
@@ -1936,6 +1936,37 @@ def test_hermes_rejects_global_llm_before_docker(monkeypatch, tmp_path, capsys, 
     assert "Hermes does not support VibePod's global LLM wiring" in output.out + output.err
     if acp:
         assert output.out == ""
+
+
+def test_hermes_rejects_global_llm_without_persisting_workspace(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Rejecting Hermes' LLM wiring must happen before the allow-dir side effect.
+
+    With an unspecified + disallowed workspace on an interactive stdin that
+    agrees to allow the dir, the old ordering persisted the workspace to the
+    allow list and only then rejected Hermes. Validation must run first so a
+    launch this run() is about to refuse never trusts new directories.
+    """
+    allowed_added: list[str] = []
+    cfg = _make_config()
+    cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    monkeypatch.setattr(run_cmd, "is_protected_dir", lambda p: False)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(run_cmd, "add_allowed_dir", lambda p: allowed_added.append(str(p)))
+    monkeypatch.setattr(run_cmd.Confirm, "ask", lambda *a, **k: True)
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent="hermes", workspace=tmp_path, detach=True)
+
+    assert exc.value.exit_code == 1
+    assert allowed_added == []
+    output = capsys.readouterr()
+    assert "Hermes does not support VibePod's global LLM wiring" in output.out + output.err
 
 
 def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> None:

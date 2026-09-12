@@ -20,11 +20,11 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `freebuff` | CodebuffAI | `vp fb` | `vibepod/freebuff:latest` |
 | `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
 | `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
-| `hermes` (alias: `nous`) | Nous Research | `vp h` | `vibepod/hermes:latest` |
+| `hermes` | Nous Research | `vp h` | `vibepod/hermes:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`, `vp run qwen-cli`
-resolves to `vp run qwen`, `vp run deepseek` / `vp run deepseek-harness`
-resolve to `vp run dsh`, and `vp run nous` resolves to `vp run hermes`.
+resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
+resolve to `vp run dsh`.
 
 ## DeepSeek Harness (`dsh`) — Web UI agent
 
@@ -158,7 +158,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), `deepseek` / `deepseek-harness` (→ `dsh`), and `nous` (→ `hermes`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 

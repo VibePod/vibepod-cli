@@ -158,7 +158,7 @@ def test_task_create_rejects_agent_without_headless_prefix(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("agent", ["hermes", "nous"])
+@pytest.mark.parametrize("agent", ["hermes"])
 def test_hermes_rejects_global_llm_before_task_creation(
     monkeypatch,
     tmp_path,
@@ -1103,7 +1103,7 @@ def test_task_create_uses_keep_id_on_rootless_podman(monkeypatch, tmp_path, tmp_
     assert stub.run_kwargs["env"]["USER_GID"] == "0"
 
 
-@pytest.mark.parametrize("agent", ["hermes", "nous"])
+@pytest.mark.parametrize("agent", ["hermes"])
 def test_task_hermes_rejects_rootless_podman_before_provisioning(
     monkeypatch,
     tmp_path,
