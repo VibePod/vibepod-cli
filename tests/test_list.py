@@ -44,12 +44,15 @@ def _write_overlay(workspace: Path, *parts: str) -> Path:
     return dockerfile
 
 
-def test_list_json_includes_short_and_full_agent_names(monkeypatch) -> None:
+def test_list_json_includes_short_and_full_agent_names(monkeypatch, tmp_path: Path) -> None:
     class _FakeDockerManager:
         def list_managed(self, all_containers: bool = True):  # noqa: ARG002
             return []
 
     monkeypatch.setattr(list_cmd, "DockerManager", _FakeDockerManager)
+    # cwd-hermetic: a stray .vibepod/overlay in the invoking project would
+    # otherwise pull overlay resolution (and image_id) into this test
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["list", "--json"])
     assert result.exit_code == 0
