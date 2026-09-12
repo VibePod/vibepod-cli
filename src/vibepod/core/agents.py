@@ -38,6 +38,11 @@ class AgentSpec:
     # Panel via the Agent Client Protocol). None means the agent does not ship
     # an ACP adapter and `--acp` aborts with the list of supported agents.
     acp_command: list[str] | None = None
+    # write_roots_env names an env var holding the os.pathsep-joined directory
+    # prefixes the agent is allowed to write to (hermes sandboxes its file
+    # tools with HERMES_WRITE_SAFE_ROOT). When set, `--acp` appends the host
+    # workspace path, which editors send as an absolute path.
+    write_roots_env: str | None = None
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -281,7 +286,12 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # already exports and the image's 00-vibepod-uid cont-init hook
         # forwards as HERMES_UID/HERMES_GID. Do not set run_as_host_user:
         # the base image rejects `docker run --user <uid>`.
-        {},
+        #
+        # HERMES_WRITE_SAFE_ROOT sandboxes Hermes' write_file/patch tools to a
+        # set of directory prefixes. The base image bakes it to /opt/data
+        # alone, which makes the project mount read-only to the agent, so the
+        # workspace is appended here (the variable is os.pathsep-joined).
+        {"HERMES_WRITE_SAFE_ROOT": "/opt/data:/workspace"},
         ikwid_args=["--yolo"],
         # Global LLM wiring is rejected by validate_llm_support: the pinned
         # runtime prioritizes saved providers and ACP has no routing flags.
@@ -295,6 +305,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # spec.command. The image installs the package's [acp] extra, which
         # provides the `acp` module the adapter imports at startup.
         acp_command=["hermes-acp"],
+        write_roots_env="HERMES_WRITE_SAFE_ROOT",
         # Hermes is pre-1.0 and its PyPI release line trails upstream main.
         preview=True,
     ),

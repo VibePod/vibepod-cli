@@ -189,6 +189,22 @@ def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
     return host_path
 
 
+def _extend_write_roots(env: dict[str, str], var: str, paths: list[str | None]) -> None:
+    """Append *paths* to the os.pathsep-joined write-root list in ``env[var]``.
+
+    Extends rather than replaces, so a value the user set through
+    ``agents.<agent>.env`` or ``-e`` keeps its entries, and skips duplicates so
+    repeated calls stay idempotent. Used for ``--acp``, where the editor sends
+    absolute host paths that the agent's file sandbox must also allow.
+    """
+    existing = [root for root in env.get(var, "").split(os.pathsep) if root]
+    for path in paths:
+        if path and path not in existing:
+            existing.append(path)
+    if existing:
+        env[var] = os.pathsep.join(existing)
+
+
 def _is_safe_skill_id(skill_id: str) -> bool:
     """Return True for skill IDs safe to use as one container path segment."""
     return bool(_SAFE_SKILL_ID_RE.fullmatch(skill_id))
@@ -710,6 +726,16 @@ def run(
         agent_ports = _publish_port_bindings(publish, source="--publish") or None
     else:
         agent_ports = _agent_port_bindings(selected_agent, agent_cfg) or None
+    if spec.write_roots_env and acp_workspace_mount is not None:
+        # In ACP mode the workspace is also bound at its own host path, and the
+        # editor sends that spelling, so the agent's file sandbox has to allow
+        # it alongside /workspace. Merged after the user's env so an override
+        # is extended, not discarded.
+        _extend_write_roots(
+            merged_env,
+            spec.write_roots_env,
+            [acp_workspace_mount, acp_workspace_alias],
+        )
     if codex_oauth_login:
         # Tell the codex image to start the loopback forwarder, and publish it to
         # the host on the port Codex's redirect URI expects.

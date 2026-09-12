@@ -1165,6 +1165,20 @@ setup remains supported; VibePod does not rewrite Hermes's saved settings.
 vp task create hermes "summarize this repository"
 ```
 
+**Write sandbox.** Hermes restricts its `write_file`/`patch` tools to the
+directory prefixes in `HERMES_WRITE_SAFE_ROOT`. The official image ships
+`/opt/data` alone, which would leave the project mount read-only, so VibePod
+sets `/opt/data:/workspace`. With `--acp` the workspace host path is appended
+too, because editors send absolute host paths. To widen it further, extend the
+value rather than replacing it — VibePod appends to whatever you set:
+
+```yaml
+agents:
+  hermes:
+    env:
+      HERMES_WRITE_SAFE_ROOT: "/opt/data:/workspace:/extra/path"
+```
+
 **Editor integration.** Hermes ships its own ACP adapter as the separate
 `hermes-acp` console script, which the official image already provides, so
 `vp run hermes --acp` works in any ACP editor — see the [ACP docs](../acp.md).

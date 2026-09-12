@@ -146,6 +146,11 @@ def test_hermes_spec_matches_container_contract() -> None:
     assert spec.config_mount_path == "/opt/data"
     assert "HOME" not in spec.extra_env
     assert "HERMES_HOME" not in spec.extra_env
+    # The base image bakes HERMES_WRITE_SAFE_ROOT=/opt/data, which makes the
+    # project mount read-only to Hermes' write_file/patch tools. VibePod adds
+    # the workspace so the agent can actually edit the project.
+    assert spec.extra_env["HERMES_WRITE_SAFE_ROOT"] == "/opt/data:/workspace"
+    assert spec.write_roots_env == "HERMES_WRITE_SAFE_ROOT"
     assert spec.ikwid_args == ["--yolo"]
     assert spec.headless_prefix == ["-z"]
     assert spec.headless_command is None

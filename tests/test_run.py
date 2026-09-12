@@ -3362,3 +3362,32 @@ def test_hermes_skill_paths_use_shared_agents_dir() -> None:
     from vibepod.commands.run import _agent_skill_paths
 
     assert _agent_skill_paths("hermes") == ["/opt/data/.agents/skills"]
+
+
+def test_extend_write_roots_appends_missing_paths() -> None:
+    from vibepod.commands.run import _extend_write_roots
+
+    env = {"HERMES_WRITE_SAFE_ROOT": "/opt/data:/workspace"}
+    _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/home/me/code", None])
+
+    assert env["HERMES_WRITE_SAFE_ROOT"] == "/opt/data:/workspace:/home/me/code"
+
+
+def test_extend_write_roots_is_idempotent_and_keeps_user_value() -> None:
+    from vibepod.commands.run import _extend_write_roots
+
+    # A user override of the variable must be extended, never replaced.
+    env = {"HERMES_WRITE_SAFE_ROOT": "/custom"}
+    _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/custom", "/home/me/code"])
+    _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/home/me/code"])
+
+    assert env["HERMES_WRITE_SAFE_ROOT"] == "/custom:/home/me/code"
+
+
+def test_extend_write_roots_seeds_an_unset_variable() -> None:
+    from vibepod.commands.run import _extend_write_roots
+
+    env: dict[str, str] = {}
+    _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/home/me/code"])
+
+    assert env["HERMES_WRITE_SAFE_ROOT"] == "/home/me/code"
