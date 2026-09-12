@@ -124,6 +124,13 @@ ENV PATH=/opt/vp_pixi/.pixi/envs/default/bin:$PATH
 - Uses `latest`; pin a release (as in the previous recipe) for
   reproducibility.
 
+## Agent tooling: RTK and Graphify
+
+Fragments that install [RTK](https://github.com/rtk-ai/rtk) and
+[Graphify](https://github.com/Graphify-Labs/graphify) into the agent image —
+together with the hook or skill registration they need — live on the
+[External tools](../integrations.md#tools-inside-the-agent-container) page.
+
 ## Contributing a recipe
 
 Got an overlay other projects could reuse? Open an issue or PR with the

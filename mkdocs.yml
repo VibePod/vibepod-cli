@@ -64,4 +64,5 @@ nav:
   - Editor integration (ACP): acp.md
   - Configuration: configuration.md
   - LLM Integration: llm.md
+  - External tools: integrations.md
   - CLI Reference: cli-reference.md
