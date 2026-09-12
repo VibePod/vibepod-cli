@@ -19,6 +19,17 @@ ACP adapter, see `docs/acp.md`), the per-agent defaults in
 The local-image fallback (`VP_IMAGE_<AGENT>` override + pull-failure fallback
 in `run.py`/`task.py`) is how an unreleased image is exercised locally.
 
+Hermes is the exception to the `~/.agents/skills` convention: it reads that
+directory only via the `skills.external_dirs` key in its own `config.yaml` and
+has no env-var override, so the `vibepod-agents` image entrypoint seeds the key
+rather than the CLI mounting a symlink.
+
+Hermes also has two launch constraints enforced by `validate_rootless_runtime`
+and the ACP reserved-path check: it is rejected on rootless Podman (the pinned
+image needs its own runtime user and rejects the UID rootless keep-id maps the
+container to, including 0), and `/opt/hermes` (its install root) is reserved so
+an `--acp` workspace bind cannot shadow the entrypoint/venv/`hermes-acp`.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from collections.abc import Callable
 
 from vibepod.utils.console import console, info
@@ -41,6 +42,38 @@ def _with_id(prefix: str) -> Callable[[re.Match[str]], str]:
 
 def _verbatim(match: re.Match[str]) -> str:
     return match.group(1)
+
+
+# Session titles are printed quoted because they contain spaces (Hermes prints
+# `hermes -c "my project"`). Re-emit the value shell-quoted so the rebuilt
+# command stays a single argument after `--` when copy-pasted: titles are
+# prompt-derived and can contain `$`, backticks or backslashes that double
+# quotes would re-expand.
+_QUOTED_VALUE = r'"([^"\n]+)"'
+
+
+_HERMES_SUFFIX = (
+    rf"(?:[ \t]+(?P<profile_flag>-p|--profile)[ \t]+(?P<profile>{_TOKEN}))?[ \t]*(?=\n|$)"
+)
+
+
+def _with_hermes_profile(
+    formatter: Callable[[re.Match[str]], str],
+) -> Callable[[re.Match[str]], str]:
+    def _format(match: re.Match[str]) -> str:
+        args = formatter(match)
+        if profile := match.group("profile"):
+            args += f" {match.group('profile_flag')} {shlex.quote(profile)}"
+        return args
+
+    return _format
+
+
+def _with_quoted_value(prefix: str) -> Callable[[re.Match[str]], str]:
+    def _format(match: re.Match[str]) -> str:
+        return f"{prefix} {shlex.quote(match.group(1))}"
+
+    return _format
 
 
 # Per-agent resume hint patterns. Hints must appear on a single line: patterns
@@ -95,6 +128,28 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
         ),
         (re.compile(rf"{_BOUNDARY}freebuff[ \t]+--continue(?![\w-])"), _fixed("--continue")),
     ),
+    # Hermes prints both forms on exit (hermes_cli/cli.py):
+    #   hermes --resume <session_id>
+    #   hermes -c "<session title>"
+    # Both may have a trailing profile. Require the entire hint line so raw
+    # embedded quotes cannot produce a partial title or bare-continue fallback.
+    # The stable ID pattern comes first and takes priority over title hints.
+    "hermes": (
+        (
+            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-r|--resume)[ \t]+({_TOKEN}){_HERMES_SUFFIX}"),
+            _with_hermes_profile(_with_id("--resume")),
+        ),
+        (
+            re.compile(
+                rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue)[ \t]+{_QUOTED_VALUE}{_HERMES_SUFFIX}",
+            ),
+            _with_hermes_profile(_with_quoted_value("--continue")),
+        ),
+        (
+            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue){_HERMES_SUFFIX}"),
+            _with_hermes_profile(_fixed("--continue")),
+        ),
+    ),
 }
 
 
@@ -122,6 +177,10 @@ def build_resume_hint(agent: str, output: str) -> str | None:
         for match in pattern.finditer(text):
             if best is None or match.end() > best[0]:
                 best = (match.end(), formatter(match))
+        # Upstream prints the titled alternative after the stable ID. Titles
+        # are mutable (and may contain raw quotes), so prefer the last ID.
+        if agent == "hermes" and pattern is patterns[0][0] and best is not None:
+            break
     if best is None:
         return None
     return f"vp run {agent} -- {best[1]}"

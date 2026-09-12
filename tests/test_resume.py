@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+
 import pytest
 
 from vibepod.core.resume import build_resume_hint
@@ -134,3 +136,86 @@ def test_show_resume_hint_handles_undecodable_bytes(capsys: pytest.CaptureFixtur
 
     show_resume_hint("claude", b"\xff\xfe claude --resume abc-123\r\n")
     assert "vp run claude -- --resume abc-123" in capsys.readouterr().out
+
+
+def test_detects_hermes_resume_hint() -> None:
+    output = "  hermes --resume 01JABCDEF\n"
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --resume 01JABCDEF"
+
+
+def test_detects_hermes_short_resume_hint() -> None:
+    output = "  hermes -r 01JABCDEF\n"
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --resume 01JABCDEF"
+
+
+def test_detects_hermes_quoted_continue_hint() -> None:
+    output = '  hermes -c "my project"\n'
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --continue 'my project'"
+
+
+def test_detects_hermes_bare_continue_hint() -> None:
+    output = "  hermes -c\n"
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --continue"
+
+
+def test_hermes_quoted_continue_shell_escapes_metacharacters() -> None:
+    """Prompt-derived titles must survive a copy-paste run unchanged."""
+    output = '  hermes -c "deploy $KEY from `pwd`"\n'
+    assert build_resume_hint("hermes", output) == (
+        "vp run hermes -- --continue 'deploy $KEY from `pwd`'"
+    )
+
+
+def test_hermes_quoted_continue_beats_bare_continue() -> None:
+    output = '  hermes -c\n  hermes -c "my project"\n'
+    assert build_resume_hint("hermes", output) == "vp run hermes -- --continue 'my project'"
+
+
+@pytest.mark.parametrize("profile_flag", ["-p", "--profile"])
+@pytest.mark.parametrize(
+    ("hint", "args"),
+    [
+        ("--resume 01JABCDEF", ["--resume", "01JABCDEF"]),
+        ("-r 01JABCDEF", ["--resume", "01JABCDEF"]),
+        ('-c "my project"', ["--continue", "my project"]),
+        ('--continue "my project"', ["--continue", "my project"]),
+        ("-c", ["--continue"]),
+        ("--continue", ["--continue"]),
+    ],
+)
+def test_hermes_preserves_trailing_profile(profile_flag: str, hint: str, args: list[str]) -> None:
+    result = build_resume_hint("hermes", f"  hermes {hint} {profile_flag} work\n")
+    assert result is not None
+    assert shlex.split(result) == ["vp", "run", "hermes", "--", *args, profile_flag, "work"]
+
+
+@pytest.mark.parametrize("profile", ["", " -p work", " --profile work"])
+def test_hermes_exit_summary_prefers_stable_id(profile: str) -> None:
+    output = f'  hermes --resume 01JABCDEF{profile}\n  hermes -c "my project"{profile}\n'
+    assert build_resume_hint("hermes", output) == f"vp run hermes -- --resume 01JABCDEF{profile}"
+
+
+@pytest.mark.parametrize("profile", ["", " -p work", " --profile work"])
+def test_hermes_title_metacharacters_round_trip(profile: str) -> None:
+    title = "deploy $KEY from `pwd`; it's \\safe & (ready)"
+    result = build_resume_hint("hermes", f'  hermes -c "{title}"{profile}\n')
+    assert result is not None
+    assert shlex.split(result) == [
+        "vp",
+        "run",
+        "hermes",
+        "--",
+        "--continue",
+        title,
+        *shlex.split(profile),
+    ]
+
+
+@pytest.mark.parametrize("with_id", [False, True])
+@pytest.mark.parametrize("profile", ["", " -p work", " --profile work"])
+@pytest.mark.parametrize("title", ['"fix "quoted" title"', '"unterminated', '""'])
+def test_hermes_rejects_malformed_title(with_id: bool, profile: str, title: str) -> None:
+    output = f"  hermes --resume 01JABCDEF{profile}\n" if with_id else ""
+    output += f"  hermes -c {title}{profile}\n"
+    expected = f"vp run hermes -- --resume 01JABCDEF{profile}" if with_id else None
+    assert build_resume_hint("hermes", output) == expected

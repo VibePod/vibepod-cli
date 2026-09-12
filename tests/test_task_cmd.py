@@ -118,6 +118,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["tau"].headless_prefix == ["-p"]
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
     assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
+    assert AGENT_SPECS["hermes"].headless_prefix == ["-z"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -155,6 +156,26 @@ def test_task_create_rejects_agent_without_headless_prefix(
 # ---------------------------------------------------------------------------
 # task create — happy path, command shape
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("agent", ["hermes"])
+def test_hermes_rejects_global_llm_before_task_creation(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    capsys,
+    agent,
+):
+    cfg = _make_config()
+    cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: pytest.fail("must reject before Docker"))
+    with pytest.raises(typer.Exit) as exc:
+        task_cmd.task_create(agent=agent, prompt="hello", workspace=tmp_path)
+    assert exc.value.exit_code == 1
+    output = capsys.readouterr()
+    assert "Hermes does not support VibePod's global LLM wiring" in output.out + output.err
+    assert tmp_task_store.list() == []
 
 
 def test_task_create_claude_builds_headless_command(monkeypatch, tmp_path, tmp_task_store) -> None:
@@ -1082,6 +1103,32 @@ def test_task_create_uses_keep_id_on_rootless_podman(monkeypatch, tmp_path, tmp_
     assert stub.run_kwargs["env"]["USER_GID"] == "0"
 
 
+@pytest.mark.parametrize("agent", ["hermes"])
+def test_task_hermes_rejects_rootless_podman_before_provisioning(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    capsys,
+    agent,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(stub, "is_rootless_podman", lambda: True, raising=False)
+    monkeypatch.setattr(
+        stub,
+        "ensure_network",
+        lambda name: pytest.fail("must reject before provisioning"),
+    )
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    with pytest.raises(typer.Exit) as exc:
+        task_cmd.task_create(agent=agent, prompt="hello", workspace=tmp_path)
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+    output = capsys.readouterr()
+    assert "Hermes does not support rootless Podman" in output.out + output.err
+
+
 def test_task_create_preserves_host_user_for_non_podman(
     monkeypatch,
     tmp_path,
@@ -1240,3 +1287,35 @@ def test_task_create_materializes_source_policy_and_wires_identity(
         (tmp_path / "proxy" / "policies" / "containers" / f"{'2' * 32}.json").read_text(),
     )
     assert record["profile"] == "default"
+
+
+def test_hermes_headless_command_is_not_overridden() -> None:
+    # -z/--oneshot takes the prompt as its value, so the generic
+    # base_command + ikwid + headless_prefix + [prompt] path is correct and no
+    # headless_command override is needed.
+    assert AGENT_SPECS["hermes"].headless_command is None
+
+
+def test_task_create_hermes_places_yolo_before_oneshot(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """`-z` consumes the next token as its value, so --yolo must come first."""
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="hermes",
+        prompt="summarize this repository",
+        workspace=tmp_path,
+        ikwid=True,
+    )
+
+    assert stub.run_kwargs["command"] == [
+        "hermes",
+        "--yolo",
+        "-z",
+        "summarize this repository",
+    ]

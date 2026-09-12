@@ -166,6 +166,15 @@ def _default_config() -> dict[str, Any]:
                 "ports": ["127.0.0.1:3080:3081"],
                 "init": [],
             },
+            "hermes": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["hermes"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "ports": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,

@@ -38,6 +38,12 @@ class AgentSpec:
     # Panel via the Agent Client Protocol). None means the agent does not ship
     # an ACP adapter and `--acp` aborts with the list of supported agents.
     acp_command: list[str] | None = None
+    # write_roots_env names an env var holding the ":"-joined directory
+    # prefixes the agent is allowed to write to (hermes sandboxes its file
+    # tools with HERMES_WRITE_SAFE_ROOT). The separator is the container's,
+    # always ":", regardless of the host platform. When set, `--acp` appends
+    # the host workspace path, which editors send as an absolute path.
+    write_roots_env: str | None = None
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -265,6 +271,45 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         preview=True,
         web_container_port=3081,
     ),
+    "hermes": AgentSpec(
+        "hermes",
+        "nousresearch",
+        DEFAULT_IMAGES["hermes"],
+        "hermes",
+        ["hermes"],
+        # The image is built on the official nousresearch/hermes-agent image,
+        # whose state volume is /opt/data — config.yaml, .env, credentials,
+        # sessions, skills and memories all live there, and the base image
+        # bakes both HOME and HERMES_HOME to it. VibePod therefore mounts the
+        # agent config directory at /opt/data and sets neither variable.
+        "/opt/data",
+        # Host-UID mapping goes through USER_UID/USER_GID, which VibePod
+        # already exports and the image's 00-vibepod-uid cont-init hook
+        # forwards as HERMES_UID/HERMES_GID. Do not set run_as_host_user:
+        # the base image rejects `docker run --user <uid>`.
+        #
+        # HERMES_WRITE_SAFE_ROOT sandboxes Hermes' write_file/patch tools to a
+        # set of directory prefixes. The base image bakes it to /opt/data
+        # alone, which makes the project mount read-only to the agent, so the
+        # workspace is appended here (":"-joined — the container's pathsep).
+        {"HERMES_WRITE_SAFE_ROOT": "/opt/data:/workspace"},
+        ikwid_args=["--yolo"],
+        # Global LLM wiring is rejected by validate_llm_support: the pinned
+        # runtime prioritizes saved providers and ACP has no routing flags.
+        # `-z/--oneshot` takes the prompt as its value, and task.py emits
+        # base_command + ikwid_prefix + headless_prefix + [prompt], which yields
+        # `hermes --yolo -z "<prompt>"` — the prompt lands in -z's value slot and
+        # --yolo is never swallowed by it.
+        headless_prefix=["-z"],
+        # `hermes-acp` is a separate console script from the same wheel (like
+        # devstral's `vibe-acp`), not a flag on `hermes`, so it does not extend
+        # spec.command. The image installs the package's [acp] extra, which
+        # provides the `acp` module the adapter imports at startup.
+        acp_command=["hermes-acp"],
+        write_roots_env="HERMES_WRITE_SAFE_ROOT",
+        # Hermes is pre-1.0 and its PyPI release line trails upstream main.
+        preview=True,
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
@@ -290,6 +335,36 @@ def get_agent_spec(agent: str) -> AgentSpec:
     if agent not in AGENT_SPECS:
         raise ValueError(f"Unsupported agent: {agent}")
     return AGENT_SPECS[agent]
+
+
+def validate_llm_support(agent: str, config: dict[str, Any]) -> None:
+    """Reject known-incompatible wiring rather than silently misroute requests."""
+    if agent == "hermes" and config.get("llm", {}).get("enabled"):
+        raise ValueError(
+            "Hermes does not support VibePod's global LLM wiring in the pinned image. "
+            "Set llm.enabled to false in your VibePod config and use Hermes-native "
+            "provider/model setup (hermes setup inside the container). "
+            "This applies to interactive, task, and ACP modes.",
+        )
+
+
+def validate_rootless_runtime(agent: str, rootless: bool) -> None:
+    """Reject Hermes on rootless Podman before it maps the container to a UID it rejects.
+
+    Rootless Podman launches the container with ``userns_mode=keep-id``, running as
+    the invoking user's UID, and VibePod overwrites USER_UID/USER_GID with 0 for the
+    entrypoint hooks. The pinned Hermes image needs its own bootstrap/runtime user:
+    its ``main-wrapper`` exits 1 on an arbitrary non-hermes UID, and its UID-mapping
+    hook ignores 0. Launching Hermes there would fail after the container starts, so
+    reject before provisioning any network, proxy, or image.
+    """
+    if agent == "hermes" and rootless:
+        raise ValueError(
+            "Hermes does not support rootless Podman: the pinned image requires its "
+            "own runtime user and rejects the arbitrary UID that rootless keep-id "
+            "maps the container to (it also ignores a UID of 0). "
+            "Run Hermes on rootful Docker/Podman instead.",
+        )
 
 
 def effective_agent_image(agent: str, config: dict[str, Any]) -> str:

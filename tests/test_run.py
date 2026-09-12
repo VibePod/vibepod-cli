@@ -1348,7 +1348,7 @@ def _make_config(
     }
 
 
-@pytest.mark.parametrize("agent", SUPPORTED_AGENTS)
+@pytest.mark.parametrize("agent", [agent for agent in SUPPORTED_AGENTS if agent != "hermes"])
 def test_run_uses_keep_id_for_rootless_podman_agents(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1368,6 +1368,39 @@ def test_run_uses_keep_id_for_rootless_podman_agents(
     assert stub.run_kwargs["user"] is None
     assert env["USER_UID"] == "0"
     assert env["USER_GID"] == "0"
+
+
+@pytest.mark.parametrize("acp", [False, True])
+@pytest.mark.parametrize("agent", ["hermes"])
+def test_hermes_rejects_rootless_podman_before_provisioning(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    acp,
+    agent,
+):
+    if acp and os.name == "nt":
+        # The ACP workspace path-parity guard runs before the rootless-runtime
+        # check and aborts on a non-POSIX workspace path, so on native Windows
+        # this variant exits with the WSL2 hint instead of the rootless error.
+        pytest.skip("ACP mode runs from WSL2 on Windows, where workspace paths are POSIX")
+    stub = _StubDockerManager(rootless_podman=True)
+    monkeypatch.setattr(run_cmd, "get_config", _make_config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(
+        stub,
+        "ensure_network",
+        lambda name: pytest.fail("must reject before provisioning"),
+    )
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent=agent, workspace=tmp_path, acp=acp)
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    assert stub.pulled == []
+    output = capsys.readouterr()
+    assert "Hermes does not support rootless Podman" in output.out + output.err
+    if acp:
+        assert output.out == ""
 
 
 def test_run_preserves_host_user_for_non_podman_devstral(
@@ -1887,6 +1920,53 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
     run_cmd.run(agent="claude", workspace=tmp_path, detach=True, ikwid=False)
 
     assert captured["command"] == ["claude"]
+
+
+@pytest.mark.parametrize("acp", [False, True])
+@pytest.mark.parametrize("agent", ["hermes"])
+def test_hermes_rejects_global_llm_before_docker(monkeypatch, tmp_path, capsys, acp, agent):
+    cfg = _make_config()
+    cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: pytest.fail("must reject before Docker"))
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent=agent, workspace=tmp_path, acp=acp)
+    assert exc.value.exit_code == 1
+    output = capsys.readouterr()
+    assert "Hermes does not support VibePod's global LLM wiring" in output.out + output.err
+    if acp:
+        assert output.out == ""
+
+
+def test_hermes_rejects_global_llm_without_persisting_workspace(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Rejecting Hermes' LLM wiring must happen before the allow-dir side effect.
+
+    With an unspecified + disallowed workspace on an interactive stdin that
+    agrees to allow the dir, the old ordering persisted the workspace to the
+    allow list and only then rejected Hermes. Validation must run first so a
+    launch this run() is about to refuse never trusts new directories.
+    """
+    allowed_added: list[str] = []
+    cfg = _make_config()
+    cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "is_dir_allowed", lambda p: False)
+    monkeypatch.setattr(run_cmd, "is_protected_dir", lambda p: False)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(run_cmd, "add_allowed_dir", lambda p: allowed_added.append(str(p)))
+    monkeypatch.setattr(run_cmd.Confirm, "ask", lambda *a, **k: True)
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent="hermes", workspace=tmp_path, detach=True)
+
+    assert exc.value.exit_code == 1
+    assert allowed_added == []
+    output = capsys.readouterr()
+    assert "Hermes does not support VibePod's global LLM wiring" in output.out + output.err
 
 
 def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> None:
@@ -2901,14 +2981,21 @@ def _script_acp_editor(
 
 
 @_requires_posix_workspace
-def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env) -> None:
+@pytest.mark.parametrize(
+    ("agent", "command"),
+    [
+        ("claude", ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]),
+        ("hermes", ["hermes-acp"]),
+    ],
+)
+def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env, agent, command) -> None:
     captured: dict = {}
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
     monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
 
-    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+    run_cmd.run(agent=agent, workspace=_acp_env, acp=True)
 
-    assert captured["command"] == ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
+    assert captured["command"] == command
     assert captured["start"] is False
     assert captured["tty"] is False
     assert captured["workspace_mount_path"] == str(_acp_env)
@@ -3181,6 +3268,18 @@ def test_acp_workspace_mount_path_accepts_wsl_paths() -> None:
         assert run_cmd._acp_workspace_mount_path(PurePosixPath(wsl_path), spec) == wsl_path
 
 
+@pytest.mark.parametrize("workspace", ["/opt/hermes", "/opt/hermes/project", "/opt"])
+def test_hermes_acp_rejects_installation_overlap(workspace: str) -> None:
+    with pytest.raises(typer.Exit):
+        run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("hermes"))
+
+
+@pytest.mark.parametrize("agent", ["hermes", "claude"])
+def test_acp_allows_unrelated_opt_workspace(agent: str) -> None:
+    workspace = PurePosixPath("/opt/hermes-project")
+    assert run_cmd._acp_workspace_mount_path(workspace, get_agent_spec(agent)) == str(workspace)
+
+
 def test_acp_workspace_mount_path_guard(tmp_path: Path) -> None:
     spec = get_agent_spec("claude")
 
@@ -3332,3 +3431,39 @@ def test_resolve_acp_command_parses_string_overrides_like_a_shell() -> None:
     # An empty override is "no adapter", not "run the image default".
     assert run_cmd._resolve_acp_command(spec, {"acp_command": ""}) is None
     assert run_cmd._resolve_acp_command(spec, {"acp_command": []}) is None
+
+
+def test_hermes_skill_paths_use_shared_agents_dir() -> None:
+    """Hermes' skills live under the official image's /opt/data state volume."""
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("hermes") == ["/opt/data/.agents/skills"]
+
+
+def test_extend_write_roots_appends_missing_paths() -> None:
+    from vibepod.commands.run import _extend_write_roots
+
+    env = {"HERMES_WRITE_SAFE_ROOT": "/opt/data:/workspace"}
+    _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/home/me/code", None])
+
+    assert env["HERMES_WRITE_SAFE_ROOT"] == "/opt/data:/workspace:/home/me/code"
+
+
+def test_extend_write_roots_is_idempotent_and_keeps_user_value() -> None:
+    from vibepod.commands.run import _extend_write_roots
+
+    # A user override of the variable must be extended, never replaced.
+    env = {"HERMES_WRITE_SAFE_ROOT": "/custom"}
+    _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/custom", "/home/me/code"])
+    _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/home/me/code"])
+
+    assert env["HERMES_WRITE_SAFE_ROOT"] == "/custom:/home/me/code"
+
+
+def test_extend_write_roots_seeds_an_unset_variable() -> None:
+    from vibepod.commands.run import _extend_write_roots
+
+    env: dict[str, str] = {}
+    _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/home/me/code"])
+
+    assert env["HERMES_WRITE_SAFE_ROOT"] == "/home/me/code"

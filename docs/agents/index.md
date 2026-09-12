@@ -20,6 +20,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `freebuff` | CodebuffAI | `vp fb` | `vibepod/freebuff:latest` |
 | `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
 | `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
+| `hermes` | Nous Research | `vp h` | `vibepod/hermes:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`, `vp run qwen-cli`
 resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
@@ -157,7 +158,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -288,6 +289,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `freebuff` | Not supported |
 | `qwen` | `--approval-mode=yolo` |
 | `dsh` | Not supported |
+| `hermes` | `--yolo` |
 
 Example:
 
@@ -407,6 +409,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `jcode` | `jcode run "<prompt>"` |
 | `qwen` | `qwen -p "<prompt>"` |
 | `dsh` | `dsh --profile headless "<prompt>"` |
+| `hermes` | `hermes -z "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
@@ -1121,4 +1124,82 @@ already mounted.
 ```bash
 vp run qwen --ikwid
 vp task create qwen "fix the failing test" --ikwid
+```
+
+## Hermes Agent (`hermes`) — developer preview
+
+Hermes is Nous Research's self-improving agent: it keeps cross-session memory,
+writes its own skills, and is not primarily a coding TUI. VibePod runs its
+interactive CLI; the `gateway` daemon, cron jobs and messaging bridges are out
+of scope.
+
+`vp run hermes` starts the classic Python REPL. The Ink TUI is available with
+`vp run hermes -- --tui`.
+
+> The default `vibepod/hermes` image is built on the official
+> `nousresearch/hermes-agent` image and pins one of its CalVer release tags
+> (`v2026.9.7`). Upstream no longer publishes to PyPI, so the image tracks the
+> Docker release line instead. Hermes is pre-1.0, so `vp run` and `vp task`
+> print a developer-preview warning.
+
+**First run.** Hermes has no usable provider until it is given credentials. Run
+`hermes setup` once inside the container — it persists to the mounted config at
+`~/.config/vibepod/agents/hermes/`, which is the container's `/opt/data` state
+volume. Configure OpenAI-compatible endpoints through Hermes's own provider
+setup too.
+
+**Global LLM wiring is not supported.** Set `llm.enabled: false` in your
+VibePod configuration when running Hermes. Interactive, task, and ACP launches
+reject enabled global LLM wiring before starting a container, rather than
+silently using a different provider or model. The pinned Hermes runtime
+prioritizes saved provider settings, does not use `OPENAI_BASE_URL` for its
+main custom-provider endpoint, and restricts API keys by endpoint host. Its
+ACP adapter also has no provider/model launch flags. Hermes-native provider
+setup remains supported; VibePod does not rewrite Hermes's saved settings.
+
+**Rootless Podman is not supported.** The pinned Hermes image needs its own
+runtime user and exits before showing any output when launched under
+rootless Podman's `keep-id` user mapping, which VibePod uses for most agents.
+On a rootless Podman engine, `vp run hermes` and `vp task create hermes`
+(affecting interactive, task, and ACP) reject the launch before
+starting a container rather than crashing mid-boot. Run Hermes on rootful
+Docker or Podman instead.
+
+**Headless one-shot:**
+
+```bash
+vp task create hermes "summarize this repository"
+```
+
+**Write sandbox.** Hermes restricts its `write_file`/`patch` tools to the
+directory prefixes in `HERMES_WRITE_SAFE_ROOT`. The official image ships
+`/opt/data` alone, which would leave the project mount read-only, so VibePod
+sets `/opt/data:/workspace`. With `--acp` the workspace host path is appended
+too, because editors send absolute host paths. To widen it further, extend the
+value rather than replacing it — VibePod appends to whatever you set:
+
+```yaml
+agents:
+  hermes:
+    env:
+      HERMES_WRITE_SAFE_ROOT: "/opt/data:/workspace:/extra/path"
+```
+
+**Editor integration.** Hermes ships its own ACP adapter as the separate
+`hermes-acp` console script, which the official image already provides, so
+`vp run hermes --acp` works in any ACP editor — see the [ACP docs](../acp.md).
+
+**Skills.** Hermes scans `~/.agents/skills/` only when `skills.external_dirs`
+is set in its `config.yaml` — there is no environment-variable override — so
+the image seeds that key on every start. Skills installed via `vp skills` are
+then mounted at `/opt/data/.agents/skills/<id>` and picked up automatically.
+Editing `external_dirs` yourself disables the seeding; VibePod never
+overwrites a value you set.
+
+**IKWID mode.** Hermes auto-approves tool calls in YOLO mode, which `--ikwid`
+enables via `--yolo`:
+
+```bash
+vp run hermes --ikwid
+vp task create hermes "fix the failing test" --ikwid
 ```

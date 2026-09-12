@@ -384,3 +384,18 @@ def test_alias_forwards_overlay_flags(monkeypatch) -> None:
     assert called["no_overlay"] is True
     assert called["rebuild_overlay"] is True
     assert called["passthrough"] == []
+
+
+def test_hermes_shortcut_runs_hermes(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["h"])
+    assert result.exit_code == 0
+    assert called["agent"] == "hermes"
+    assert called["passthrough"] == []

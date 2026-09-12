@@ -10,7 +10,7 @@ metric collection — stays active.
 
 ## Supported agents
 
-Ten agents ship an ACP adapter command. They split into two kinds, which
+Eleven agents ship an ACP adapter command. They split into two kinds, which
 differ in what has to happen before the first JSON-RPC frame:
 
 | Agent      | Adapter                                     |
@@ -22,11 +22,12 @@ differ in what has to happen before the first JSON-RPC frame:
 | `gemini`   | `gemini --experimental-acp` — built in       |
 | `qwen`     | `qwen --experimental-acp` — built in         |
 | `devstral` | `vibe-acp` — separate binary in the image    |
+| `hermes`   | `hermes-acp` — separate binary in the image  |
 | `claude`   | `npx @agentclientprotocol/claude-agent-acp`  |
 | `codex`    | `npx @agentclientprotocol/codex-acp`         |
 | `pi`       | `npx pi-acp` — community adapter             |
 
-The first seven run a binary that is already in the image, so they start
+The first eight run a binary that is already in the image, so they start
 offline and immediately. `claude`, `codex` and `pi` fetch their adapter with
 npx, which needs the package registry reachable through the proxy filter and
 adds startup latency: `claude` and `codex` download on every launch, `pi`

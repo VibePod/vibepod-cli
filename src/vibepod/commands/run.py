@@ -25,6 +25,8 @@ from vibepod.core.agents import (
     get_agent_shortcut,
     get_agent_spec,
     resolve_agent_name,
+    validate_llm_support,
+    validate_rootless_runtime,
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
@@ -119,6 +121,9 @@ _ACP_RESERVED_CONTAINER_PATHS = (
     "/config",
     "/claude",
     "/qwen",
+    # Hermes's install root on the hermes agent image: binding a workspace
+    # over it hides the entrypoint, virtualenv and hermes-acp binary.
+    "/opt/hermes",
     "/etc",
     "/usr",
     "/tmp/.X11-unix",
@@ -188,6 +193,29 @@ def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
     return host_path
 
 
+# Separator for write-root lists. The variable is parsed by the agent INSIDE
+# the Linux container (hermes splits on its own os.pathsep, which is ":"), so
+# the host's os.pathsep must never leak in here: on a Windows host it is ";",
+# and a ";"-joined value would reach the container as one nonexistent path.
+_WRITE_ROOTS_SEP = ":"
+
+
+def _extend_write_roots(env: dict[str, str], var: str, paths: list[str | None]) -> None:
+    """Append *paths* to the ``:``-joined write-root list in ``env[var]``.
+
+    Extends rather than replaces, so a value the user set through
+    ``agents.<agent>.env`` or ``-e`` keeps its entries, and skips duplicates so
+    repeated calls stay idempotent. Used for ``--acp``, where the editor sends
+    absolute host paths that the agent's file sandbox must also allow.
+    """
+    existing = [root for root in env.get(var, "").split(_WRITE_ROOTS_SEP) if root]
+    for path in paths:
+        if path and path not in existing:
+            existing.append(path)
+    if existing:
+        env[var] = _WRITE_ROOTS_SEP.join(existing)
+
+
 def _is_safe_skill_id(skill_id: str) -> bool:
     """Return True for skill IDs safe to use as one container path segment."""
     return bool(_SAFE_SKILL_ID_RE.fullmatch(skill_id))
@@ -237,6 +265,10 @@ def _agent_skill_paths(agent: str) -> list[str]:
       - jcode    reads ~/.agents/skills/ (also ~/.jcode/skills/)
       - freebuff reads ~/.agents/skills/ (also ~/.freebuff/skills/)
       - dsh      reads ~/.agents/skills/            → /config/.agents/skills/
+      - hermes   reads ~/.agents/skills/ once the image seeds it into
+        skills.external_dirs in $HERMES_HOME/config.yaml (Hermes has no
+        env-var override for that key). Its state volume is the official
+        image's /opt/data, not /config  → /opt/data/.agents/skills/
       - qwen     reads ~/.qwen/skills/, which the image symlinks to /qwen/skills
         (also <project>/.qwen/skills/ in the workspace)
 
@@ -250,6 +282,8 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/config/.pi/agent/skills"]
     if agent == "qwen":
         return ["/qwen/skills"]
+    if agent == "hermes":
+        return ["/opt/data/.agents/skills"]
     if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh"):
         return ["/config/.agents/skills"]
     return []
@@ -590,6 +624,15 @@ def run(
 
     _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
 
+    # Reject unsupported wiring before any herdr hint or workspace processing:
+    # the allow-dir prompt below persists a workspace to the allow list, which
+    # must never happen for an agent/config this launch is about to refuse.
+    try:
+        validate_llm_support(selected_agent, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
     acp_channel: AcpClientChannel | None = None
     if acp:
         acp_channel = _open_acp_channel()
@@ -698,6 +741,16 @@ def run(
         agent_ports = _publish_port_bindings(publish, source="--publish") or None
     else:
         agent_ports = _agent_port_bindings(selected_agent, agent_cfg) or None
+    if spec.write_roots_env and acp_workspace_mount is not None:
+        # In ACP mode the workspace is also bound at its own host path, and the
+        # editor sends that spelling, so the agent's file sandbox has to allow
+        # it alongside /workspace. Merged after the user's env so an override
+        # is extended, not discarded.
+        _extend_write_roots(
+            merged_env,
+            spec.write_roots_env,
+            [acp_workspace_mount, acp_workspace_alias],
+        )
     if codex_oauth_login:
         # Tell the codex image to start the loopback forwarder, and publish it to
         # the host on the port Codex's redirect URI expects.
@@ -756,6 +809,11 @@ def run(
 
     podman_probe = getattr(manager, "is_rootless_podman", None)
     rootless_podman = bool(podman_probe()) if callable(podman_probe) else False
+    try:
+        validate_rootless_runtime(selected_agent, rootless_podman)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     agent_userns_mode = "keep-id" if rootless_podman else None
     if rootless_podman:
         merged_env["USER_UID"] = "0"
