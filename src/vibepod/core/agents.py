@@ -38,10 +38,11 @@ class AgentSpec:
     # Panel via the Agent Client Protocol). None means the agent does not ship
     # an ACP adapter and `--acp` aborts with the list of supported agents.
     acp_command: list[str] | None = None
-    # write_roots_env names an env var holding the os.pathsep-joined directory
+    # write_roots_env names an env var holding the ":"-joined directory
     # prefixes the agent is allowed to write to (hermes sandboxes its file
-    # tools with HERMES_WRITE_SAFE_ROOT). When set, `--acp` appends the host
-    # workspace path, which editors send as an absolute path.
+    # tools with HERMES_WRITE_SAFE_ROOT). The separator is the container's,
+    # always ":", regardless of the host platform. When set, `--acp` appends
+    # the host workspace path, which editors send as an absolute path.
     write_roots_env: str | None = None
 
 
@@ -290,7 +291,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # HERMES_WRITE_SAFE_ROOT sandboxes Hermes' write_file/patch tools to a
         # set of directory prefixes. The base image bakes it to /opt/data
         # alone, which makes the project mount read-only to the agent, so the
-        # workspace is appended here (the variable is os.pathsep-joined).
+        # workspace is appended here (":"-joined — the container's pathsep).
         {"HERMES_WRITE_SAFE_ROOT": "/opt/data:/workspace"},
         ikwid_args=["--yolo"],
         # Global LLM wiring is rejected by validate_llm_support: the pinned

@@ -1379,6 +1379,11 @@ def test_hermes_rejects_rootless_podman_before_provisioning(
     acp,
     agent,
 ):
+    if acp and os.name == "nt":
+        # The ACP workspace path-parity guard runs before the rootless-runtime
+        # check and aborts on a non-POSIX workspace path, so on native Windows
+        # this variant exits with the WSL2 hint instead of the rootless error.
+        pytest.skip("ACP mode runs from WSL2 on Windows, where workspace paths are POSIX")
     stub = _StubDockerManager(rootless_podman=True)
     monkeypatch.setattr(run_cmd, "get_config", _make_config)
     monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)

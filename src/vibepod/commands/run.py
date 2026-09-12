@@ -193,20 +193,27 @@ def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
     return host_path
 
 
+# Separator for write-root lists. The variable is parsed by the agent INSIDE
+# the Linux container (hermes splits on its own os.pathsep, which is ":"), so
+# the host's os.pathsep must never leak in here: on a Windows host it is ";",
+# and a ";"-joined value would reach the container as one nonexistent path.
+_WRITE_ROOTS_SEP = ":"
+
+
 def _extend_write_roots(env: dict[str, str], var: str, paths: list[str | None]) -> None:
-    """Append *paths* to the os.pathsep-joined write-root list in ``env[var]``.
+    """Append *paths* to the ``:``-joined write-root list in ``env[var]``.
 
     Extends rather than replaces, so a value the user set through
     ``agents.<agent>.env`` or ``-e`` keeps its entries, and skips duplicates so
     repeated calls stay idempotent. Used for ``--acp``, where the editor sends
     absolute host paths that the agent's file sandbox must also allow.
     """
-    existing = [root for root in env.get(var, "").split(os.pathsep) if root]
+    existing = [root for root in env.get(var, "").split(_WRITE_ROOTS_SEP) if root]
     for path in paths:
         if path and path not in existing:
             existing.append(path)
     if existing:
-        env[var] = os.pathsep.join(existing)
+        env[var] = _WRITE_ROOTS_SEP.join(existing)
 
 
 def _is_safe_skill_id(skill_id: str) -> bool:
