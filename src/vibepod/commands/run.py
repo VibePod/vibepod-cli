@@ -41,6 +41,9 @@ from vibepod.core.herdr import (
     clear_pane_metadata as _clear_herdr_metadata,
 )
 from vibepod.core.herdr import (
+    pane_reporting_enabled as _herdr_pane_reporting_enabled,
+)
+from vibepod.core.herdr import (
     reexec_with_agent_hint as _reexec_with_herdr_hint,
 )
 from vibepod.core.herdr import (
@@ -819,6 +822,9 @@ def run(
         merged_env["USER_UID"] = "0"
         merged_env["USER_GID"] = "0"
 
+    socket_mount_probe = getattr(manager, "supports_host_socket_mounts", None)
+    herdr_socket_mounts = bool(socket_mount_probe()) if callable(socket_mount_probe) else True
+
     network_name = str(config.get("network", "vibepod-network"))
     manager.ensure_network(network_name)
     extra_network = network or _maybe_select_network(
@@ -931,13 +937,17 @@ def run(
         config_dir,
         config,
         no_herdr=no_herdr or acp,
+        mount_socket=herdr_socket_mounts,
     )
+    # Host-side reporting works even when the socket cannot be mounted, so it
+    # is gated on the pane, not on the container wiring.
+    herdr_pane = _herdr_pane_reporting_enabled(config, no_herdr=no_herdr or acp)
     herdr_labels = (
         {_HERDR_PANE_LABEL: os.environ["HERDR_PANE_ID"]}
-        if herdr_volumes and os.environ.get("HERDR_PANE_ID")
+        if herdr_pane and os.environ.get("HERDR_PANE_ID")
         else {}
     )
-    if herdr_volumes:
+    if herdr_pane:
         _report_herdr_metadata(selected_agent)
     extra_volumes.extend(herdr_volumes)
     # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
@@ -1038,6 +1048,9 @@ def run(
     except Exception:
         if proxy_policy_id is not None:
             remove_container_policy(config, proxy_policy_id)
+        if herdr_pane:
+            _release_herdr_agent(selected_agent)
+            _clear_herdr_metadata(selected_agent)
         raise
 
     container.reload()
@@ -1051,7 +1064,7 @@ def run(
                 sys.stderr.flush()
             else:
                 print(recent)
-        if herdr_volumes:
+        if herdr_pane:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
         raise typer.Exit(1)
@@ -1121,7 +1134,7 @@ def run(
                 "the setup-token flow requires an interactive session.",
             )
             container.stop(timeout=5)
-            if herdr_volumes:
+            if herdr_pane:
                 _release_herdr_agent(selected_agent)
                 _clear_herdr_metadata(selected_agent)
             raise typer.Exit(1)
@@ -1180,7 +1193,7 @@ def run(
         raise
     finally:
         logger.close_session(exit_reason)
-        if herdr_volumes:
+        if herdr_pane:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
 

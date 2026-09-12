@@ -31,7 +31,14 @@ from vibepod.core.agents import (
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config, get_config_root
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
-from vibepod.core.herdr import PANE_LABEL, apply_herdr_if_enabled
+from vibepod.core.herdr import (
+    PANE_LABEL,
+    apply_herdr_if_enabled,
+    clear_pane_metadata,
+    pane_reporting_enabled,
+    release_agent,
+    report_pane_metadata,
+)
 from vibepod.core.launch import (
     agent_extra_volumes,
     agent_init_commands,
@@ -698,161 +705,180 @@ def task_create(
     for host_path, _, _ in extra_volumes:
         Path(host_path).mkdir(parents=True, exist_ok=True)
 
+    socket_mount_probe = getattr(manager, "supports_host_socket_mounts", None)
     herdr_volumes, herdr_env = apply_herdr_if_enabled(
         selected,
         config_dir,
         config,
         no_herdr=no_herdr,
+        mount_socket=bool(socket_mount_probe()) if callable(socket_mount_probe) else True,
     )
     extra_volumes.extend(herdr_volumes)
+    # Host-side reporting works even when the socket cannot be mounted, so it
+    # is gated on the pane, not on the container wiring (matches `vp run`).
+    herdr_pane = pane_reporting_enabled(config, no_herdr=no_herdr)
     herdr_labels = (
         {PANE_LABEL: os.environ["HERDR_PANE_ID"]}
-        if herdr_volumes and os.environ.get("HERDR_PANE_ID")
+        if herdr_pane and os.environ.get("HERDR_PANE_ID")
         else {}
     )
-    # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
-    for key, value in herdr_env.items():
-        merged_env.setdefault(key, value)
-
-    proxy_cfg = config.get("proxy", {})
-    proxy_enabled = bool(proxy_cfg.get("enabled", True))
-    proxy_ca_dir_value = str(proxy_cfg.get("ca_dir", "")).strip()
-    proxy_ca_path_value = str(proxy_cfg.get("ca_path", "")).strip()
-    proxy_ca_dir = Path(proxy_ca_dir_value).expanduser().resolve() if proxy_ca_dir_value else None
-    proxy_ca_path = (
-        Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
-    )
-    proxy_db_path: Path | None = None
-    proxy_policy_id: str | None = None
-
-    if proxy_enabled:
-        proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
-        proxy_db_path = (
-            Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db")))
-            .expanduser()
-            .resolve()
-        )
-
-        actual_ca_dir = proxy_ca_dir or proxy_db_path.parent / "mitmproxy"
-        try:
-            provision_proxy(
-                manager,
-                image=proxy_image,
-                db_path=proxy_db_path,
-                ca_dir=actual_ca_dir,
-                network=network_name,
-                auto_clean=bool(config.get("auto_clean", True)),
-            )
-            proxy_policy_id = materialize_launch_policy(
-                manager,
-                config,
-                profile=active_profile,
-                workspace=workspace_path,
-            )
-        except (DockerClientError, ValueError) as exc:
-            error(str(exc))
-            raise typer.Exit(1) from exc
-
-        if proxy_ca_path:
-            deadline = time.time() + 10
-            while time.time() < deadline:
-                if proxy_ca_path.exists():
-                    break
-                time.sleep(0.25)
-
-        apply_proxy_env(merged_env, proxy_policy_id)
-
-        extra_volumes.append((str(actual_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
-
-    info(f"Starting task on {selected} with image {image}")
-    container_user = None
-    if not rootless_podman and spec.run_as_host_user:
-        container_user = host_user()
-    launch_labels = dict(herdr_labels)
-    launch_labels["vibepod.profile"] = active_profile
-    if proxy_policy_id is not None:
-        launch_labels["vibepod.proxy-policy"] = proxy_policy_id
     try:
-        container = manager.run_agent(
-            agent=selected,
-            image=image,
-            workspace=workspace_path,
-            config_dir=config_dir,
-            config_mount_path=spec.config_mount_path,
-            env=merged_env,
-            command=command,
-            auto_remove=False,  # tasks keep the container so logs/exit survive
-            name=name,
-            version=__version__,
-            network=network_name,
-            ports=agent_ports,
-            extra_volumes=extra_volumes,
-            platform=spec.platform,
-            user=container_user,
-            entrypoint=entrypoint,
-            userns_mode=agent_userns_mode,
-            extra_labels=launch_labels,
+        if herdr_pane:
+            report_pane_metadata(selected)
+        # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
+        for key, value in herdr_env.items():
+            merged_env.setdefault(key, value)
+
+        proxy_cfg = config.get("proxy", {})
+        proxy_enabled = bool(proxy_cfg.get("enabled", True))
+        proxy_ca_dir_value = str(proxy_cfg.get("ca_dir", "")).strip()
+        proxy_ca_path_value = str(proxy_cfg.get("ca_path", "")).strip()
+        proxy_ca_dir = (
+            Path(proxy_ca_dir_value).expanduser().resolve() if proxy_ca_dir_value else None
         )
-    except Exception:
+        proxy_ca_path = (
+            Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
+        )
+        proxy_db_path: Path | None = None
+        proxy_policy_id: str | None = None
+
+        if proxy_enabled:
+            proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
+            proxy_db_path = (
+                Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db")))
+                .expanduser()
+                .resolve()
+            )
+
+            actual_ca_dir = proxy_ca_dir or proxy_db_path.parent / "mitmproxy"
+            try:
+                provision_proxy(
+                    manager,
+                    image=proxy_image,
+                    db_path=proxy_db_path,
+                    ca_dir=actual_ca_dir,
+                    network=network_name,
+                    auto_clean=bool(config.get("auto_clean", True)),
+                )
+                proxy_policy_id = materialize_launch_policy(
+                    manager,
+                    config,
+                    profile=active_profile,
+                    workspace=workspace_path,
+                )
+            except (DockerClientError, ValueError) as exc:
+                error(str(exc))
+                raise typer.Exit(1) from exc
+
+            if proxy_ca_path:
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    if proxy_ca_path.exists():
+                        break
+                    time.sleep(0.25)
+
+            apply_proxy_env(merged_env, proxy_policy_id)
+
+            extra_volumes.append((str(actual_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
+
+        info(f"Starting task on {selected} with image {image}")
+        container_user = None
+        if not rootless_podman and spec.run_as_host_user:
+            container_user = host_user()
+        launch_labels = dict(herdr_labels)
+        launch_labels["vibepod.profile"] = active_profile
         if proxy_policy_id is not None:
-            remove_container_policy(config, proxy_policy_id)
-        raise
-
-    container.reload()
-    if container.status not in {"running", "created"}:
-        recent = container.logs(tail=50).decode("utf-8", errors="replace")
-        error("Container exited immediately after start.")
-        if recent.strip():
-            print(recent)
-        raise typer.Exit(1)
-
-    if network and network != network_name:
+            launch_labels["vibepod.proxy-policy"] = proxy_policy_id
         try:
-            manager.connect_network(container, network)
-            info(f"Connected to additional network: {network}")
-        except DockerClientError as exc:
-            warning(str(exc))
-
-    if proxy_db_path is not None:
-        container_ip = get_container_ip(container, network_name)
-        if container_ip:
-            mapping_path = proxy_db_path.parent / "containers.json"
-            update_container_mapping(
-                mapping_path,
-                container_ip,
-                container.id,
-                container.name,
-                selected,
-                policy_id=proxy_policy_id,
-                profile=active_profile,
+            container = manager.run_agent(
+                agent=selected,
+                image=image,
+                workspace=workspace_path,
+                config_dir=config_dir,
+                config_mount_path=spec.config_mount_path,
+                env=merged_env,
+                command=command,
+                auto_remove=False,  # tasks keep the container so logs/exit survive
+                name=name,
+                version=__version__,
+                network=network_name,
+                ports=agent_ports,
+                extra_volumes=extra_volumes,
+                platform=spec.platform,
+                user=container_user,
+                entrypoint=entrypoint,
+                userns_mode=agent_userns_mode,
+                extra_labels=launch_labels,
             )
+        except Exception:
+            if proxy_policy_id is not None:
+                remove_container_policy(config, proxy_policy_id)
+            raise
 
-    state = container.attrs.get("State", {}) or {}
-    if not isinstance(state, dict):
-        state = {}
-    initial_status = TASK_STATUS_RUNNING if container.status == "running" else TASK_STATUS_STARTING
+        container.reload()
+        if container.status not in {"running", "created"}:
+            recent = container.logs(tail=50).decode("utf-8", errors="replace")
+            error("Container exited immediately after start.")
+            if recent.strip():
+                print(recent)
+            raise typer.Exit(1)
 
-    store = _task_store()
-    try:
-        record = store.create(
-            agent=selected,
-            prompt=prompt,
-            workspace=str(workspace_path),
-            container_id=container.id,
-            container_name=container.name,
-            image=image,
-            vibepod_version=__version__,
-            status=initial_status,
-            started_at=_state_timestamp(state, "StartedAt"),
+        if network and network != network_name:
+            try:
+                manager.connect_network(container, network)
+                info(f"Connected to additional network: {network}")
+            except DockerClientError as exc:
+                warning(str(exc))
+
+        if proxy_db_path is not None:
+            container_ip = get_container_ip(container, network_name)
+            if container_ip:
+                mapping_path = proxy_db_path.parent / "containers.json"
+                update_container_mapping(
+                    mapping_path,
+                    container_ip,
+                    container.id,
+                    container.name,
+                    selected,
+                    policy_id=proxy_policy_id,
+                    profile=active_profile,
+                )
+
+        state = container.attrs.get("State", {}) or {}
+        if not isinstance(state, dict):
+            state = {}
+        initial_status = (
+            TASK_STATUS_RUNNING if container.status == "running" else TASK_STATUS_STARTING
         )
-    except Exception as exc:
-        error(f"Failed to persist task record: {exc}. Stopping container {container.name}.")
+
+        store = _task_store()
         try:
-            manager.stop_container(container.id, force=True)
-            container.remove(force=True)
-        except Exception as cleanup_exc:
-            warning(f"Container {container.name} may be orphaned: {cleanup_exc}")
-        raise typer.Exit(1) from exc
+            record = store.create(
+                agent=selected,
+                prompt=prompt,
+                workspace=str(workspace_path),
+                container_id=container.id,
+                container_name=container.name,
+                image=image,
+                vibepod_version=__version__,
+                status=initial_status,
+                started_at=_state_timestamp(state, "StartedAt"),
+            )
+        except Exception as exc:
+            error(f"Failed to persist task record: {exc}. Stopping container {container.name}.")
+            try:
+                manager.stop_container(container.id, force=True)
+                container.remove(force=True)
+            except Exception as cleanup_exc:
+                warning(f"Container {container.name} may be orphaned: {cleanup_exc}")
+            raise typer.Exit(1) from exc
+    except BaseException:
+        # A failed launch has no task lifecycle to clear its host-side report.
+        # Include interruption and keep reports only once the task is persisted.
+        if herdr_pane:
+            release_agent(selected)
+            clear_pane_metadata(selected)
+        raise
     success(f"Task started: {record.id}")
     info(f"  container: {container.name}")
     if timeout_seconds is None:

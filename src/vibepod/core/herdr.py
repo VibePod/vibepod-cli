@@ -290,7 +290,8 @@ def release_agent(
 
     pane = pane or os.environ.get("HERDR_PANE_ID")
     sock_path = resolve_socket()
-    if not pane or sock_path is None:
+    # Python on Windows exposes no AF_UNIX even though a socket path may resolve
+    if not pane or sock_path is None or not hasattr(socket_module, "AF_UNIX"):
         return False
     request = {
         "id": f"vibepod:{os.getpid()}:release",
@@ -326,7 +327,7 @@ def reexec_with_agent_hint(agent: str, config: dict[str, Any], *, no_herdr: bool
     hook events, so screen detection is their only state source). No-op
     when the hint already matches (post-re-exec) or herdr is inactive.
     """
-    if no_herdr or not herdr_enabled(config) or not herdr_active():
+    if not pane_reporting_enabled(config, no_herdr=no_herdr):
         return
     if os.environ.get("HERDR_AGENT") == agent or not sys.argv:
         return
@@ -356,7 +357,8 @@ def _report_agent_via_socket(agent: str, pane: str) -> bool:
     import socket as socket_module
 
     sock_path = resolve_socket()
-    if sock_path is None:
+    # Python on Windows exposes no AF_UNIX even though a socket path may resolve
+    if sock_path is None or not hasattr(socket_module, "AF_UNIX"):
         return False
     request = {
         "id": f"vibepod:{os.getpid()}:metadata",
@@ -434,18 +436,37 @@ def herdr_enabled(config: dict[str, Any]) -> bool:
     return bool(value)
 
 
+def pane_reporting_enabled(config: dict[str, Any], *, no_herdr: bool) -> bool:
+    """True when this run should report its agent to the herdr pane.
+
+    Host-side reports (``report_pane_metadata`` / ``release_agent``) talk to
+    the socket directly, so they work even when the container wiring does not.
+    """
+    return not no_herdr and herdr_enabled(config) and herdr_active()
+
+
 def apply_herdr_if_enabled(
     agent: str,
     config_dir: Path,
     config: dict[str, Any],
     *,
     no_herdr: bool,
+    mount_socket: bool = True,
 ) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
     """Wire herdr for this run when inside a herdr pane. Never raises.
 
-    Returns (extra_volumes, env). Empty when disabled or not in a pane.
+    Returns (extra_volumes, env). Empty when disabled, not in a pane, or when
+    *mount_socket* is False because the container engine cannot bind-mount a
+    host unix socket — the caller still reports pane identity from the host.
     """
-    if no_herdr or not herdr_enabled(config) or not herdr_active():
+    if not pane_reporting_enabled(config, no_herdr=no_herdr):
+        return [], {}
+    if not mount_socket:
+        warning(
+            "herdr: this container engine cannot bind-mount the herdr socket "
+            "(Podman runs the engine in a VM on macOS and Windows); reporting pane "
+            "identity from the host only, without live agent state",
+        )
         return [], {}
     volumes, env = herdr_volumes_and_env()
     if not volumes:

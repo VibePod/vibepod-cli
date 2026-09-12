@@ -106,6 +106,13 @@ class _CapturingDockerManager:
         )()
 
 
+class _NoSocketMountManager(_CapturingDockerManager):
+    """Engine that cannot bind-mount a host unix socket (Podman in a VM)."""
+
+    def supports_host_socket_mounts(self) -> bool:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # AgentSpec.headless_prefix wiring
 # ---------------------------------------------------------------------------
@@ -202,6 +209,179 @@ def test_task_create_publishes_configured_ports(monkeypatch, tmp_path, tmp_task_
 
     assert stub.run_kwargs is not None
     assert stub.run_kwargs["ports"] == {"8000": ["8000"], "6000/udp": ["6000"]}
+
+
+def test_task_create_skips_herdr_socket_mount_on_vm_backed_engine(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """VM-backed Podman can't bind-mount the herdr socket, but the run must not
+    die and must still report the pane identity from the host."""
+    stub = _NoSocketMountManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    calls: dict = {}
+
+    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+        calls["mount_socket"] = mount_socket
+        return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
+
+    monkeypatch.setattr(task_cmd, "apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(task_cmd, "pane_reporting_enabled", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        task_cmd,
+        "report_pane_metadata",
+        lambda agent: calls.setdefault("reported", agent),
+    )
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert calls["mount_socket"] is False
+    assert stub.run_kwargs is not None
+    assert all(dest != "/herdr/herdr.sock" for _, dest, _ in stub.run_kwargs["extra_volumes"])
+    # host-side pane identity survives: it never goes through the container
+    assert calls["reported"] == "claude"
+    assert stub.run_kwargs["extra_labels"]["vibepod.herdr.pane"] == "pane-1"
+
+
+def test_task_create_mounts_herdr_socket_on_native_engine(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    calls: dict = {}
+
+    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+        calls["mount_socket"] = mount_socket
+        return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
+
+    monkeypatch.setattr(task_cmd, "apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(task_cmd, "pane_reporting_enabled", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        task_cmd,
+        "report_pane_metadata",
+        lambda agent: calls.setdefault("reported", agent),
+    )
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert calls["mount_socket"] is True
+    assert stub.run_kwargs is not None
+    assert any(dest == "/herdr/herdr.sock" for _, dest, _ in stub.run_kwargs["extra_volumes"])
+    assert calls["reported"] == "claude"
+    assert stub.run_kwargs["extra_labels"]["vibepod.herdr.pane"] == "pane-1"
+
+
+def test_task_create_lacks_herdr_report_when_disabled(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """When herdr is disabled, no pane identity is reported and no label set."""
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    calls: dict = {}
+
+    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+        calls["mount_socket"] = mount_socket
+        return ([], {})
+
+    monkeypatch.setattr(task_cmd, "apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(task_cmd, "pane_reporting_enabled", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        task_cmd,
+        "report_pane_metadata",
+        lambda agent: calls.setdefault("reported", agent),
+    )
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    assert "reported" not in calls
+    assert "vibepod.herdr.pane" not in stub.run_kwargs["extra_labels"]
+
+
+@pytest.mark.parametrize("herdr_enabled", [True, False])
+@pytest.mark.parametrize(
+    "failure",
+    ["proxy", "launch", "reload", "exited", "store", "interrupt", None],
+)
+def test_task_create_cleans_up_herdr_only_on_failure(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    herdr_enabled,
+    failure,
+) -> None:
+    from unittest.mock import Mock
+
+    stub = _NoSocketMountManager()
+    container = stub.run_agent()
+    container.stop = Mock()
+    container.remove = Mock()
+    stub.stop_container = Mock()
+    stub.run_agent = Mock(return_value=container)
+    config = _make_config()
+    expected_error = typer.Exit
+    if failure == "proxy":
+        config["proxy"] = {"enabled": True, "db_path": str(tmp_path / "proxy.db")}
+        monkeypatch.setattr(
+            task_cmd,
+            "provision_proxy",
+            Mock(side_effect=ValueError("proxy failed")),
+        )
+    elif failure == "launch":
+        stub.run_agent.side_effect = RuntimeError("launch failed")
+        expected_error = RuntimeError
+    elif failure == "reload":
+        container.reload = Mock(side_effect=RuntimeError("reload failed"))
+        expected_error = RuntimeError
+    elif failure == "exited":
+        container.status = "exited"
+    elif failure == "store":
+        monkeypatch.setattr(
+            tmp_task_store,
+            "create",
+            Mock(side_effect=RuntimeError("store failed")),
+        )
+        monkeypatch.setattr(task_cmd, "_task_store", lambda: tmp_task_store)
+    elif failure == "interrupt":
+        stub.run_agent.side_effect = KeyboardInterrupt
+        expected_error = KeyboardInterrupt
+
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(task_cmd, "apply_herdr_if_enabled", lambda *a, **kw: ([], {}))
+    monkeypatch.setattr(task_cmd, "pane_reporting_enabled", lambda *a, **kw: herdr_enabled)
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+    report = Mock()
+    release = Mock()
+    clear = Mock()
+    monkeypatch.setattr(task_cmd, "report_pane_metadata", report)
+    monkeypatch.setattr(task_cmd, "release_agent", release)
+    monkeypatch.setattr(task_cmd, "clear_pane_metadata", clear)
+
+    if failure is None:
+        task_cmd.task_create(agent="claude", prompt="test", workspace=tmp_path)
+    else:
+        with pytest.raises(expected_error):
+            task_cmd.task_create(agent="claude", prompt="test", workspace=tmp_path)
+
+    assert report.call_count == int(herdr_enabled)
+    if herdr_enabled and failure is not None:
+        release.assert_called_once_with("claude")
+        clear.assert_called_once_with("claude")
+    else:
+        release.assert_not_called()
+        clear.assert_not_called()
 
 
 def test_task_create_rejects_invalid_ports_before_docker(
