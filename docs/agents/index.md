@@ -1136,6 +1136,8 @@ of scope.
 `vp run hermes` starts the classic Python REPL. The Ink TUI is available with
 `vp run hermes -- --tui`.
 
+![Hermes Agent running in VibePod](../assets/hermes.png)
+
 > The default `vibepod/hermes` image is built on the official
 > `nousresearch/hermes-agent` image and pins one of its CalVer release tags
 > (`v2026.9.7`). Upstream no longer publishes to PyPI, so the image tracks the
@@ -1145,8 +1147,17 @@ of scope.
 **First run.** Hermes has no usable provider until it is given credentials. Run
 `hermes setup` once inside the container — it persists to the mounted config at
 `~/.config/vibepod/agents/hermes/`, which is the container's `/opt/data` state
-volume — or pass an OpenAI-compatible endpoint through VibePod's LLM wiring,
-which maps to `OPENAI_BASE_URL` and `OPENAI_API_KEY`.
+volume. Configure OpenAI-compatible endpoints through Hermes's own provider
+setup too.
+
+**Global LLM wiring is not supported.** Set `llm.enabled: false` in your
+VibePod configuration when running Hermes. Interactive, task, and ACP launches
+reject enabled global LLM wiring before starting a container, rather than
+silently using a different provider or model. The pinned Hermes runtime
+prioritizes saved provider settings, does not use `OPENAI_BASE_URL` for its
+main custom-provider endpoint, and restricts API keys by endpoint host. Its
+ACP adapter also has no provider/model launch flags. Hermes-native provider
+setup remains supported; VibePod does not rewrite Hermes's saved settings.
 
 **Headless one-shot:**
 

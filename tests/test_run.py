@@ -1889,6 +1889,22 @@ def test_ikwid_false_does_not_modify_command(monkeypatch, tmp_path: Path) -> Non
     assert captured["command"] == ["claude"]
 
 
+@pytest.mark.parametrize("acp", [False, True])
+@pytest.mark.parametrize("agent", ["hermes", "nous"])
+def test_hermes_rejects_global_llm_before_docker(monkeypatch, tmp_path, capsys, acp, agent):
+    cfg = _make_config()
+    cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: pytest.fail("must reject before Docker"))
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent=agent, workspace=tmp_path, acp=acp)
+    assert exc.value.exit_code == 1
+    output = capsys.readouterr()
+    assert "Hermes does not support VibePod's global LLM wiring" in output.out + output.err
+    if acp:
+        assert output.out == ""
+
+
 def test_llm_enabled_injects_openai_env_vars(monkeypatch, tmp_path: Path) -> None:
     """When llm.enabled=true, OPENAI_BASE_URL/API_KEY/MODEL are injected."""
     captured: dict = {}
@@ -2901,14 +2917,21 @@ def _script_acp_editor(
 
 
 @_requires_posix_workspace
-def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env) -> None:
+@pytest.mark.parametrize(
+    ("agent", "command"),
+    [
+        ("claude", ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]),
+        ("hermes", ["hermes-acp"]),
+    ],
+)
+def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env, agent, command) -> None:
     captured: dict = {}
     monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
     monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
 
-    run_cmd.run(agent="claude", workspace=_acp_env, acp=True)
+    run_cmd.run(agent=agent, workspace=_acp_env, acp=True)
 
-    assert captured["command"] == ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
+    assert captured["command"] == command
     assert captured["start"] is False
     assert captured["tty"] is False
     assert captured["workspace_mount_path"] == str(_acp_env)

@@ -52,6 +52,23 @@ def _verbatim(match: re.Match[str]) -> str:
 _QUOTED_VALUE = r'"([^"\n]+)"'
 
 
+_HERMES_SUFFIX = (
+    rf"(?:[ \t]+(?P<profile_flag>-p|--profile)[ \t]+(?P<profile>{_TOKEN}))?[ \t]*(?=\n|$)"
+)
+
+
+def _with_hermes_profile(
+    formatter: Callable[[re.Match[str]], str],
+) -> Callable[[re.Match[str]], str]:
+    def _format(match: re.Match[str]) -> str:
+        args = formatter(match)
+        if profile := match.group("profile"):
+            args += f" {match.group('profile_flag')} {shlex.quote(profile)}"
+        return args
+
+    return _format
+
+
 def _with_quoted_value(prefix: str) -> Callable[[re.Match[str]], str]:
     def _format(match: re.Match[str]) -> str:
         return f"{prefix} {shlex.quote(match.group(1))}"
@@ -114,21 +131,23 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
     # Hermes prints both forms on exit (hermes_cli/cli.py):
     #   hermes --resume <session_id>
     #   hermes -c "<session title>"
-    # The quoted pattern is listed before the bare one; build_resume_hint keeps
-    # the match with the greatest end() offset, and on the same line the quoted
-    # match ends later, so the titled form wins.
+    # Both may have a trailing profile. Require the entire hint line so raw
+    # embedded quotes cannot produce a partial title or bare-continue fallback.
+    # The stable ID pattern comes first and takes priority over title hints.
     "hermes": (
         (
-            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-r|--resume)[ \t]+({_TOKEN})"),
-            _with_id("--resume"),
+            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-r|--resume)[ \t]+({_TOKEN}){_HERMES_SUFFIX}"),
+            _with_hermes_profile(_with_id("--resume")),
         ),
         (
-            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue)[ \t]+{_QUOTED_VALUE}"),
-            _with_quoted_value("--continue"),
+            re.compile(
+                rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue)[ \t]+{_QUOTED_VALUE}{_HERMES_SUFFIX}"
+            ),
+            _with_hermes_profile(_with_quoted_value("--continue")),
         ),
         (
-            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue)(?![\w-])"),
-            _fixed("--continue"),
+            re.compile(rf"{_BOUNDARY}hermes[ \t]+(?:-c|--continue){_HERMES_SUFFIX}"),
+            _with_hermes_profile(_fixed("--continue")),
         ),
     ),
 }
@@ -158,6 +177,10 @@ def build_resume_hint(agent: str, output: str) -> str | None:
         for match in pattern.finditer(text):
             if best is None or match.end() > best[0]:
                 best = (match.end(), formatter(match))
+        # Upstream prints the titled alternative after the stable ID. Titles
+        # are mutable (and may contain raw quotes), so prefer the last ID.
+        if agent == "hermes" and pattern is patterns[0][0] and best is not None:
+            break
     if best is None:
         return None
     return f"vp run {agent} -- {best[1]}"

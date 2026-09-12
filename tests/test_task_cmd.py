@@ -158,6 +158,22 @@ def test_task_create_rejects_agent_without_headless_prefix(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("agent", ["hermes", "nous"])
+def test_hermes_rejects_global_llm_before_task_creation(
+    monkeypatch, tmp_path, tmp_task_store, capsys, agent
+):
+    cfg = _make_config()
+    cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: pytest.fail("must reject before Docker"))
+    with pytest.raises(typer.Exit) as exc:
+        task_cmd.task_create(agent=agent, prompt="hello", workspace=tmp_path)
+    assert exc.value.exit_code == 1
+    output = capsys.readouterr()
+    assert "Hermes does not support VibePod's global LLM wiring" in output.out + output.err
+    assert tmp_task_store.list() == []
+
+
 def test_task_create_claude_builds_headless_command(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)

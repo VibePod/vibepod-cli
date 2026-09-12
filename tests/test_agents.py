@@ -154,13 +154,10 @@ def test_hermes_spec_matches_container_contract() -> None:
     assert spec.preview is True
 
 
-def test_hermes_spec_maps_openai_compatible_llm_env() -> None:
+def test_hermes_spec_does_not_advertise_unsupported_llm_wiring() -> None:
     spec = get_agent_spec("hermes")
-    assert spec.llm_env_map == {
-        "base_url": "OPENAI_BASE_URL",
-        "api_key": "OPENAI_API_KEY",
-    }
-    assert spec.llm_model_args == ["-m"]
+    assert spec.llm_env_map is None
+    assert spec.llm_model_args is None
 
 
 def test_preview_agents_are_exactly_the_expected_set() -> None:

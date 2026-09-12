@@ -25,6 +25,7 @@ from vibepod.core.agents import (
     get_agent_shortcut,
     get_agent_spec,
     resolve_agent_name,
+    validate_llm_support,
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
@@ -658,6 +659,11 @@ def run(
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
+    try:
+        validate_llm_support(selected_agent, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
 
     acp_workspace_mount: str | None = None
     acp_workspace_alias: str | None = None

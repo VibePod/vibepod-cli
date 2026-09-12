@@ -283,13 +283,8 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # the base image rejects `docker run --user <uid>`.
         {},
         ikwid_args=["--yolo"],
-        # Hermes talks to providers through the OpenAI SDK and reads these two
-        # variables directly (agent/auxiliary_client.py).
-        llm_env_map={
-            "base_url": "OPENAI_BASE_URL",
-            "api_key": "OPENAI_API_KEY",
-        },
-        llm_model_args=["-m"],
+        # Global LLM wiring is rejected by validate_llm_support: the pinned
+        # runtime prioritizes saved providers and ACP has no routing flags.
         # `-z/--oneshot` takes the prompt as its value, and task.py emits
         # base_command + ikwid_prefix + headless_prefix + [prompt], which yields
         # `hermes --yolo -z "<prompt>"` — the prompt lands in -z's value slot and
@@ -328,6 +323,17 @@ def get_agent_spec(agent: str) -> AgentSpec:
     if agent not in AGENT_SPECS:
         raise ValueError(f"Unsupported agent: {agent}")
     return AGENT_SPECS[agent]
+
+
+def validate_llm_support(agent: str, config: dict[str, Any]) -> None:
+    """Reject known-incompatible wiring rather than silently misroute requests."""
+    if agent == "hermes" and config.get("llm", {}).get("enabled"):
+        raise ValueError(
+            "Hermes does not support VibePod's global LLM wiring in the pinned image. "
+            "Set llm.enabled to false in your VibePod config and use Hermes-native "
+            "provider/model setup (hermes setup inside the container). "
+            "This applies to interactive, task, and ACP modes."
+        )
 
 
 def effective_agent_image(agent: str, config: dict[str, Any]) -> str:
