@@ -677,6 +677,22 @@ def test_release_agent_noop_without_pane(monkeypatch, tmp_path: Path) -> None:
     assert herdr.release_agent("claude") is False
 
 
+def test_release_agent_noop_without_af_unix(monkeypatch, tmp_path: Path) -> None:
+    """Windows Python exposes no socket.AF_UNIX: with a resolvable socket path
+    (`vp doctor herdr` reaches here through the pane label) release must
+    degrade to False per its never-raises contract, not AttributeError."""
+    monkeypatch.delattr(socket_module, "AF_UNIX", raising=False)
+    monkeypatch.setattr(herdr, "resolve_socket", lambda: tmp_path / "herdr.sock")
+    monkeypatch.setenv("HERDR_PANE_ID", "w1:p1")
+    assert herdr.release_agent("claude") is False
+
+
+def test_report_agent_via_socket_noop_without_af_unix(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delattr(socket_module, "AF_UNIX", raising=False)
+    monkeypatch.setattr(herdr, "resolve_socket", lambda: tmp_path / "herdr.sock")
+    assert herdr._report_agent_via_socket("claude", "w1:p1") is False
+
+
 def test_run_module_imports_release() -> None:
     from vibepod.commands import run as run_module
 

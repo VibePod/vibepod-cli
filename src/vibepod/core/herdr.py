@@ -290,7 +290,8 @@ def release_agent(
 
     pane = pane or os.environ.get("HERDR_PANE_ID")
     sock_path = resolve_socket()
-    if not pane or sock_path is None:
+    # Python on Windows exposes no AF_UNIX even though a socket path may resolve
+    if not pane or sock_path is None or not hasattr(socket_module, "AF_UNIX"):
         return False
     request = {
         "id": f"vibepod:{os.getpid()}:release",
@@ -356,7 +357,8 @@ def _report_agent_via_socket(agent: str, pane: str) -> bool:
     import socket as socket_module
 
     sock_path = resolve_socket()
-    if sock_path is None:
+    # Python on Windows exposes no AF_UNIX even though a socket path may resolve
+    if sock_path is None or not hasattr(socket_module, "AF_UNIX"):
         return False
     request = {
         "id": f"vibepod:{os.getpid()}:metadata",
