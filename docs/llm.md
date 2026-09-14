@@ -161,6 +161,10 @@ llm:
   model: "meta-llama/Llama-3-8B-Instruct"
 ```
 
+Running a gateway such as LiteLLM in a container? Start it on the VibePod
+network and use its alias as `base_url` — see
+[Integrating external tools](integrations.md#litellm).
+
 ## Per-agent overrides
 
 If you need different LLM settings for a specific agent, use the per-agent `env` config. Per-agent env vars take precedence over the `llm` section:
