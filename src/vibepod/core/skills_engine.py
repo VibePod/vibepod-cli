@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -31,10 +30,24 @@ _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]+:")
 _SCP_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:")
 
 _skills_engine_checked = False
+_manager: DockerManager | None = None
 
 
 class SkillsEngineError(RuntimeError):
     """Raised when the driver cannot return an engine result."""
+
+
+def _get_manager() -> DockerManager:
+    """Shared DockerManager: connects to Docker or a discovered Podman socket."""
+    global _manager
+    if _manager is None:
+        try:
+            _manager = DockerManager()
+        except DockerClientError as exc:
+            raise SkillsEngineError(str(exc)) from exc
+        except Exception as exc:
+            raise SkillsEngineError(f"Docker initialization failed: {exc}") from exc
+    return _manager
 
 
 @dataclass(frozen=True)
@@ -148,9 +161,9 @@ def run_engine(
     engine (human-readable progress) is always captured but never parsed.
     """
     global _skills_engine_checked
+    manager = _get_manager()
     if not _skills_engine_checked:
         try:
-            manager = DockerManager()
             image_exists = False
             try:
                 manager.client.images.get(SKILLS_ENGINE_IMAGE)
@@ -188,49 +201,62 @@ def run_engine(
 
     local, user, cache = _ensure_dirs(cwd, local_required=local_required)
 
-    cmd: list[str] = [
-        "docker",
-        "run",
-        "--rm",
-        "-v",
-        f"{local}:/vibepod/local-skills",
-        "-v",
-        f"{user}:/vibepod/user-skills",
-        "-v",
-        f"{cache}:/vibepod/cache",
-    ]
+    volumes: dict[str, dict[str, str]] = {
+        str(local): {"bind": "/vibepod/local-skills", "mode": "rw"},
+        str(user): {"bind": "/vibepod/user-skills", "mode": "rw"},
+        str(cache): {"bind": "/vibepod/cache", "mode": "rw"},
+    }
     for host_path, container_path, mode in extra_mounts or []:
-        cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
-    if working_dir is not None:
-        cmd.extend(["-w", str(working_dir)])
+        volumes[str(host_path)] = {"bind": container_path, "mode": mode}
 
     # Pass through trusted-source allowlist if set on host.
+    environment: dict[str, str] | None = None
     if "VIBEPOD_TRUSTED_SOURCES" in os.environ:
-        cmd.extend(["-e", f"VIBEPOD_TRUSTED_SOURCES={os.environ['VIBEPOD_TRUSTED_SOURCES']}"])
+        environment = {"VIBEPOD_TRUSTED_SOURCES": os.environ["VIBEPOD_TRUSTED_SOURCES"]}
 
-    cmd.append(SKILLS_ENGINE_IMAGE)
+    command: list[str] = []
     if json_output:
-        cmd.append("--json")
-    cmd.extend(args)
+        command.append("--json")
+    command.extend(args)
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    except FileNotFoundError as exc:
-        raise SkillsEngineError(f"docker not found on PATH: {exc}") from exc
+        container = manager.client.containers.create(
+            SKILLS_ENGINE_IMAGE,
+            command=command,
+            volumes=volumes,
+            working_dir=str(working_dir) if working_dir is not None else None,
+            environment=environment,
+        )
+    except Exception as exc:
+        raise SkillsEngineError(f"Failed to create skills-engine container: {exc}") from exc
+
+    try:
+        container.start()
+        status = container.wait()
+        exit_code = int(status.get("StatusCode", 1)) if isinstance(status, dict) else int(status)
+        stdout = container.logs(stdout=True, stderr=False).decode("utf-8", "replace")
+        stderr = container.logs(stdout=False, stderr=True).decode("utf-8", "replace")
+    except Exception as exc:
+        raise SkillsEngineError(f"skills-engine container failed: {exc}") from exc
+    finally:
+        try:
+            container.remove(force=True)
+        except Exception:
+            pass
 
     payload: Any | None = None
-    if json_output and proc.stdout.strip():
+    if json_output and stdout.strip():
         try:
-            payload = json.loads(proc.stdout)
+            payload = json.loads(stdout)
         except json.JSONDecodeError as exc:
             raise SkillsEngineError(
-                f"Engine returned non-JSON output (exit={proc.returncode}): {proc.stdout!r}",
+                f"Engine returned non-JSON output (exit={exit_code}): {stdout!r}",
             ) from exc
 
     return EngineResult(
-        exit_code=proc.returncode,
-        stdout=proc.stdout,
-        stderr=proc.stderr,
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
         data=payload,
     )
 
