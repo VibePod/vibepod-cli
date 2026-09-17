@@ -124,6 +124,71 @@ ENV PATH=/opt/vp_pixi/.pixi/envs/default/bin:$PATH
 - Uses `latest`; pin a release (as in the previous recipe) for
   reproducibility.
 
+## pi + MCP servers (pi-mcp-adapter)
+
+[pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) is the pi
+extension that gives it MCP tools. The usual `pi install npm:pi-mcp-adapter`
+does not survive as a build step: pi writes into `$HOME/.pi`, and `$HOME`
+(`/config`) is a host mount at runtime, so anything installed there at build
+time is shadowed. Install into `/opt` instead and point the project's
+`.pi/settings.json` at it as a local-path package.
+
+```dockerfile
+# .vibepod/overlay/pi/Dockerfile — no FROM line
+#
+# $HOME (/config) is a host mount at runtime, so `pi install` at build time
+# would be shadowed. Install into /opt instead; the project's
+# .pi/settings.json references it as a local-path package.
+ARG PI_MCP_ADAPTER_VERSION=2.34.0
+
+RUN node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (a<22||(a===22&&b<18)) { console.error("pi-mcp-adapter needs Node >= 22.18, got "+process.version); process.exit(1) }' \
+    && mkdir -p /opt/pi-packages \
+    && cd /opt/pi-packages \
+    && npm init -y >/dev/null \
+    && npm install --omit=dev --no-audit --no-fund "pi-mcp-adapter@${PI_MCP_ADAPTER_VERSION}" \
+    && npm cache clean --force \
+    && chmod -R a+rX /opt/pi-packages
+```
+
+Commit the two project files pi reads at startup. `.pi/settings.json` loads
+the baked-in extension:
+
+```json
+{
+  "packages": ["/opt/pi-packages/node_modules/pi-mcp-adapter"]
+}
+```
+
+`.mcp.json` lists the servers to expose (shared with other MCP-aware tools):
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.8.31", "/workspace"]
+    }
+  }
+}
+```
+
+- **Per-agent overlay** — the fragment lives under `.vibepod/overlay/pi/` so
+  other agents in the project do not pay for an extension only pi loads.
+- **Absolute path in `settings.json`** — pi resolves relative package paths
+  against the settings file, which sits in the workspace mount; the install is
+  outside it, so the path must be absolute.
+- **`chmod -R a+rX`** — the overlay builds as root but pi runs as the
+  container user; without it the extension is unreadable at runtime.
+- **Node check** — the adapter's `engines` field says Node 20, but parts of
+  it (the token commands, for one) need 22.18+; failing the build early beats
+  a silent load failure in pi. Drop the guard if your base image is known-good.
+- **Pinned version via `ARG`** — bump `PI_MCP_ADAPTER_VERSION` to upgrade;
+  the fragment text changes, so the overlay rebuilds.
+- **Pinned server version in `.mcp.json`** — `npx -y` fetches the package
+  on first use, so an unpinned name resolves to whatever is latest that day
+  and needs registry access at runtime. Pin it, or bake the server into the
+  overlay next to the adapter and point `command` at it.
+
 ## Contributing a recipe
 
 Got an overlay other projects could reuse? Open an issue or PR with the
