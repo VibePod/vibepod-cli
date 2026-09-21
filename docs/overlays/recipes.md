@@ -179,7 +179,7 @@ alongside the filesystem server):
 {
   "mcpServers": {
     "memcode": {
-      "url": "https://mcp.memcode.in/mcp",
+      "url": "https://mcp.memcode.in/i/vibepod/mcp",
       "auth": "oauth"
     }
   }
