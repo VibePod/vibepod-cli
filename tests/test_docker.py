@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from vibepod.core import docker as docker_mod
 from vibepod.core.docker import (
     APIError,
     DockerClientError,
@@ -21,6 +22,7 @@ from vibepod.core.docker import (
     NotFound,
     _discover_podman_socket,
     _parse_image_name,
+    bind_mode,
 )
 
 requires_af_unix = pytest.mark.skipif(
@@ -154,6 +156,91 @@ def test_run_agent_podman_branch_honors_start_false(tmp_path: Path) -> None:
     assert kwargs["working_dir"] == str(tmp_path / "workspace")
     binds = client.api.host_config_kwargs["binds"]
     assert f"{tmp_path / 'workspace'}:{tmp_path / 'workspace'}:rw" in binds
+
+
+# ---------------------------------------------------------------------------
+# SELinux bind relabeling
+# ---------------------------------------------------------------------------
+
+
+def _enforcing_selinux(monkeypatch, tmp_path: Path) -> None:
+    enforce = tmp_path / "enforce"
+    enforce.write_text("1\n")
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+
+
+def test_bind_mode_follows_enforce_file(monkeypatch, tmp_path: Path) -> None:
+    enforce = tmp_path / "enforce"
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+
+    # No SELinux on the host at all.
+    assert bind_mode("/home/u/project") == "rw"
+
+    enforce.write_text("0\n")
+    assert bind_mode("/home/u/project") == "rw"
+
+    enforce.write_text("1\n")
+    assert bind_mode("/home/u/project") == "rw,z"
+    assert bind_mode("/home/u/.config/vibepod/proxy", "ro") == "ro,z"
+    # The X server owns this one; relabeling it would break the host.
+    assert bind_mode("/tmp/.X11-unix") == "rw"
+
+
+def test_run_agent_relabels_binds_on_selinux_host(tmp_path: Path, monkeypatch) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path)
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "agents" / "claude").mkdir(parents=True)
+
+    _run_acp_agent(
+        manager,
+        tmp_path,
+        workspace_mount_path=str(tmp_path / "workspace"),
+        extra_volumes=[("/tmp/.X11-unix", "/tmp/.X11-unix", "rw")],
+        start=False,
+    )
+
+    binds = client.api.host_config_kwargs["binds"]
+    assert f"{tmp_path / 'workspace'}:/workspace:rw,z" in binds
+    assert f"{tmp_path / 'agents' / 'claude'}:/claude:rw,z" in binds
+    assert "/tmp/.X11-unix:/tmp/.X11-unix:rw" in binds
+
+
+def test_ensure_proxy_relabels_ca_dir_on_selinux_host(tmp_path: Path, monkeypatch) -> None:
+    """Without `z` the CA store is unwritable: mitmdump exits 1 on startup."""
+
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "proxy"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    _enforcing_selinux(monkeypatch, tmp_path)
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    monkeypatch.setattr(DockerManager, "find_proxy", lambda self: None)
+
+    db_path = tmp_path / "proxy" / "proxy.db"
+    ca_dir = tmp_path / "proxy" / "mitmproxy"
+    manager.ensure_proxy(
+        image="vibepod/proxy:latest",
+        db_path=db_path,
+        ca_dir=ca_dir,
+        network="vibepod-network",
+    )
+
+    volumes = manager.client.containers.run_kwargs["volumes"]  # type: ignore[union-attr]
+    assert volumes[str(db_path.parent)]["mode"] == "rw,z"
+    assert volumes[str(ca_dir)]["mode"] == "rw,z"
 
 
 class _FakeStreamSocket:
