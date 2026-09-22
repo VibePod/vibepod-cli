@@ -103,7 +103,12 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
     private `Z` would not. Non-Linux engines have no such file and stay
     unflagged -- Podman's macOS VM cannot relabel a virtiofs share anyway.
     """
-    if str(host_path).startswith(_RELABEL_EXCLUDED_PREFIXES):
+    normalized_path = Path(host_path).resolve()
+    excluded_paths = tuple(Path(path).resolve() for path in _RELABEL_EXCLUDED_PREFIXES)
+    if any(
+        normalized_path == excluded or excluded in normalized_path.parents
+        for excluded in excluded_paths
+    ):
         return mode
     try:
         enforcing = Path(_SELINUX_ENFORCE_PATH).read_text().strip() == "1"
