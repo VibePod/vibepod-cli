@@ -432,3 +432,19 @@ def test_default_config_includes_cline_agent(monkeypatch, tmp_path: Path) -> Non
     assert cline["volumes"] == []
     assert cline["ports"] == []
     assert cline["init"] == []
+
+
+def test_default_config_includes_junie_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+
+    junie = config["agents"]["junie"]
+
+    assert junie["enabled"] is True
+    assert junie["image"] == "vibepod/junie:latest"
+    assert junie["auto_pull"] is None
+    assert junie["env"] == {}
+    assert junie["volumes"] == []
+    # Unlike dsh, this integration publishes nothing.
+    assert junie["ports"] == []
+    assert junie["init"] == []

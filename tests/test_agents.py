@@ -91,6 +91,22 @@ def test_jcode_spec_matches_container_contract() -> None:
     assert spec.headless_prefix == ["run"]
 
 
+def test_junie_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("junie")
+    assert spec.id == "junie"
+    assert spec.provider == "jetbrains"
+    assert spec.image == DEFAULT_IMAGES["junie"]
+    assert spec.config_subdir == "junie"
+    assert spec.command == ["junie"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env["HOME"] == "/config"
+    assert spec.extra_env["JUNIE_HOME"] == "/config/.junie"
+    assert spec.extra_env["JUNIE_SKIP_UPDATE_CHECK"] == "true"
+    assert spec.ikwid_args == ["--brave"]
+    assert spec.headless_prefix == ["--task"]
+    assert spec.acp_command == ["junie", "--acp=true"]
+
+
 def test_freebuff_spec_matches_container_contract() -> None:
     spec = get_agent_spec("freebuff")
     assert spec.id == "freebuff"
@@ -304,6 +320,7 @@ def test_agents_without_llm_env_map() -> None:
         "qwen",
         "dsh",
         "cline",
+        "junie",
     ):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
@@ -329,6 +346,7 @@ def test_acp_commands_match_contract() -> None:
         "vibe": ["vibe-acp"],
         "hermes": ["hermes-acp"],
         "cline": ["cline", "--acp"],
+        "junie": ["junie", "--acp=true"],
     }
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)
