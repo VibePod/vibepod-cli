@@ -127,6 +127,8 @@ _ACP_RESERVED_CONTAINER_PATHS = (
     # Hermes's install root on the hermes agent image: binding a workspace
     # over it hides the entrypoint, virtualenv and hermes-acp binary.
     "/opt/hermes",
+    # Junie's app bundle (launcher, JetBrains Runtime, jar) on its image.
+    "/opt/junie",
     "/etc",
     "/usr",
     "/tmp/.X11-unix",
@@ -274,6 +276,8 @@ def _agent_skill_paths(agent: str) -> list[str]:
         image's /opt/data, not /config  → /opt/data/.agents/skills/
       - qwen     reads ~/.qwen/skills/, which the image symlinks to /qwen/skills
         (also <project>/.qwen/skills/ in the workspace)
+      - junie    reads $JUNIE_HOME/skills/          → /config/.junie/skills/
+        (~/.agents/skills/ only at project level, as <project>/.agents/skills/)
 
     Gemini wraps skills inside an extension manifest and would need a generated
     gemini-extension.json — handled separately when we add that support.
@@ -287,6 +291,8 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/qwen/skills"]
     if agent == "hermes":
         return ["/opt/data/.agents/skills"]
+    if agent == "junie":
+        return ["/config/.junie/skills"]
     if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh"):
         return ["/config/.agents/skills"]
     return []

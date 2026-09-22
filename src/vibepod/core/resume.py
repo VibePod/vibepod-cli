@@ -150,6 +150,14 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
             _with_hermes_profile(_fixed("--continue")),
         ),
     ),
+    # Junie prints "Resume this session with:" followed by an indented
+    # "junie --session-id <id>" line on exit (tui/app/ResumeHintPrinter.kt).
+    "junie": (
+        (
+            re.compile(rf"{_BOUNDARY}junie[ \t]+--session-id[ \t]+({_TOKEN})"),
+            _with_id("--session-id"),
+        ),
+    ),
 }
 
 

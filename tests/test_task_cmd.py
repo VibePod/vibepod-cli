@@ -126,6 +126,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
     assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
     assert AGENT_SPECS["hermes"].headless_prefix == ["-z"]
+    assert AGENT_SPECS["junie"].headless_prefix == ["--task"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -1498,4 +1499,29 @@ def test_task_create_hermes_places_yolo_before_oneshot(
         "--yolo",
         "-z",
         "summarize this repository",
+    ]
+
+
+def test_task_create_junie_places_brave_before_task_option(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """`--task` consumes the next token as its value, so --brave must come first."""
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="junie",
+        prompt="--explain the build with spaces",
+        workspace=tmp_path,
+        ikwid=True,
+    )
+
+    assert stub.run_kwargs["command"] == [
+        "junie",
+        "--brave",
+        "--task",
+        "--explain the build with spaces",
     ]

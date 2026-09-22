@@ -219,3 +219,15 @@ def test_hermes_rejects_malformed_title(with_id: bool, profile: str, title: str)
     output += f"  hermes -c {title}{profile}\n"
     expected = f"vp run hermes -- --resume 01JABCDEF{profile}" if with_id else None
     assert build_resume_hint("hermes", output) == expected
+
+
+def test_detects_junie_session_id_hint() -> None:
+    output = "\x1b[0mResume this session with:\n  junie --session-id session-260922-191808-1abv\n"
+    assert (
+        build_resume_hint("junie", output)
+        == "vp run junie -- --session-id session-260922-191808-1abv"
+    )
+
+
+def test_junie_hint_ignores_bare_resume_flag() -> None:
+    assert build_resume_hint("junie", "run junie --resume to continue\n") is None
