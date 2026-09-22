@@ -352,3 +352,19 @@ def test_default_config_includes_hermes_agent(monkeypatch, tmp_path: Path) -> No
     # Unlike dsh, this integration publishes nothing.
     assert hermes["ports"] == []
     assert hermes["init"] == []
+
+
+def test_default_config_includes_junie_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+
+    junie = config["agents"]["junie"]
+
+    assert junie["enabled"] is True
+    assert junie["image"] == "vibepod/junie:latest"
+    assert junie["auto_pull"] is None
+    assert junie["env"] == {}
+    assert junie["volumes"] == []
+    # Unlike dsh, this integration publishes nothing.
+    assert junie["ports"] == []
+    assert junie["init"] == []

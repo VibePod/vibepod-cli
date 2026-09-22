@@ -45,6 +45,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["qwen"] == "vibepod/qwen:latest"
     assert images["dsh"] == "vibepod/dsh:latest"
     assert images["hermes"] == "vibepod/hermes:latest"
+    assert images["junie"] == "vibepod/junie:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -111,3 +112,11 @@ def test_hermes_image_override(monkeypatch) -> None:
     images = get_default_images()
 
     assert images["hermes"] == "example/hermes:dev"
+
+
+def test_junie_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_JUNIE", "example/junie:dev")
+
+    images = get_default_images()
+
+    assert images["junie"] == "example/junie:dev"

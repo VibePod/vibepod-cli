@@ -399,3 +399,18 @@ def test_hermes_shortcut_runs_hermes(monkeypatch) -> None:
     assert result.exit_code == 0
     assert called["agent"] == "hermes"
     assert called["passthrough"] == []
+
+
+def test_junie_shortcut_runs_junie(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["ju"])
+    assert result.exit_code == 0
+    assert called["agent"] == "junie"
+    assert called["passthrough"] == []
