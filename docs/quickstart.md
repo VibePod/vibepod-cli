@@ -149,8 +149,8 @@ Press **Ctrl+C** to stop the container when you are done.
 
 You can start agents with the full agent command. Most agents also have a single-letter
 shortcut; Pi uses `vp pi` because `vp p` is assigned to Copilot, Agy uses
-`vp n`, Tau uses `vp t`, Jcode uses `vp j`, Freebuff uses `vp fb`, and
-Qwen uses `vp q`. DeepSeek Harness uses `vp ds` and opens a Web UI — the URL
+`vp n`, Tau uses `vp t`, Jcode uses `vp j`, Freebuff uses `vp fb`,
+Qwen uses `vp q`, and Junie uses `vp ju`. DeepSeek Harness uses `vp ds` and opens a Web UI — the URL
 is printed after start.
 
 ```bash
