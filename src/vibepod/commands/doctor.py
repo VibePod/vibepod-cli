@@ -598,14 +598,16 @@ def herdr_doctor(
         image = None
         binds: dict[str, dict[str, str]] = {}
         try:
-            from vibepod.core.docker import DockerManager
+            from vibepod.core.docker import DockerManager, bind_mode
 
             manager = DockerManager()
             config = get_config()
             image = effective_agent_image(agent, config)
             spec = get_agent_spec(agent)
-            binds = {host: {"bind": dest, "mode": mode} for host, dest, mode in volumes}
-            binds[str(cfg_dir)] = {"bind": spec.config_mount_path, "mode": "rw"}
+            binds = {
+                host: {"bind": dest, "mode": bind_mode(host, mode)} for host, dest, mode in volumes
+            }
+            binds[str(cfg_dir)] = {"bind": spec.config_mount_path, "mode": bind_mode(cfg_dir)}
             container_env = {
                 **spec.extra_env,
                 **env,

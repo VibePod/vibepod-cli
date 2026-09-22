@@ -83,6 +83,34 @@ PROXY_POLICY_SCHEMA_LABEL = "io.vibepod.proxy.policy-schema"
 # matching PROXY_POLICY_SCHEMA_LABEL value.
 PROXY_POLICY_SCHEMA = "2"
 
+_SELINUX_ENFORCE_PATH = "/sys/fs/selinux/enforce"
+# Host paths that belong to the host, not to vibepod: relabeling them would
+# rewrite the label the host's own services depend on (the X server owns
+# /tmp/.X11-unix), so they keep their mode even on an SELinux host.
+_RELABEL_EXCLUDED_PREFIXES = ("/tmp/.X11-unix",)
+
+
+def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
+    """Return `mode`, plus SELinux's `z` flag when the host mount needs it.
+
+    On an enforcing SELinux host (Fedora and friends) a bind mount keeps its
+    host label -- `config_home_t` for the config dir, `user_home_t` for a
+    workspace -- and `container_t` may write neither: the proxy dies on
+    startup with `Permission denied: /data/mitmproxy/mitmproxy-ca.pem`, and
+    agents see an unwritable workspace. `z` relabels the source to the shared
+    `container_file_t`, which stays readable across containers (the agent
+    reads the proxy's CA dir, datasette shares the proxy db dir) where the
+    private `Z` would not. Non-Linux engines have no such file and stay
+    unflagged -- Podman's macOS VM cannot relabel a virtiofs share anyway.
+    """
+    if str(host_path).startswith(_RELABEL_EXCLUDED_PREFIXES):
+        return mode
+    try:
+        enforcing = Path(_SELINUX_ENFORCE_PATH).read_text().strip() == "1"
+    except OSError:
+        return mode
+    return f"{mode},z" if enforcing else mode
+
 
 def _run_podman(podman: str, args: list[str]) -> str | None:
     """Run a Podman subcommand, returning its trimmed stdout on success."""
@@ -663,16 +691,18 @@ class DockerManager:
         environment = {**env}
 
         volumes: list[str] = [
-            f"{workspace}:/workspace:rw",
-            f"{config_dir}:{config_mount_path}:rw",
+            f"{workspace}:/workspace:{bind_mode(workspace)}",
+            f"{config_dir}:{config_mount_path}:{bind_mode(config_dir)}",
         ]
         if workspace_mount_path:
             # ACP path parity: bind the workspace a second time onto its own
             # host path so host-side absolute paths (ACP session cwd, @-mentions,
             # diffs) resolve identically inside the container.
-            volumes.insert(1, f"{workspace}:{workspace_mount_path}:rw")
+            volumes.insert(1, f"{workspace}:{workspace_mount_path}:{bind_mode(workspace)}")
         if extra_volumes:
-            volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
+            volumes.extend(
+                f"{host}:{bind}:{bind_mode(host, mode)}" for host, bind, mode in extra_volumes
+            )
 
         try:
             if userns_mode is not None or not start:
@@ -860,13 +890,13 @@ class DockerManager:
         proxy_parent = Path(os.path.abspath(str(proxy_db_path.parent)))
 
         if logs_parent == proxy_parent:
-            volumes = {str(logs_parent): {"bind": "/mount/data", "mode": "rw"}}
+            volumes = {str(logs_parent): {"bind": "/mount/data", "mode": bind_mode(logs_parent)}}
             logs_db_container_path = f"/mount/data/{logs_db_path.name}"
             proxy_db_container_path = f"/mount/data/{proxy_db_path.name}"
         else:
             volumes = {
-                str(logs_parent): {"bind": "/mount/logs", "mode": "rw"},
-                str(proxy_parent): {"bind": "/mount/proxy", "mode": "rw"},
+                str(logs_parent): {"bind": "/mount/logs", "mode": bind_mode(logs_parent)},
+                str(proxy_parent): {"bind": "/mount/proxy", "mode": bind_mode(proxy_parent)},
             }
             logs_db_container_path = f"/mount/logs/{logs_db_path.name}"
             proxy_db_container_path = f"/mount/proxy/{proxy_db_path.name}"
@@ -952,8 +982,8 @@ class DockerManager:
         ca_dir.mkdir(parents=True, exist_ok=True)
 
         volumes = {
-            str(db_path.parent): {"bind": "/data", "mode": "rw"},
-            str(ca_dir): {"bind": "/data/mitmproxy", "mode": "rw"},
+            str(db_path.parent): {"bind": "/data", "mode": bind_mode(db_path.parent)},
+            str(ca_dir): {"bind": "/data/mitmproxy", "mode": bind_mode(ca_dir)},
         }
 
         run_kwargs: dict[str, Any] = {
