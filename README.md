@@ -23,8 +23,8 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Mistral Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes, Cline & more
-- 🔌 **Model providers** — register any OpenAI- or Anthropic-compatible endpoint or local model server once with `vp provider add`, then route agents to it with `vp run --provider` ([docs](https://vibepod.dev/docs/providers/))
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Mistral Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes, Cline, Junie & more
+- 🔌 **Model providers** — register any OpenAI- or Anthropic-compatible endpoint or local model server once with `vp provider add`, then route supported agents to it with `vp run --provider` ([docs and supported agents](https://vibepod.dev/docs/providers/))
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
 - 🔌 **External tools** — LiteLLM, Headroom, RTK, Graphify and other tooling plug in through the shared `vibepod-network` or a project overlay ([docs](https://vibepod.dev/docs/integrations/))
@@ -97,10 +97,11 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `dsh`               | Not supported                                |
 | `hermes`            | `--yolo`                                     |
 | `cline`             | `--auto-approve true`                        |
+| `junie`             | `--brave`                                    |
 
 ## Editor integration (`--acp`)
 
-`vp run <agent> --acp` turns VibePod into an [Agent Client Protocol](https://agentclientprotocol.com/) adapter, so the containerized agent appears directly in the AI panel of any editor with ACP support (e.g. [Zed](https://zed.dev/docs/ai/external-agents)) — with isolation, profiles, overlays and proxy metrics intact. Supported out of the box: `claude`, `gemini`, `qwen`, `codex`, `opencode`, `copilot`, `auggie`, `jcode`, `vibe`, `hermes`, `cline` and `pi`.
+`vp run <agent> --acp` turns VibePod into an [Agent Client Protocol](https://agentclientprotocol.com/) adapter, so the containerized agent appears directly in the AI panel of any editor with ACP support (e.g. [Zed](https://zed.dev/docs/ai/external-agents)) — with isolation, profiles, overlays and proxy metrics intact. Supported out of the box: `claude`, `gemini`, `qwen`, `codex`, `opencode`, `copilot`, `auggie`, `jcode`, `vibe`, `hermes`, `cline`, `junie` and `pi`.
 
 Register `vp` as a custom/external agent server in your editor. Zed example (`settings.json`):
 
@@ -192,6 +193,7 @@ Current defaults:
 - `dsh` -> `vibepod/dsh:latest`
 - `hermes` -> `vibepod/hermes:latest`
 - `cline` -> `vibepod/cline:latest`
+- `junie` -> `vibepod/junie:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
@@ -217,6 +219,7 @@ VP_IMAGE_QWEN=vibepod/qwen:latest vp run qwen
 VP_IMAGE_DSH=vibepod/dsh:latest vp run dsh
 VP_IMAGE_HERMES=vibepod/hermes:latest vp run hermes
 VP_IMAGE_CLINE=vibepod/cline:latest vp run cline
+VP_IMAGE_JUNIE=vibepod/junie:latest vp run junie
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list
 ```

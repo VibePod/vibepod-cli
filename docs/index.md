@@ -31,6 +31,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 | `dsh` (DeepSeek Harness)   | DeepSeek       | `vp ds`  |
 | `hermes`   | Nous Research  | `vp h`   |
 | `cline`    | Cline          | `vp cl`  |
+| `junie`    | JetBrains      | `vp ju`  |
 
 ## Next Steps
 
