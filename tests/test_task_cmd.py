@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -1499,3 +1500,199 @@ def test_task_create_hermes_places_yolo_before_oneshot(
         "-z",
         "summarize this repository",
     ]
+
+
+@pytest.fixture
+def provider_registry(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("provider store is POSIX-only")
+    from vibepod.core.providers import Provider, save_provider
+
+    monkeypatch.setenv("VP_PROVIDERS_DIR", str(tmp_path / "providers"))
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
+    save_provider(
+        Provider(
+            "hosted",
+            "openai-chat",
+            "https://example.com/v1",
+            auth="key",
+            models=("m",),
+            default_model="m",
+        ),
+        key="secret",
+    )
+    return tmp_path
+
+
+def _task_config_with(agent: str) -> dict:
+    config = _make_config()
+    config["agents"][agent] = {"env": {}, "init": []}
+    return config
+
+
+def test_task_create_qwen_provider_injects_env_and_label(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", lambda: _task_config_with("qwen"))
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="qwen",
+        prompt="run tests",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    assert kwargs["env"]["OPENAI_API_KEY"] == "secret"
+    assert kwargs["env"]["OPENAI_MODEL"] == "m"
+    assert kwargs["extra_labels"]["vibepod.provider"] == "hosted"
+    assert kwargs["command"] == ["qwen", "-p", "run tests"]
+
+
+def test_task_create_tau_provider_wraps_command_and_mounts_bootstrap(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", lambda: _task_config_with("tau"))
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="tau",
+        prompt="run tests",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    assert kwargs["env"]["VIBEPOD_PROVIDER_KEY_0"] == "secret"
+    assert kwargs["extra_labels"]["vibepod.provider"] == "hosted"
+    assert kwargs["command"][0:2] == ["python3", "/opt/vibepod/provider-bootstrap.py"]
+    wrapped = json.loads(kwargs["env"]["VIBEPOD_PROVIDER_COMMAND"])
+    assert wrapped == ["tau", "-p", "--provider", "hosted", "--model", "m", "run tests"]
+    mounts = [v for v in kwargs["extra_volumes"] if "/provider-bootstrap." in v[1]]
+    assert len(mounts) == 1 and mounts[0][2] == "ro"
+
+
+def test_task_create_provider_supersedes_legacy_llm(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    stub = _CapturingDockerManager()
+    config = _task_config_with("qwen")
+    config["llm"] = {
+        "enabled": True,
+        "base_url": "https://old",
+        "api_key": "old",
+        "model": "old",
+    }
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="qwen",
+        prompt="go",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    assert kwargs["env"]["OPENAI_BASE_URL"] == "https://example.com/v1"
+    assert "old" not in kwargs["env"].values()
+
+
+def test_task_create_provider_conflict_fails_before_docker(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: (_ for _ in ()).throw(AssertionError()))
+
+    with pytest.raises(typer.Exit):
+        task_cmd.task_create(
+            agent="qwen",
+            prompt="go",
+            workspace=tmp_path,
+            provider_names=["hosted"],
+            env=["OPENAI_BASE_URL=https://conflict"],
+        )
+
+
+@pytest.mark.parametrize("agent", ["opencode", "pi"])
+def test_task_create_provider_rejected_without_headless_mode(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+    agent,
+) -> None:
+    with pytest.raises(typer.Exit):
+        task_cmd.task_create(
+            agent=agent,
+            prompt="go",
+            workspace=tmp_path,
+            provider_names=["hosted"],
+        )
+
+
+def test_task_create_opencode_provider_rejected_no_headless(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    with pytest.raises(typer.Exit):
+        task_cmd.task_create(
+            agent="opencode",
+            prompt="go",
+            workspace=tmp_path,
+            provider_names=["hosted"],
+        )
+
+
+def test_task_create_provider_wrapper_follows_native_entrypoint_with_init(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    stub = _CapturingDockerManager()
+    stub.resolve_launch_command = lambda image, command: ["native-entrypoint", *(command or [])]
+    config = _task_config_with("tau")
+    config["agents"]["tau"]["init"] = ["echo initialization"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="tau",
+        prompt="run tests",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+        passthrough_args=["--model", "other"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    # UID mapping (native entrypoint) runs first, the bootstrap after it.
+    assert kwargs["command"] == [
+        "native-entrypoint",
+        "python3",
+        "/opt/vibepod/provider-bootstrap.py",
+    ]
+    assert kwargs["entrypoint"] is not None
+    wrapped = json.loads(kwargs["env"]["VIBEPOD_PROVIDER_COMMAND"])
+    # Explicit passthrough model wins; the routing flag survives.
+    assert wrapped == ["tau", "-p", "--provider", "hosted", "run tests", "--model", "other"]

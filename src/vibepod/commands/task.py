@@ -57,6 +57,8 @@ from vibepod.core.launch import (
     update_container_mapping,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.provider_launch import prepare_launch
+from vibepod.core.provider_runtime import WRAPPED_AGENTS, bootstrap_volume, wrap_provider_command
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.tasks import (
     TASK_STATUS_CANCELLED,
@@ -338,6 +340,13 @@ def task_create_command(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    provider: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--provider",
+            help="Temporary model provider(s) for this launch (see `vp provider list`)",
+        ),
+    ] = None,
 ) -> None:
     """Start an agent task in the background and print its id."""
     task_create(
@@ -354,6 +363,7 @@ def task_create_command(
         no_herdr=no_herdr,
         ikwid=ikwid,
         profile=profile,
+        provider_names=provider,
         passthrough_args=_context_args(ctx),
     )
 
@@ -414,6 +424,13 @@ def task_run_command(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    provider: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--provider",
+            help="Temporary model provider(s) for this launch (see `vp provider list`)",
+        ),
+    ] = None,
 ) -> None:
     """Deprecated alias for `task create`."""
     task_create(
@@ -430,6 +447,7 @@ def task_run_command(
         no_herdr=no_herdr,
         ikwid=ikwid,
         profile=profile,
+        provider_names=provider,
         passthrough_args=_context_args(ctx),
         deprecated_alias=True,
     )
@@ -485,6 +503,7 @@ def task_create(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    provider_names: list[str] | None = None,
     passthrough_args: list[str] | None = None,
     deprecated_alias: bool = False,
 ) -> None:
@@ -537,6 +556,26 @@ def task_create(
     if not workspace_path.exists() or not workspace_path.is_dir():
         raise typer.BadParameter(f"Workspace not found: {workspace_path}")
 
+    # Provider selection resolves before the allow-dir prompt: validation must
+    # fail before any interaction, and the prompt must never persist state for
+    # a launch that is about to be refused.
+    agent_cfg = config.get("agents", {}).get(selected, {})
+    provider_env: dict[str, str] = {}
+    provider_args: list[str] = []
+    if provider_names:
+        configured_env = {
+            **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
+            **parse_env_pairs(env or []),
+        }
+        try:
+            provider_launch = prepare_launch(selected, provider_names, configured_env)
+            provider_env = provider_launch.env
+            # Explicit passthrough model wins over the provider default (run-mode rule).
+            provider_args = provider_launch.arguments(passthrough_args)
+        except (ValueError, OSError) as exc:
+            error(str(exc) if isinstance(exc, ValueError) else "Cannot access provider credentials")
+            raise typer.Exit(1) from exc
+
     if is_protected_dir(workspace_path):
         error(
             f"'{workspace_path}' is a protected directory (home or root) and cannot be "
@@ -563,7 +602,6 @@ def task_create(
             error(f"Could not update allow list for '{workspace_path}': {exc}")
             raise typer.Exit(1) from exc
 
-    agent_cfg = config.get("agents", {}).get(selected, {})
     init_commands = agent_init_commands(selected, agent_cfg)
     agent_ports = agent_port_bindings(selected, agent_cfg) or None
     if agent_ports and spec.web_container_port is not None:
@@ -581,6 +619,7 @@ def task_create(
         **spec.extra_env,
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **parse_env_pairs(env or []),
+        **provider_env,
     }
     if spec.headless_command:
         # No web UI in one-shot mode: without this the image entrypoint would
@@ -602,8 +641,9 @@ def task_create(
 
     # LLM env vars are applied; CLI model flag is NOT appended in task mode.
     # Users who need a specific model can pass it via passthrough args after `--`.
+    # An explicit --provider launch supersedes the legacy llm injection entirely.
     llm_cfg = config.get("llm", {})
-    if llm_cfg.get("enabled") and spec.llm_env_map:
+    if llm_cfg.get("enabled") and spec.llm_env_map and not provider_names:
         llm_values = {
             "base_url": str(llm_cfg.get("base_url", "")).strip(),
             "api_key": str(llm_cfg.get("api_key", "")).strip(),
@@ -668,12 +708,16 @@ def task_create(
 
     base_command = spec.command
     entrypoint: list[str] | None = None
+    # Length of the resolved native entrypoint prefix in ``command``; the
+    # provider wrapper must sit after it so UID mapping still runs first.
+    native_prefix_len = 0
     if init_commands or (base_command is None):
         try:
             base_command = manager.resolve_launch_command(image=image, command=spec.command)
         except DockerClientError as exc:
             error(str(exc))
             raise typer.Exit(1) from exc
+        native_prefix_len = max(0, len(base_command) - len(spec.command or []))
         if init_commands:
             info(f"Applying {len(init_commands)} init command(s) before startup")
             entrypoint = init_entrypoint(init_commands)
@@ -688,15 +732,28 @@ def task_create(
     if spec.headless_command:
         # The one-shot invocation replaces the interactive command outright
         # (dsh runs `dsh web` interactively but `dsh --profile headless` one-shot).
-        command = list(spec.headless_command) + ikwid_prefix + [prompt] + passthrough_args
+        command = (
+            list(spec.headless_command) + ikwid_prefix + provider_args + [prompt] + passthrough_args
+        )
     else:
         command = (
             list(base_command or [])
             + ikwid_prefix
             + list(spec.headless_prefix or [])
+            + provider_args
             + [prompt]
             + passthrough_args
         )
+
+    provider_wrapped = bool(provider_names) and selected in WRAPPED_AGENTS
+    if provider_wrapped:
+        # Wrap last: the real agent argv travels in the environment, so image
+        # entrypoints that re-parse argv through `sh -c "$*"` cannot mangle
+        # quotes, braces, or prompt text.
+        prefix = 0 if spec.headless_command else native_prefix_len
+        wrapped, wrapper_env = wrap_provider_command(selected, command[prefix:])
+        command = command[:prefix] + wrapped
+        merged_env.update(wrapper_env)
 
     config_dir = agent_config_dir(selected, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -704,6 +761,9 @@ def task_create(
     extra_volumes = agent_extra_volumes(selected, config_dir)
     for host_path, _, _ in extra_volumes:
         Path(host_path).mkdir(parents=True, exist_ok=True)
+    if provider_wrapped:
+        # Mounted, not inlined: keeps the launch argv shell-safe for every image.
+        extra_volumes.append(bootstrap_volume(selected))
 
     socket_mount_probe = getattr(manager, "supports_host_socket_mounts", None)
     herdr_volumes, herdr_env = apply_herdr_if_enabled(
@@ -787,6 +847,8 @@ def task_create(
             container_user = host_user()
         launch_labels = dict(herdr_labels)
         launch_labels["vibepod.profile"] = active_profile
+        if provider_names:
+            launch_labels["vibepod.provider"] = ",".join(provider_names)
         if proxy_policy_id is not None:
             launch_labels["vibepod.proxy-policy"] = proxy_policy_id
         try:
