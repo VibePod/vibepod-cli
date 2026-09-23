@@ -15,6 +15,8 @@ from vibepod.utils.console import console, error, info, success, warning
 _VALID_SCOPES = {"local", "user"}
 
 app = typer.Typer(help="Manage VibePod skills", no_args_is_help=True)
+cache_app = typer.Typer(help="Manage the skills source cache", no_args_is_help=True)
+app.add_typer(cache_app, name="cache")
 
 
 def _resolve_scope(scope: str | None) -> Scope:
@@ -211,4 +213,24 @@ def update_cmd(
 
     if not json_out and result.exit_code == 0:
         success(f"Updated skills in {resolved_scope}")
+    _emit_or_raise(result, json_out)
+
+
+@cache_app.command("clear")
+def cache_clear_cmd(
+    json_out: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Remove cached git clones and npm packages (installed skills are kept)."""
+    try:
+        result = skills_engine.cache_clear()
+    except SkillsEngineError as exc:
+        _emit_diagnostic(str(exc), json_out)
+        raise typer.Exit(1) from exc
+
+    if not json_out and result.exit_code == 0:
+        cleared = 0
+        for record in result.data or []:
+            if record.get("command") == "cache clear":
+                cleared = int(record.get("entries", 0))
+        success(f"Cleared {cleared} cached source(s) from {skills_engine.cache_dir()}")
     _emit_or_raise(result, json_out)
