@@ -44,6 +44,12 @@ class AgentSpec:
     # always ":", regardless of the host platform. When set, `--acp` appends
     # the host workspace path, which editors send as an absolute path.
     write_roots_env: str | None = None
+    # rootless_runtime_ids is the image's own "uid:gid" runtime user, for
+    # images whose init must start as root and then drop to that user (s6
+    # images reject any other non-root start). On rootless Podman the host
+    # user is mapped onto it via keep-id:uid=,gid= and the container starts
+    # as namespace root instead of as the host UID. None keeps plain keep-id.
+    rootless_runtime_ids: str | None = None
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -307,6 +313,10 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # provides the `acp` module the adapter imports at startup.
         acp_command=["hermes-acp"],
         write_roots_env="HERMES_WRITE_SAFE_ROOT",
+        # Upstream's Dockerfile creates the runtime user with
+        # `useradd -u 10000 hermes`; main-wrapper and stage2-hook exit 1 for
+        # any non-root start under a different UID.
+        rootless_runtime_ids="10000:10000",
         # Hermes is pre-1.0 and its PyPI release line trails upstream main.
         preview=True,
     ),
@@ -348,23 +358,20 @@ def validate_llm_support(agent: str, config: dict[str, Any]) -> None:
         )
 
 
-def validate_rootless_runtime(agent: str, rootless: bool) -> None:
-    """Reject Hermes on rootless Podman before it maps the container to a UID it rejects.
+def rootless_podman_identity(agent: str) -> tuple[str, str | None]:
+    """Return ``(userns_mode, container_user)`` for a rootless Podman launch.
 
-    Rootless Podman launches the container with ``userns_mode=keep-id``, running as
-    the invoking user's UID, and VibePod overwrites USER_UID/USER_GID with 0 for the
-    entrypoint hooks. The pinned Hermes image needs its own bootstrap/runtime user:
-    its ``main-wrapper`` exits 1 on an arbitrary non-hermes UID, and its UID-mapping
-    hook ignores 0. Launching Hermes there would fail after the container starts, so
-    reject before provisioning any network, proxy, or image.
+    Plain ``keep-id`` runs the container as the invoking user's UID, so files
+    written to bind mounts stay owned by the host user. Images with a fixed
+    runtime user (``rootless_runtime_ids``) instead map the host user onto that
+    user and start as namespace root, so their init can bootstrap before
+    dropping privileges to a UID that is the host user on the host side.
     """
-    if agent == "hermes" and rootless:
-        raise ValueError(
-            "Hermes does not support rootless Podman: the pinned image requires its "
-            "own runtime user and rejects the arbitrary UID that rootless keep-id "
-            "maps the container to (it also ignores a UID of 0). "
-            "Run Hermes on rootful Docker/Podman instead.",
-        )
+    ids = get_agent_spec(agent).rootless_runtime_ids
+    if ids is None:
+        return "keep-id", None
+    uid, gid = ids.split(":")
+    return f"keep-id:uid={uid},gid={gid}", "0:0"
 
 
 def effective_agent_image(agent: str, config: dict[str, Any]) -> str:
