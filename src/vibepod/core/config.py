@@ -175,6 +175,15 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
+            "cursor": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["cursor"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "ports": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,
