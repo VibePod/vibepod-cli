@@ -46,6 +46,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["qwen"] == "vibepod/qwen:latest"
     assert images["dsh"] == "vibepod/dsh:latest"
     assert images["hermes"] == "vibepod/hermes:latest"
+    assert images["cursor"] == "vibepod/cursor:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -120,3 +121,11 @@ def test_vibe_image_override_accepts_legacy_name(monkeypatch) -> None:
     assert get_default_images()["vibe"] == "example/legacy:dev"
     monkeypatch.setenv("VP_IMAGE_VIBE", "example/vibe:dev")
     assert get_default_images()["vibe"] == "example/vibe:dev"
+
+
+def test_cursor_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_CURSOR", "example/cursor:dev")
+
+    images = get_default_images()
+
+    assert images["cursor"] == "example/cursor:dev"
