@@ -363,6 +363,10 @@ vp list --running    # shows only running agents
 vp list --json       # machine-readable output
 ```
 
+Each row shows the container's credential [profile](../profiles.md) and, when
+the container was launched with `--provider`, the injected provider names
+(comma-separated for multiple) in the `PROVIDER` column.
+
 When the current project has [overlays](../overlays/index.md), `vp list` adds a
 **Project Overlays** table naming the overlay image each agent resolves to and
 whether it is already built.
