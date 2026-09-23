@@ -14,6 +14,7 @@ from vibepod.commands import (
     list_cmd,
     logs,
     profile,
+    provider,
     proxy,
     run,
     skills,
@@ -141,6 +142,7 @@ app.command(name="version")(update.version)
 app.add_typer(logs.app, name="logs")
 app.add_typer(config.app, name="config")
 app.add_typer(profile.app, name="profile")
+app.add_typer(provider.app, name="provider")
 app.add_typer(proxy.app, name="proxy")
 app.add_typer(doctor.app, name="doctor")
 app.add_typer(skills.app, name="skills")
