@@ -110,6 +110,16 @@ from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.provider_launch import ProviderLaunch, prepare_launch
+from vibepod.core.provider_runtime import (
+    WRAPPED_AGENTS as _PROVIDER_WRAPPED_AGENTS,
+)
+from vibepod.core.provider_runtime import (
+    bootstrap_volume as _provider_bootstrap_volume,
+)
+from vibepod.core.provider_runtime import (
+    wrap_provider_command as _wrap_provider_command,
+)
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
@@ -591,6 +601,7 @@ def run(
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
     passthrough_args: list[str] | None = None,
+    provider_names: list[str] | None = None,
 ) -> None:
     """Start an agent container.
 
@@ -625,13 +636,37 @@ def run(
         error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
 
+    provider_env: dict[str, str] = {}
+    provider_launch: ProviderLaunch | None = None
+    if provider_names:
+        if acp and selected_agent in _PROVIDER_WRAPPED_AGENTS:
+            error(
+                "Temporary provider injection is not yet supported in ACP mode for "
+                f"{selected_agent}.",
+            )
+            raise typer.Exit(1)
+        configured_env = {
+            **{
+                str(k): str(v)
+                for k, v in config.get("agents", {}).get(selected_agent, {}).get("env", {}).items()
+            },
+            **_parse_env_pairs(env or []),
+        }
+        try:
+            provider_launch = prepare_launch(selected_agent, provider_names, configured_env)
+            provider_env = provider_launch.env
+        except (ValueError, OSError) as exc:
+            error(str(exc) if isinstance(exc, ValueError) else "Cannot access provider credentials")
+            raise typer.Exit(1) from exc
+
     _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
 
     # Reject unsupported wiring before any herdr hint or workspace processing:
     # the allow-dir prompt below persists a workspace to the allow list, which
     # must never happen for an agent/config this launch is about to refuse.
     try:
-        validate_llm_support(selected_agent, config)
+        if not provider_names:
+            validate_llm_support(selected_agent, config)
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
@@ -735,6 +770,7 @@ def run(
         **spec.extra_env,
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
+        **provider_env,
     }
     # The flag replaces the resolved config list, mirroring the config chain's
     # list-replace semantics (defaults -> global -> project -> CLI), so the
@@ -785,8 +821,10 @@ def run(
             info("Using stored Claude OAuth token (from `vp run claude setup-token`)")
 
     llm_cfg = config.get("llm", {})
-    llm_command_extra: list[str] = []
-    if llm_cfg.get("enabled") and spec.llm_env_map:
+    llm_command_extra: list[str] = (
+        provider_launch.arguments(passthrough_args) if provider_launch is not None else []
+    )
+    if not provider_names and llm_cfg.get("enabled") and spec.llm_env_map:
         llm_values = {
             "base_url": str(llm_cfg.get("base_url", "")).strip(),
             "api_key": str(llm_cfg.get("api_key", "")).strip(),
@@ -865,19 +903,25 @@ def run(
     if acp:
         command = list(acp_command or [])
     entrypoint: list[str] | None = None
+    provider_wrapped = bool(provider_names) and selected_agent in _PROVIDER_WRAPPED_AGENTS
+    # Length of the resolved native entrypoint prefix in ``command``; the
+    # provider wrapper below must sit after it, so UID mapping still runs first.
+    native_prefix_len = 0
     if init_commands:
         info(f"Applying {len(init_commands)} init command(s) before startup")
+        init_command = acp_command if acp else spec.command
         try:
             # The init wrapper replaces the image entrypoint, so the launch
             # argv has to be made explicit. In ACP mode that argv is the
             # adapter command, not the interactive one.
             command = manager.resolve_launch_command(
                 image=image,
-                command=acp_command if acp else spec.command,
+                command=init_command,
             )
         except DockerClientError as exc:
             error(str(exc))
             raise typer.Exit(1) from exc
+        native_prefix_len = len(command) - len(init_command or [])
         entrypoint = _init_entrypoint(init_commands)
 
     if ikwid:
@@ -909,6 +953,17 @@ def run(
                 error(str(exc))
                 raise typer.Exit(1) from exc
         command = list(command or []) + passthrough_args
+
+    if provider_wrapped:
+        # Wrap last, after every argument is appended: the real agent argv
+        # travels in the environment, so anything added later would be lost.
+        full_command = list(command or [])
+        wrapped, wrapper_env = _wrap_provider_command(
+            selected_agent,
+            full_command[native_prefix_len:],
+        )
+        command = full_command[:native_prefix_len] + wrapped
+        merged_env.update(wrapper_env)
 
     config_dir = agent_config_dir(selected_agent, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -950,6 +1005,9 @@ def run(
     if herdr_pane:
         _report_herdr_metadata(selected_agent)
     extra_volumes.extend(herdr_volumes)
+    if provider_wrapped:
+        # Mounted, not inlined: keeps the launch argv shell-safe for every image.
+        extra_volumes.append(_provider_bootstrap_volume(selected_agent))
     # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
     for key, value in herdr_env.items():
         merged_env.setdefault(key, value)
@@ -1018,6 +1076,8 @@ def run(
         container_user = _host_user()
     launch_labels = dict(herdr_labels)
     launch_labels["vibepod.profile"] = active_profile
+    if provider_names:
+        launch_labels["vibepod.provider"] = ",".join(provider_names)
     if proxy_policy_id is not None:
         launch_labels["vibepod.proxy-policy"] = proxy_policy_id
     auto_remove = bool(config.get("auto_remove", True))

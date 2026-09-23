@@ -14,6 +14,7 @@ from vibepod.commands import (
     list_cmd,
     logs,
     profile,
+    provider,
     proxy,
     run,
     skills,
@@ -107,6 +108,10 @@ def run_command(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    provider_names: Annotated[
+        list[str] | None,
+        typer.Option("--provider", help="Temporarily use a global provider"),
+    ] = None,
 ) -> None:
     """Start an agent container."""
     run.run(
@@ -125,6 +130,7 @@ def run_command(
         ikwid=ikwid,
         acp=acp,
         profile=profile,
+        provider_names=provider_names,
         passthrough_args=_context_args(ctx),
     )
 
@@ -141,6 +147,7 @@ app.command(name="version")(update.version)
 app.add_typer(logs.app, name="logs")
 app.add_typer(config.app, name="config")
 app.add_typer(profile.app, name="profile")
+app.add_typer(provider.app, name="provider")
 app.add_typer(proxy.app, name="proxy")
 app.add_typer(doctor.app, name="doctor")
 app.add_typer(skills.app, name="skills")
@@ -219,6 +226,10 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             str | None,
             typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
         ] = None,
+        provider_names: Annotated[
+            list[str] | None,
+            typer.Option("--provider", help="Temporarily use a global provider"),
+        ] = None,
     ) -> None:
         run.run(
             agent=agent_name,
@@ -236,6 +247,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             ikwid=ikwid,
             acp=acp,
             profile=profile,
+            provider_names=provider_names,
             passthrough_args=_context_args(ctx),
         )
 

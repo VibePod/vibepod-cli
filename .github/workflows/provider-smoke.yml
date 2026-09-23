@@ -1,0 +1,48 @@
+name: Provider smoke tests
+
+on:
+  pull_request:
+    paths:
+      - "src/vibepod/**"
+      - "tests/integration/test_provider_smoke.py"
+      - ".github/workflows/provider-smoke.yml"
+  workflow_dispatch:
+    inputs:
+      agents_ref:
+        description: "vibepod-agents ref (must include the Codex argv-preservation fix)"
+        default: main
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [pi, codex, qwen, tau, jcode, opencode]
+    env:
+      VP_PROVIDER_SMOKE: "1"
+      VP_PROVIDER_SMOKE_AGENT: ${{ matrix.agent }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: VibePod/vibepod-agents
+          ref: ${{ inputs.agents_ref || vars.PROVIDER_AGENTS_REF || 'main' }}
+          path: agent-images
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Build real agent image
+        run: docker build -t vp-provider-test-${{ matrix.agent }} agent-images/docker/${{ matrix.agent }}
+      - name: Run native agent against local fake API
+        run: python -m pytest -m integration tests/integration/test_provider_smoke.py -v
