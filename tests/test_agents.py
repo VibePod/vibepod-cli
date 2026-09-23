@@ -115,6 +115,23 @@ def test_qwen_spec_matches_container_contract() -> None:
     assert spec.headless_prefix == ["-p"]
 
 
+def test_cursor_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("cursor")
+    assert spec.id == "cursor"
+    assert spec.provider == "anysphere"
+    assert spec.image == DEFAULT_IMAGES["cursor"]
+    assert spec.config_subdir == "cursor"
+    assert spec.command == ["cursor-agent"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env == {"HOME": "/config"}
+    assert spec.ikwid_args == ["--force"]
+    # Print mode refuses an untrusted workspace without --trust.
+    assert spec.headless_prefix == ["--trust", "-p"]
+    assert spec.llm_env_map is None
+    assert spec.llm_model_args is None
+    assert spec.preview is False
+
+
 def test_dsh_spec_matches_container_contract() -> None:
     spec = get_agent_spec("dsh")
     assert spec.id == "dsh"
@@ -282,6 +299,7 @@ def test_agents_without_llm_env_map() -> None:
         "freebuff",
         "qwen",
         "dsh",
+        "cursor",
     ):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
@@ -306,6 +324,7 @@ def test_acp_commands_match_contract() -> None:
         "jcode": ["jcode", "acp"],
         "devstral": ["vibe-acp"],
         "hermes": ["hermes-acp"],
+        "cursor": ["cursor-agent", "acp"],
     }
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)

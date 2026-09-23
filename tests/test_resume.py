@@ -69,6 +69,26 @@ def test_detects_jcode_resume_hint() -> None:
     assert build_resume_hint("jcode", output) == "vp run jcode -- --resume my-session"
 
 
+def test_detects_cursor_exit_resume_hint() -> None:
+    output = (
+        "\x1b[90mTo resume this session:\x1b[0m "
+        "\x1b[1m\x1b[36mcursor-agent --resume=6f1c2a9e-3b4d-4e5f-8a7b-9c0d1e2f3a4b\x1b[0m\n"
+    )
+    assert (
+        build_resume_hint("cursor", output)
+        == "vp run cursor -- --resume 6f1c2a9e-3b4d-4e5f-8a7b-9c0d1e2f3a4b"
+    )
+
+
+def test_detects_cursor_forked_chat_hint() -> None:
+    output = "To resume the previous conversation use agent --resume abc-123\n"
+    assert build_resume_hint("cursor", output) == "vp run cursor -- --resume abc-123"
+
+
+def test_cursor_hint_ignores_agent_inside_paths() -> None:
+    assert build_resume_hint("cursor", "/opt/cursor-agent --resume=abc\n") is None
+
+
 def test_detects_freebuff_continue_hint() -> None:
     output = "freebuff --continue conv-42\n"
     assert build_resume_hint("freebuff", output) == "vp run freebuff -- --continue conv-42"

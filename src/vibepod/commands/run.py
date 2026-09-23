@@ -149,6 +149,9 @@ _ACP_RESERVED_CONTAINER_PATHS = (
     # Hermes's install root on the hermes agent image: binding a workspace
     # over it hides the entrypoint, virtualenv and hermes-acp binary.
     "/opt/hermes",
+    # Cursor CLI's install root on the cursor agent image (bash launcher,
+    # bundled node runtime and native modules).
+    "/opt/cursor-agent",
     "/etc",
     "/usr",
     "/tmp/.X11-unix",
@@ -290,6 +293,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
       - jcode    reads ~/.agents/skills/ (also ~/.jcode/skills/)
       - freebuff reads ~/.agents/skills/ (also ~/.freebuff/skills/)
       - dsh      reads ~/.agents/skills/            → /config/.agents/skills/
+      - cursor   reads ~/.agents/skills/ (also ~/.cursor/skills/, ~/.claude/skills/)
       - hermes   reads ~/.agents/skills/ once the image seeds it into
         skills.external_dirs in $HERMES_HOME/config.yaml (Hermes has no
         env-var override for that key). Its state volume is the official
@@ -309,7 +313,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/qwen/skills"]
     if agent == "hermes":
         return ["/opt/data/.agents/skills"]
-    if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh"):
+    if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh", "cursor"):
         return ["/config/.agents/skills"]
     return []
 
