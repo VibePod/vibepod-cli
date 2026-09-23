@@ -128,6 +128,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
     assert AGENT_SPECS["hermes"].headless_prefix == ["-z"]
     assert AGENT_SPECS["pi"].headless_prefix == ["--mode", "json"]
+    assert AGENT_SPECS["cursor"].headless_prefix == ["--trust", "-p"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -542,6 +543,26 @@ def test_task_create_pi_does_not_touch_settings(monkeypatch, tmp_path, tmp_task_
     task_cmd.task_create(agent="pi", prompt="go", workspace=tmp_path)
 
     assert not (task_cmd.agent_config_dir("pi") / ".pi" / "agent" / "settings.json").exists()
+
+
+def test_task_create_cursor_trusts_workspace_and_keeps_prompt_intact(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="cursor", prompt="fix the tests", workspace=tmp_path, ikwid=True)
+
+    assert stub.run_kwargs["command"] == [
+        "cursor-agent",
+        "--force",
+        "--trust",
+        "-p",
+        "fix the tests",
+    ]
 
 
 def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
