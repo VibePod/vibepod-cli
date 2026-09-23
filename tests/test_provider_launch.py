@@ -69,7 +69,7 @@ def test_claude_provider_environment(registry):
     assert not (registry / "agents").exists()
 
 
-@pytest.mark.parametrize("agent", ["gemini", "cline", "junie"])
+@pytest.mark.parametrize("agent", ["gemini", "cline", "junie", "cursor"])
 def test_unsupported_agent_rejected_before_key_read(registry, monkeypatch, agent):
     def unexpected(*args):
         raise AssertionError("Credentials must not be read for unsupported adapters")

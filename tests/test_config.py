@@ -8,7 +8,7 @@ import yaml
 from typer.testing import CliRunner
 
 from vibepod.cli import app
-from vibepod.constants import SUPPORTED_AGENTS
+from vibepod.constants import DEFAULT_IMAGES, SUPPORTED_AGENTS
 from vibepod.core.config import deep_merge, get_config
 
 runner = CliRunner()
@@ -448,3 +448,22 @@ def test_default_config_includes_junie_agent(monkeypatch, tmp_path: Path) -> Non
     # Unlike dsh, this integration publishes nothing.
     assert junie["ports"] == []
     assert junie["init"] == []
+
+
+def test_default_config_includes_cursor_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    # Default images are resolved at import time, so VP_IMAGE_* in the test
+    # environment would leak in; pin the entry the config must pick up.
+    monkeypatch.setitem(DEFAULT_IMAGES, "cursor", "example/cursor:default")
+    config = get_config()
+
+    cursor = config["agents"]["cursor"]
+
+    assert cursor["enabled"] is True
+    assert cursor["image"] == "example/cursor:default"
+    assert cursor["auto_pull"] is None
+    assert cursor["env"] == {}
+    assert cursor["volumes"] == []
+    # Unlike dsh, this integration publishes nothing.
+    assert cursor["ports"] == []
+    assert cursor["init"] == []

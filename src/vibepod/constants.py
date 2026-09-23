@@ -36,6 +36,7 @@ SUPPORTED_AGENTS = (
     "hermes",
     "cline",
     "junie",
+    "cursor",
 )
 
 AGENT_SHORTCUTS: dict[str, str] = {
@@ -55,6 +56,7 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "h": "hermes",
     "cl": "cline",
     "ju": "junie",
+    "cu": "cursor",
 }
 
 #: Former canonical agent ids. Existing state (config keys, overlay dirs,
@@ -103,6 +105,7 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_HERMES",
     "VP_IMAGE_CLINE",
     "VP_IMAGE_JUNIE",
+    "VP_IMAGE_CURSOR",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
     "VP_SKILLS_ENGINE_IMAGE",
@@ -196,6 +199,10 @@ def get_default_images() -> dict[str, str]:
         "junie": os.environ.get(
             "VP_IMAGE_JUNIE",
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/junie:latest",
+        ),
+        "cursor": os.environ.get(
+            "VP_IMAGE_CURSOR",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/cursor:latest",
         ),
         "datasette": os.environ.get(
             "VP_DATASETTE_IMAGE",

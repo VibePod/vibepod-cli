@@ -106,6 +106,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "dsh",
         "cline",
         "junie",
+        "cursor",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -839,6 +840,49 @@ def test_cline_launch_preserves_state_and_forwards_arguments(
     assert stub.run_kwargs["config_mount_path"] == "/config"
     assert Path(stub.run_kwargs["config_dir"]) == _tmp_config_root / "config" / "agents" / "cline"
     assert stub.run_kwargs["env"]["HOME"] == "/config"
+
+
+@pytest.mark.parametrize("invocation", [["run", "cursor"], ["cu"]])
+@pytest.mark.parametrize("ikwid", [False, True])
+def test_cursor_launch_preserves_state_and_forwards_arguments(
+    monkeypatch,
+    _tmp_config_root,
+    invocation,
+    ikwid,
+) -> None:
+    """Both entry points launch Cursor with persisted HOME and intact arguments."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("cursor", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            *invocation,
+            "-w",
+            str(workspace),
+            "--detach",
+            *(["--ikwid"] if ikwid else []),
+            "--",
+            "--resume",
+            "chat-123",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["command"] == [
+        "cursor-agent",
+        *(["--force"] if ikwid else []),
+        "--resume",
+        "chat-123",
+    ]
+    assert stub.run_kwargs["config_mount_path"] == "/config"
+    assert Path(stub.run_kwargs["config_dir"]) == _tmp_config_root / "config" / "agents" / "cursor"
+    assert stub.run_kwargs["env"]["HOME"] == "/config"
+    assert stub.run_kwargs["env"]["NODE_USE_ENV_PROXY"] == "1"
 
 
 def test_run_codex_oauth_ports_merge_with_configured_ports(monkeypatch, _tmp_config_root) -> None:
@@ -3447,6 +3491,7 @@ def _script_acp_editor(
         ("claude", ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]),
         ("hermes", ["hermes-acp"]),
         ("cline", ["cline", "--acp"]),
+        ("cursor", ["cursor-agent", "acp"]),
     ],
 )
 def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env, agent, command) -> None:
@@ -3742,6 +3787,8 @@ def test_hermes_acp_rejects_installation_overlap(workspace: str) -> None:
         ("claude", "/opt/hermes/project"),
         ("junie", "/opt/hermes"),
         ("hermes", "/opt/junie"),
+        ("claude", "/opt/cursor-agent/project"),
+        ("cursor", "/opt/junie"),
     ],
 )
 def test_acp_reserves_install_roots_only_for_their_agent(agent: str, workspace: str) -> None:
@@ -3980,6 +4027,19 @@ def test_junie_acp_rejects_installation_overlap(workspace: str) -> None:
 def test_jcode_acp_rejects_installation_overlap(workspace: str) -> None:
     with pytest.raises(typer.Exit):
         run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("jcode"))
+
+
+def test_cursor_skill_paths_use_shared_agents_dir() -> None:
+    """Cursor reads ~/.agents/skills, and the image sets HOME to /config."""
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("cursor") == ["/config/.agents/skills"]
+
+
+@pytest.mark.parametrize("workspace", ["/opt/cursor-agent", "/opt/cursor-agent/project"])
+def test_cursor_acp_rejects_installation_overlap(workspace: str) -> None:
+    with pytest.raises(typer.Exit):
+        run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("cursor"))
 
 
 def test_hermes_skill_paths_use_shared_agents_dir() -> None:
