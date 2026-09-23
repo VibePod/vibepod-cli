@@ -1,6 +1,7 @@
 """Provider exchange files: credential-free export and import."""
 
 import os
+from dataclasses import replace
 
 import pytest
 
@@ -143,3 +144,117 @@ def test_fetch_exchange_refuses_bad_responses(file_server, status, body, headers
         fetch_exchange(url + "/provider.toml")
     assert "leaked-secret" not in str(caught.value)
     assert len(calls) == 1
+
+
+# ---- commands ----
+
+from typer.testing import CliRunner  # noqa: E402
+
+from vibepod.cli import app  # noqa: E402
+
+runner = CliRunner()
+
+
+def test_export_writes_credential_free_file_to_stdout_and_path(store, tmp_path):
+    providers.save_provider(hosted(), key="sk-secret-value")
+    result = runner.invoke(app, ["provider", "export", "hosted"])
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith("# VibePod provider definition")
+    assert "sk-secret-value" not in result.output and "credential_file" not in result.output
+    target = tmp_path / "hosted.toml"
+    result = runner.invoke(app, ["provider", "export", "hosted", "-o", str(target)])
+    assert result.exit_code == 0, result.output
+    assert providers.provider_from_toml(target.read_text(), name="x").models == ("a", "b")
+    assert runner.invoke(app, ["provider", "export", "missing"]).exit_code == 1
+
+
+def test_round_trip_through_import_under_another_name(store, tmp_path):
+    providers.save_provider(hosted(), key="sk-secret-value")
+    path = tmp_path / "hosted.toml"
+    path.write_text(runner.invoke(app, ["provider", "export", "hosted"]).output)
+    result = runner.invoke(
+        app,
+        ["provider", "import", str(path), "--name", "copy", "--key-env", "COPY_KEY"],
+    )
+    assert result.exit_code == 0, result.output
+    copy = providers.load_provider("copy")
+    original = providers.load_provider("hosted")
+    assert copy == replace(original, name="copy", auth="env", key_env="COPY_KEY")
+    assert "copy" in result.output and "openai-chat" in result.output
+
+
+def test_import_none_and_env_auth(store, tmp_path):
+    path = tmp_path / "local.toml"
+    path.write_text(
+        'version = 1\nname = "local"\nprotocol = "openai-chat"\n'
+        'base_url = "http://192.168.1.10:11434/v1"\nmodels = ["m"]\ndefault_model = "m"\n',
+    )
+    result = runner.invoke(app, ["provider", "import", str(path)])
+    assert result.exit_code == 0, result.output
+    assert providers.load_provider("local").auth == "none"
+    path.write_text(
+        'version = 1\nname = "vendor"\nprotocol = "openai-chat"\n'
+        'base_url = "https://api.vendor.example/v1"\nauth = "env"\nkey_env = "VENDOR_KEY"\n'
+        'models = ["m"]\n',
+    )
+    result = runner.invoke(app, ["provider", "import", str(path)])
+    assert result.exit_code == 0, result.output
+    assert "VENDOR_KEY" in result.output
+    assert providers.load_provider("vendor").key_env == "VENDOR_KEY"
+
+
+def _key_file(tmp_path):
+    path = tmp_path / "hosted.toml"
+    path.write_text(providers.render_exchange(hosted()))
+    return path
+
+
+def test_import_key_auth_non_interactive_needs_key_env(store, tmp_path):
+    result = runner.invoke(app, ["provider", "import", str(_key_file(tmp_path))])
+    assert result.exit_code == 1
+    assert "--key-env" in result.output
+    assert not (store / "hosted").exists()
+
+
+def test_import_key_auth_prompts_and_stores_the_key(store, tmp_path, monkeypatch):
+    monkeypatch.setattr("vibepod.commands.provider._interactive", lambda: True)
+    result = runner.invoke(
+        app,
+        ["provider", "import", str(_key_file(tmp_path))],
+        input="sk-typed\ny\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "sk-typed" not in result.output
+    assert providers.resolve_key(providers.load_provider("hosted")) == "sk-typed"
+    # Declining plaintext storage writes nothing.
+    result = runner.invoke(
+        app,
+        ["provider", "import", str(_key_file(tmp_path)), "--name", "other"],
+        input="sk-typed\nn\n",
+    )
+    assert result.exit_code != 0
+    assert not (store / "other").exists()
+
+
+def test_import_refuses_existing_name_without_touching_it(store, tmp_path):
+    providers.save_provider(hosted(), key="sk-secret-value")
+    before = providers.load_provider("hosted")
+    result = runner.invoke(
+        app,
+        ["provider", "import", str(_key_file(tmp_path)), "--key-env", "X"],
+    )
+    assert result.exit_code == 1 and "already exists" in result.output
+    assert providers.load_provider("hosted") == before
+    assert providers.resolve_key(before) == "sk-secret-value"
+
+
+def test_import_from_http_url_warns_about_transport(store, file_server):
+    url, responses, _ = file_server
+    responses.append((200, providers.render_exchange(hosted()).encode(), {}))
+    result = runner.invoke(
+        app,
+        ["provider", "import", url + "/provider.toml", "--key-env", "HOSTED_KEY"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "without TLS" in result.output
+    assert providers.load_provider("hosted").base_url == "https://api.example.com/v1"
