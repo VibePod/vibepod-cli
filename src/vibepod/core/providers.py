@@ -272,10 +272,20 @@ def save_provider(
             shutil.rmtree(temporary)
 
 
-def _render_metadata(provider: Provider) -> str:
+EXCHANGE_HEADER = "# VibePod provider definition. Contains no credentials.\n"
+
+
+def render_exchange(provider: Provider) -> str:
+    """Shareable provider file: the stored metadata without any credential reference."""
+    return EXCHANGE_HEADER + _render_metadata(provider, include_credential_file=False)
+
+
+def _render_metadata(provider: Provider, *, include_credential_file: bool = True) -> str:
     """TOML text: scalar fields as JSON literals (valid TOML), settings as tables."""
     data = {"version": 1, **asdict(provider)}
     settings = data.pop("model_settings")
+    if not include_credential_file:
+        data.pop("credential_file")
     lines = [f"{name} = {json.dumps(value, ensure_ascii=False)}" for name, value in data.items()]
     for model, entry in settings.items():
         values = {k: v for k, v in entry.items() if v is not None and v != "" and v != ()}
@@ -354,16 +364,26 @@ def update_provider(provider: Provider, *, key: str | None = None) -> None:
         old_key_path.unlink(missing_ok=True)
 
 
-def load_provider(name: str) -> Provider:
-    path = _directory(name) / "provider.toml"
-    _private(path)
+def provider_from_toml(text: str, *, name: str | None = None) -> Provider:
+    """Parse provider metadata TOML: the stored file, or an exchange file.
+
+    With ``name`` the file's own name and credential reference are replaced,
+    which is what an import needs; without it the stored file is read as is.
+    Validation errors never echo file content.
+    """
     try:
-        data = tomllib.loads(path.read_text())
-        if data.pop("version", None) != 1 or data.get("name") != name:
-            raise ValueError("Unsupported provider metadata version or identity")
-        # Pre-release metadata carried a separate container-facing URL; one URL
-        # reachable from host and container replaced it (see docs, Local providers).
-        data.pop("runtime_url", None)
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError("Invalid provider file: not valid TOML") from exc
+    if data.pop("version", None) != 1:
+        raise ValueError("Unsupported provider file version")
+    # Pre-release metadata carried a separate container-facing URL; one URL
+    # reachable from host and container replaced it (see docs, Local providers).
+    data.pop("runtime_url", None)
+    if name is not None:
+        data["name"] = name
+        data.pop("credential_file", None)
+    try:
         raw_models = data.get("models", [])
         if not isinstance(raw_models, list):
             raise ValueError("Invalid selected models")
@@ -376,8 +396,20 @@ def load_provider(name: str) -> Provider:
         }
         p = Provider(**data)
         p.validate()
+    except (TypeError, AttributeError) as exc:
+        raise ValueError("Invalid provider file: unknown or malformed fields") from exc
+    return p
+
+
+def load_provider(name: str) -> Provider:
+    path = _directory(name) / "provider.toml"
+    _private(path)
+    try:
+        p = provider_from_toml(path.read_text())
+        if p.name != name:
+            raise ValueError("Provider identity mismatch")
         return p
-    except (ValueError, TypeError, AttributeError) as exc:
+    except ValueError as exc:
         raise ValueError(f"Invalid metadata for provider '{name}'") from exc
 
 
