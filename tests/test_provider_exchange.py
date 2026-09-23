@@ -72,3 +72,74 @@ def test_provider_from_toml_round_trips_and_ignores_credential_reference(store):
 def test_provider_from_toml_rejects_bad_files(text, message):
     with pytest.raises(ValueError, match=message):
         providers.provider_from_toml(text)
+
+
+@pytest.fixture
+def file_server():
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    responses = []
+    calls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            calls.append(self.path)
+            status, body, headers = responses.pop(0)
+            self.send_response(status)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=http.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{http.server_port}", responses, calls
+    http.shutdown()
+    http.server_close()
+    thread.join()
+
+
+def test_fetch_exchange_reads_local_files(tmp_path):
+    from vibepod.core.provider_exchange import fetch_exchange
+
+    path = tmp_path / "llmapi.toml"
+    path.write_text("version = 1\n")
+    assert fetch_exchange(str(path)) == ("version = 1\n", False)
+    with pytest.raises(ValueError, match="not found"):
+        fetch_exchange(str(tmp_path / "missing.toml"))
+    with pytest.raises(ValueError, match="scheme"):
+        fetch_exchange("ftp://example.com/x.toml")
+
+
+def test_fetch_exchange_over_http_flags_insecure_transport(file_server):
+    from vibepod.core.provider_exchange import fetch_exchange
+
+    url, responses, calls = file_server
+    responses.append((200, b"version = 1\n", {"Content-Type": "text/plain"}))
+    assert fetch_exchange(url + "/vibepod/provider.toml") == ("version = 1\n", True)
+    assert calls == ["/vibepod/provider.toml"]
+
+
+@pytest.mark.parametrize(
+    "status, body, headers, message",
+    [
+        (302, b"", {"Location": "http://example.com/other"}, "redirect"),
+        (404, b'{"error": "leaked-secret"}', {}, "HTTP 404"),
+        (200, b"\xff\xfe", {}, "UTF-8"),
+        (200, b"x" * (256 * 1024 + 1), {}, "size limit"),
+    ],
+)
+def test_fetch_exchange_refuses_bad_responses(file_server, status, body, headers, message):
+    from vibepod.core.provider_exchange import fetch_exchange
+
+    url, responses, calls = file_server
+    responses.append((status, body, headers))
+    with pytest.raises(ValueError, match=message) as caught:
+        fetch_exchange(url + "/provider.toml")
+    assert "leaked-secret" not in str(caught.value)
+    assert len(calls) == 1
