@@ -202,7 +202,7 @@ def _directory(name: str) -> Path:
 def _read_json(path: Path) -> Any:
     _private(path)
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, UnicodeError) as exc:
         raise ValueError("Invalid provider JSON file") from exc
 
@@ -212,7 +212,7 @@ def _write_json(path: Path, value: Any) -> None:
     fd, filename = tempfile.mkstemp(dir=path.parent, prefix=".write-")
     temporary = Path(filename)
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(value, stream, indent=2)
             stream.write("\n")
         temporary.replace(path)
@@ -302,7 +302,7 @@ def _write_metadata(path: Path, provider: Provider) -> None:
     fd, filename = tempfile.mkstemp(dir=path.parent, prefix=".metadata-")
     temporary = Path(filename)
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(_render_metadata(provider))
         temporary.replace(path)
     finally:
@@ -405,7 +405,7 @@ def load_provider(name: str) -> Provider:
     path = _directory(name) / "provider.toml"
     _private(path)
     try:
-        p = provider_from_toml(path.read_text())
+        p = provider_from_toml(path.read_text(encoding="utf-8"))
         if p.name != name:
             raise ValueError("Provider identity mismatch")
         return p

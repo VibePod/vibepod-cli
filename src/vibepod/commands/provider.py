@@ -409,6 +409,8 @@ def import_(
         if p.name in list_providers():
             raise ValueError(f"Provider '{p.name}' already exists; use --name for another name")
         key = ""
+        if key_env and p.auth != "key":
+            raise ValueError('--key-env applies only to files with auth = "key"')
         if p.auth == "key":
             if key_env:
                 p = replace(p, auth="env", key_env=key_env)

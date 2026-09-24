@@ -47,7 +47,7 @@ _BOOTSTRAP_MOUNTS = {
 
 
 def bootstrap_source(filename: str) -> str:
-    return files("vibepod.resources").joinpath(filename).read_text()
+    return files("vibepod.resources").joinpath(filename).read_text(encoding="utf-8")
 
 
 def bootstrap_volume(agent: str) -> tuple[str, str, str]:
@@ -61,14 +61,14 @@ def bootstrap_volume(agent: str) -> tuple[str, str, str]:
     source = bootstrap_source(filename)
     target = get_config_root() / "runtime" / filename
     try:
-        current = target.read_text()
+        current = target.read_text(encoding="utf-8")
     except OSError:
         current = None
     if current != source:
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=".bootstrap-")
         try:
-            with os.fdopen(fd, "w") as stream:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 stream.write(source)
             os.chmod(temporary, 0o644)
             os.replace(temporary, target)

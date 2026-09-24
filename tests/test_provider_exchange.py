@@ -258,3 +258,28 @@ def test_import_from_http_url_warns_about_transport(store, file_server):
     assert result.exit_code == 0, result.output
     assert "without TLS" in result.output
     assert providers.load_provider("hosted").base_url == "https://api.example.com/v1"
+
+
+def test_import_rejects_key_env_for_other_auth_modes(store, tmp_path):
+    path = tmp_path / "local.toml"
+    path.write_text(
+        'version = 1\nname = "local"\nprotocol = "openai-chat"\n'
+        'base_url = "http://192.168.1.10:11434/v1"\nmodels = ["m"]\n',
+    )
+    result = runner.invoke(app, ["provider", "import", str(path), "--key-env", "X"])
+    assert result.exit_code == 1 and "--key-env" in result.output
+    assert not (store / "local").exists()
+
+
+def test_non_ascii_model_ids_survive_store_and_exchange(store, tmp_path, monkeypatch):
+    providers.save_provider(
+        Provider("local", "openai-chat", "http://localhost:11434/v1", models=("modèle-ü", "plain")),
+    )
+    assert providers.load_provider("local").models == ("modèle-ü", "plain")
+    text = providers.render_exchange(providers.load_provider("local"))
+    assert "modèle-ü" in text
+    path = tmp_path / "local.toml"
+    path.write_text(text, encoding="utf-8")
+    result = runner.invoke(app, ["provider", "import", str(path), "--name", "copy"])
+    assert result.exit_code == 0, result.output
+    assert providers.load_provider("copy").models == ("modèle-ü", "plain")
