@@ -21,6 +21,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
 | `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
 | `hermes` | Nous Research | `vp h` | `vibepod/hermes:latest` |
+| `cursor` | Anysphere | `vp cu` | `vibepod/cursor:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`, `vp run qwen-cli`
 resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
@@ -158,7 +159,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`, `cursor`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -290,6 +291,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `qwen` | `--approval-mode=yolo` |
 | `dsh` | Not supported |
 | `hermes` | `--yolo` |
+| `cursor` | `--force` |
 
 Example:
 
@@ -414,6 +416,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `qwen` | `qwen -p "<prompt>"` |
 | `dsh` | `dsh --profile headless "<prompt>"` |
 | `hermes` | `hermes -z "<prompt>"` |
+| `cursor` | `cursor-agent --trust -p "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
@@ -503,7 +506,7 @@ claude --resume 39bf1a93-ea1f-4b0a-a894-0a662e5a1d4e
 ```
 
 When VibePod recognizes such a hint in the session output (supported for
-Claude, Codex, Pi, Copilot, Jcode, and Freebuff), it prints the equivalent
+Claude, Codex, Pi, Copilot, Jcode, Freebuff, and Cursor), it prints the equivalent
 VibePod command after the agent exits:
 
 ```text
@@ -1129,6 +1132,83 @@ already mounted.
 vp run qwen --ikwid
 vp task create qwen "fix the failing test" --ikwid
 ```
+
+### Cursor CLI (Anysphere)
+
+```bash
+vp run cursor   # or: vp cu
+```
+
+Cursor CLI (`cursor-agent`) is the terminal agent from the makers of the Cursor
+editor. It is closed source and ships as a self-contained package (bundled
+Node.js runtime) from `downloads.cursor.com`; the image pins one release and
+tracks new ones from Cursor's installer script. Models are served through your
+Cursor account (`--model`, `/model` or `cursor-agent models`), so VibePod's
+global `llm` settings do not apply to it. State is persisted under
+`~/.config/vibepod/agents/cursor/`, mounted at `/config` inside the container
+(`HOME=/config`):
+
+| Path in container | Contents |
+|---|---|
+| `/config/.cursor/cli-config.json` | CLI settings (permissions, approval mode, model, release channel) |
+| `/config/.config/cursor/auth.json` | Login tokens written by `cursor-agent login` |
+| `/config/.cursor/projects/`, `/config/.cursor/chats/` | Per-workspace trust, chat history (resume with `cursor-agent --resume=<id>`) |
+| `/config/.cursor/mcp.json`, `/config/.cursor/skills/` | Global MCP servers and personal skills |
+
+**Authentication.** Log in once; the CLI prints a `cursor.com/loginDeepControl`
+URL and polls for completion, so opening it in the host browser is enough (no
+callback port is involved):
+
+```bash
+vp run cursor -e NO_OPEN_BROWSER=1 -- login
+```
+
+Or use an API key from the Cursor dashboard instead:
+
+```yaml
+agents:
+  cursor:
+    env:
+      CURSOR_API_KEY: key_...
+```
+
+Or per run: `vp run cursor -e CURSOR_API_KEY=key_...`.
+
+**Proxy and TLS.** Cursor honors `HTTPS_PROXY` for its API traffic and starts
+Node with `--use-system-ca` plus `NODE_EXTRA_CA_CERTS`, so requests route
+through `vibepod-proxy` with the mounted mitmproxy CA.
+
+**Non-interactive mode.** Print mode works with both `vp run` and task mode.
+It refuses a workspace it has not been told to trust, so task mode passes
+`--trust` (interactive runs ask once per workspace and remember the answer in
+the config mount):
+
+```bash
+vp run cursor -- --trust -p "explain this repo"
+vp task create cursor "Summarize the README"
+```
+
+**IKWID mode.** `--ikwid` adds `--force` (alias `--yolo`), which runs every
+command not explicitly denied:
+
+```bash
+vp run cursor --ikwid
+vp task create cursor "fix the failing test" --ikwid
+```
+
+**Editor integration.** `cursor-agent acp` is a built-in ACP server, so
+`vp run cursor --acp` works in any ACP editor — see the [ACP docs](../acp.md).
+Log in with `vp run cursor -- login` first; the adapter reuses those
+credentials.
+
+**Skills.** Cursor scans `~/.agents/skills/` (as well as `~/.cursor/skills/`
+and `~/.claude/skills/`), so skills installed via `vp skills` are mounted at
+`/config/.agents/skills/<id>` and picked up automatically.
+
+The image pins Cursor's release channel to `static` in `cli-config.json` on
+every start. That is the CLI's only switch for its background self-update,
+which would otherwise download each new ~550 MB package into the config mount
+while the image keeps running its own pinned copy.
 
 ## Hermes Agent (`hermes`) — developer preview
 

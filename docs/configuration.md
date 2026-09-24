@@ -173,6 +173,14 @@ agents:
     ports: []
     init: []
 
+  cursor:
+    enabled: true
+    image: vibepod/cursor:latest
+    env: {}
+    volumes: []
+    ports: []
+    init: []
+
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
   enabled: false
@@ -244,6 +252,7 @@ Each agent image can be overridden individually:
 | `VP_IMAGE_QWEN`          | qwen                                |
 | `VP_IMAGE_DSH`           | dsh                                 |
 | `VP_IMAGE_HERMES`        | hermes                              |
+| `VP_IMAGE_CURSOR`        | cursor                              |
 | `VP_DATASETTE_IMAGE`     | datasette (logs UI)                 |
 | `VP_PROXY_IMAGE`         | proxy                               |
 | `VP_SKILLS_ENGINE_IMAGE` | skills-engine (used by `vp skills`) |
