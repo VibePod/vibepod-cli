@@ -892,6 +892,8 @@ def test_agent_custom_volumes_parses_paths_and_named_volumes(
     (home / "notes").mkdir(parents=True)
     (tmp_path / "data").mkdir()
     monkeypatch.setenv("HOME", str(home))
+    # Windows expands `~` from USERPROFILE and ignores HOME.
+    monkeypatch.setenv("USERPROFILE", str(home))
 
     volumes = launch.agent_custom_volumes(
         "claude",
@@ -947,11 +949,18 @@ def test_agent_custom_volumes_rejects_non_string_values(tmp_path: Path) -> None:
     with pytest.raises(typer.BadParameter, match=r"agents\.claude\.volumes\[2\]"):
         launch.agent_custom_volumes(
             "claude",
-            {"volumes": ["a:/a", {"src": "b"}]},
+            {"volumes": ["cache:/a", {"src": "b"}]},
             base_dir=tmp_path,
         )
     with pytest.raises(typer.BadParameter, match=r"agents\.claude\.volumes value"):
         launch.agent_custom_volumes("claude", {"volumes": {"a": "/a"}}, base_dir=tmp_path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="`c:/data` is a drive path on Windows hosts")
+def test_agent_custom_volumes_one_letter_named_volume_off_windows(tmp_path: Path) -> None:
+    assert launch.agent_custom_volumes("claude", {"volumes": ["c:/data"]}, base_dir=tmp_path) == [
+        ("c", "/data", "rw"),
+    ]
 
 
 def test_merge_custom_volumes_appends_and_replaces_same_target() -> None:
