@@ -221,7 +221,8 @@ def _parse_volume_spec(
     source: str,
     index: int,
     base_dir: Path,
-) -> tuple[str, str, str]:
+    skip_targets: frozenset[str],
+) -> tuple[str, str, str] | None:
     def invalid(reason: str) -> typer.BadParameter:
         return typer.BadParameter(f"Invalid {source}[{index}] value '{entry}': {reason}")
 
@@ -241,13 +242,19 @@ def _parse_volume_spec(
 
     if not target.startswith("/"):
         raise invalid("the container path must be absolute.")
-    target = posixpath.normpath(target)
+    # normpath keeps a leading `//` (POSIX leaves it implementation-defined),
+    # but Linux resolves it to `/`, so `//workspace` must still collide.
+    target = posixpath.normpath("/" + target.lstrip("/"))
     if target == "/":
         raise invalid("cannot mount over the container root.")
 
     options = mode.split(",")
     if any(opt not in _VOLUME_MODE_OPTIONS for opt in options) or {"ro", "rw"} <= set(options):
         raise invalid("mode must be 'ro' or 'rw', optionally combined with 'z' or 'Z'.")
+    if target in skip_targets:
+        # Replaced by a later entry for the same target: its source never gets
+        # mounted, so a host path missing on this machine must not block the run.
+        return None
 
     if drive or host.startswith(("~", ".")) or "/" in host or "\\" in host:
         host_path = Path(host).expanduser()
@@ -269,22 +276,31 @@ def parse_volume_specs(
     *,
     source: str,
     base_dir: Path,
+    skip_targets: Iterable[str] = (),
 ) -> list[tuple[str, str, str]]:
     """Validate `docker run -v` style entries as (source, container_path, mode).
 
     Sources are host paths (absolute, `~`-prefixed, or relative to *base_dir*)
     or Docker named volumes; `source` names the origin in error messages
-    (`agents.<agent>.volumes` or `--volume`).
+    (`agents.<agent>.volumes` or `--volume`). Entries mounted at one of
+    *skip_targets* are syntax-checked but dropped without resolving the source.
     """
+    skip = frozenset(skip_targets)
     volumes: list[tuple[str, str, str]] = []
     for index, item in enumerate(items, start=1):
         if not isinstance(item, str) or not item.strip():
             raise typer.BadParameter(
                 f"Invalid {source}[{index}] value, expected a string like '~/data:/data:ro'.",
             )
-        volumes.append(
-            _parse_volume_spec(item.strip(), source=source, index=index, base_dir=base_dir),
+        volume = _parse_volume_spec(
+            item.strip(),
+            source=source,
+            index=index,
+            base_dir=base_dir,
+            skip_targets=skip,
         )
+        if volume is not None:
+            volumes.append(volume)
     return volumes
 
 
@@ -293,8 +309,13 @@ def agent_custom_volumes(
     agent_cfg: dict[str, Any],
     *,
     base_dir: Path,
+    replaced_targets: Iterable[str] = (),
 ) -> list[tuple[str, str, str]]:
-    """Read and validate per-agent user volumes from config."""
+    """Read and validate per-agent user volumes from config.
+
+    Entries whose container path is in *replaced_targets* (overridden by
+    `--volume`) are dropped.
+    """
     raw_volumes = agent_cfg.get("volumes", [])
     if raw_volumes is None:
         return []
@@ -307,16 +328,12 @@ def agent_custom_volumes(
             f"Invalid agents.{agent}.volumes value, "
             "expected a string like '~/data:/data:ro' or a list of them.",
         )
-    return parse_volume_specs(items, source=f"agents.{agent}.volumes", base_dir=base_dir)
-
-
-def merge_custom_volumes(
-    configured: list[tuple[str, str, str]],
-    overrides: list[tuple[str, str, str]],
-) -> list[tuple[str, str, str]]:
-    """Append *overrides* to *configured*, replacing entries with the same target."""
-    override_targets = {target for _, target, _ in overrides}
-    return [vol for vol in configured if vol[1] not in override_targets] + overrides
+    return parse_volume_specs(
+        items,
+        source=f"agents.{agent}.volumes",
+        base_dir=base_dir,
+        skip_targets=replaced_targets,
+    )
 
 
 def check_custom_volume_targets(

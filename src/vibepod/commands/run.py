@@ -92,9 +92,6 @@ from vibepod.core.launch import (
     materialize_launch_policy as _materialize_launch_policy,
 )
 from vibepod.core.launch import (
-    merge_custom_volumes as _merge_custom_volumes,
-)
-from vibepod.core.launch import (
     parse_env_pairs as _parse_env_pairs,
 )
 from vibepod.core.launch import (
@@ -808,10 +805,16 @@ def run(
     # Unlike --publish, -v adds to the configured list: a flag entry only
     # replaces the configured entry mounted at the same container path.
     # Config paths are relative to the workspace, flag paths to the shell cwd.
-    custom_volumes = _merge_custom_volumes(
-        _agent_custom_volumes(selected_agent, agent_cfg, base_dir=workspace_path),
-        _parse_volume_specs(volume or [], source="--volume", base_dir=Path.cwd()),
-    )
+    flag_volumes = _parse_volume_specs(volume or [], source="--volume", base_dir=Path.cwd())
+    custom_volumes = [
+        *_agent_custom_volumes(
+            selected_agent,
+            agent_cfg,
+            base_dir=workspace_path,
+            replaced_targets=[target for _, target, _ in flag_volumes],
+        ),
+        *flag_volumes,
+    ]
     if spec.write_roots_env and acp_workspace_mount is not None:
         # In ACP mode the workspace is also bound at its own host path, and the
         # editor sends that spelling, so the agent's file sandbox has to allow

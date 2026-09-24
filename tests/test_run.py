@@ -963,15 +963,33 @@ def test_agent_custom_volumes_one_letter_named_volume_off_windows(tmp_path: Path
     ]
 
 
-def test_merge_custom_volumes_appends_and_replaces_same_target() -> None:
-    configured = [("a", "/a", "rw"), ("b", "/b", "rw")]
-    overrides = [("c", "/c", "ro"), ("b2", "/b", "ro")]
+def test_agent_custom_volumes_drops_replaced_targets_without_resolving_them(
+    tmp_path: Path,
+) -> None:
+    cfg = {"volumes": ["./missing:/b", "keep:/a", "gone:///c"]}
 
-    assert launch.merge_custom_volumes(configured, overrides) == [
-        ("a", "/a", "rw"),
-        ("c", "/c", "ro"),
-        ("b2", "/b", "ro"),
-    ]
+    assert launch.agent_custom_volumes(
+        "claude",
+        cfg,
+        base_dir=tmp_path,
+        replaced_targets=["/b", "/c"],
+    ) == [("keep", "/a", "rw")]
+    # Replaced entries are still syntax-checked.
+    with pytest.raises(typer.BadParameter, match=r"mode must be"):
+        launch.agent_custom_volumes(
+            "claude",
+            {"volumes": ["./missing:/b:bad"]},
+            base_dir=tmp_path,
+            replaced_targets=["/b"],
+        )
+
+
+def test_agent_custom_volumes_canonicalizes_leading_slashes(tmp_path: Path) -> None:
+    assert launch.agent_custom_volumes(
+        "claude",
+        {"volumes": ["cache://workspace/", "data:///srv//x/../y"]},
+        base_dir=tmp_path,
+    ) == [("cache", "/workspace", "rw"), ("data", "/srv/y", "rw")]
 
 
 def test_check_custom_volume_targets_rejects_collisions() -> None:
@@ -1033,7 +1051,8 @@ def test_run_mounts_configured_and_flag_volumes(monkeypatch, _tmp_config_root) -
     ]
 
 
-def test_run_rejects_volume_over_managed_mount(monkeypatch, _tmp_config_root) -> None:
+@pytest.mark.parametrize("target", ["/workspace", "//workspace", "/workspace/"])
+def test_run_rejects_volume_over_managed_mount(monkeypatch, _tmp_config_root, target) -> None:
     workspace = _tmp_config_root / "workspace"
     workspace.mkdir()
     stub = _PortCapturingManager()
@@ -1042,12 +1061,38 @@ def test_run_rejects_volume_over_managed_mount(monkeypatch, _tmp_config_root) ->
 
     result = CliRunner().invoke(
         app,
-        ["run", "claude", "-w", str(workspace), "--detach", "-v", "cache:/workspace"],
+        ["run", "claude", "-w", str(workspace), "--detach", "-v", f"cache:{target}"],
     )
 
     assert result.exit_code != 0
     assert "already mounted by VibePod" in result.output
     assert stub.run_kwargs is None
+
+
+def test_run_volume_flag_replaces_configured_entry_with_missing_source(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    """A -v override must not resolve the host source of the entry it replaces."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _volumes_config(["./missing:/datasets", "cache:/cache"]),
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "-v", "datasets://datasets/:ro"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    custom = [vol for vol in stub.run_kwargs["extra_volumes"] if vol[1] in {"/datasets", "/cache"}]
+    assert custom == [("cache", "/cache", "rw"), ("datasets", "/datasets", "ro")]
 
 
 def test_run_rejects_invalid_configured_volume(monkeypatch, _tmp_config_root) -> None:
