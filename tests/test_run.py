@@ -913,7 +913,9 @@ def test_agent_custom_volumes_parses_paths_and_named_volumes(
         ("pgdata", "/var/lib/postgresql/data", "rw"),
     ]
     assert launch.agent_custom_volumes(
-        "claude", {"volumes": "cache:/cache"}, base_dir=tmp_path
+        "claude",
+        {"volumes": "cache:/cache"},
+        base_dir=tmp_path,
     ) == [
         ("cache", "/cache", "rw"),
     ]
@@ -944,7 +946,9 @@ def test_agent_custom_volumes_rejects_invalid_entries(
 def test_agent_custom_volumes_rejects_non_string_values(tmp_path: Path) -> None:
     with pytest.raises(typer.BadParameter, match=r"agents\.claude\.volumes\[2\]"):
         launch.agent_custom_volumes(
-            "claude", {"volumes": ["a:/a", {"src": "b"}]}, base_dir=tmp_path
+            "claude",
+            {"volumes": ["a:/a", {"src": "b"}]},
+            base_dir=tmp_path,
         )
     with pytest.raises(typer.BadParameter, match=r"agents\.claude\.volumes value"):
         launch.agent_custom_volumes("claude", {"volumes": {"a": "/a"}}, base_dir=tmp_path)
