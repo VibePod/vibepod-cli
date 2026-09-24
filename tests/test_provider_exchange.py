@@ -134,6 +134,9 @@ def test_fetch_exchange_over_http_flags_insecure_transport(file_server):
         (200, b"\xff\xfe", {}, "UTF-8"),
         (200, b"x" * (256 * 1024 + 1), {}, "size limit"),
     ],
+    # Explicit ids: the oversize body would otherwise become part of the test id,
+    # which pytest exports in PYTEST_CURRENT_TEST and Windows caps at 32767 chars.
+    ids=["redirect", "http-404", "not-utf8", "oversize"],
 )
 def test_fetch_exchange_refuses_bad_responses(file_server, status, body, headers, message):
     from vibepod.core.provider_exchange import fetch_exchange
