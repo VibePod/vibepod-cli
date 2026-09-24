@@ -50,7 +50,7 @@ agents:
     image: vibepod/claude:latest
     auto_pull: null # Per-agent override: true/false, or null to use global auto_pull
     env: {} # Extra environment variables passed to the container
-    volumes: [] # Reserved for future use
+    volumes: [] # Extra mounts, `docker run -v` syntax (see Mounting volumes)
     ports: [] # Ports to publish on the host, `docker run -p` syntax
     init: [] # Optional shell commands run before agent startup
     overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
@@ -326,6 +326,37 @@ For a one-off override, `vp run` (and the agent alias commands) accept a repeata
 
 ```bash
 vp run claude -p 127.0.0.1:3090:3081 -p 6000:6000/udp
+```
+
+## Mounting volumes
+
+Only the workspace (at `/workspace`) and the agent's config directory are mounted by default. `agents.<agent>.volumes` adds more mounts using the same syntax as `docker run -v`, `SOURCE:TARGET[:MODE]`:
+
+```yaml
+# .vibepod/config.yaml
+agents:
+  claude:
+    volumes:
+      - "~/datasets:/datasets:ro" # host path, read-only
+      - "../shared-lib:/shared-lib" # relative to the workspace, read-write
+      - "pip-cache:/root/.cache/pip" # Docker named volume (created on first use)
+```
+
+- **SOURCE** is either a host path or a Docker named volume. Host paths may be absolute, start with `~`, or be relative. In config, relative paths resolve against the workspace. The host path must already exist: VibePod rejects a missing one rather than letting Docker create it as a root-owned directory. A source without a `/` (like `pip-cache`) is a named volume.
+- **TARGET** must be an absolute container path. It cannot be `/`, and it cannot be a path VibePod already mounts (`/workspace`, the agent config directory, `/etc/vibepod-proxy-ca`, and so on). A path nested inside one of those, such as `/workspace/data`, is allowed.
+- **MODE** is `rw` (default) or `ro`. It can be combined with the SELinux relabel options `z`/`Z`, e.g. `ro,z`.
+
+The list applies to both `vp run` and `vp task` containers. Like other agent keys, a project-level `volumes` list replaces the global one for that agent.
+
+!!! warning "Project configs can mount any host path"
+    A committed `.vibepod/config.yaml` can mount any path your user can read
+    (for example `~/.ssh`) into the agent container. Review the `volumes`
+    of a project you did not write before running an agent in it.
+
+`vp run` (and the agent alias commands) also accept a repeatable `-v/--volume` flag with the same syntax. Unlike `--publish`, the flag **adds** to the configured list. A flag entry replaces only the configured entry mounted at the same container path. Relative flag paths resolve against the current directory:
+
+```bash
+vp run claude -v ~/datasets:/datasets:ro -v pip-cache:/root/.cache/pip
 ```
 
 ## The built-in proxy

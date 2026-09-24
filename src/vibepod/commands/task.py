@@ -40,11 +40,14 @@ from vibepod.core.herdr import (
     report_pane_metadata,
 )
 from vibepod.core.launch import (
+    PROXY_CA_MOUNT_PATH,
+    agent_custom_volumes,
     agent_extra_volumes,
     agent_init_commands,
     agent_port_bindings,
     apply_overlay_if_enabled,
     apply_proxy_env,
+    check_custom_volume_targets,
     get_container_ip,
     host_identity_env,
     host_user,
@@ -613,6 +616,7 @@ def task_create(
         agent_ports = {
             key: value for key, value in agent_ports.items() if key.split("/", 1)[0] != web_port
         } or None
+    custom_volumes = agent_custom_volumes(selected, agent_cfg, base_dir=workspace_path)
     merged_env = {
         **host_identity_env(),
         **terminal_env_defaults(),
@@ -774,6 +778,18 @@ def task_create(
         mount_socket=bool(socket_mount_probe()) if callable(socket_mount_probe) else True,
     )
     extra_volumes.extend(herdr_volumes)
+    # Checked before the proxy is provisioned so a bad target leaves nothing
+    # to roll back; the proxy CA target is reserved up front for the same reason.
+    check_custom_volume_targets(
+        custom_volumes,
+        [
+            "/workspace",
+            spec.config_mount_path,
+            PROXY_CA_MOUNT_PATH,
+            *(target for _, target, _ in extra_volumes),
+        ],
+    )
+    extra_volumes.extend(custom_volumes)
     # Host-side reporting works even when the socket cannot be mounted, so it
     # is gated on the pane, not on the container wiring (matches `vp run`).
     herdr_pane = pane_reporting_enabled(config, no_herdr=no_herdr)
@@ -839,7 +855,7 @@ def task_create(
 
             apply_proxy_env(merged_env, proxy_policy_id)
 
-            extra_volumes.append((str(actual_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
+            extra_volumes.append((str(actual_ca_dir), PROXY_CA_MOUNT_PATH, "ro"))
 
         info(f"Starting task on {selected} with image {image}")
         container_user = None

@@ -53,6 +53,12 @@ from vibepod.core.herdr import (
     report_pane_metadata as _report_herdr_metadata,
 )
 from vibepod.core.launch import (
+    PROXY_CA_MOUNT_PATH as _PROXY_CA_MOUNT_PATH,
+)
+from vibepod.core.launch import (
+    agent_custom_volumes as _agent_custom_volumes,
+)
+from vibepod.core.launch import (
     agent_extra_volumes as _agent_extra_volumes,
 )
 from vibepod.core.launch import (
@@ -66,6 +72,9 @@ from vibepod.core.launch import (
 )
 from vibepod.core.launch import (
     apply_proxy_env as _apply_proxy_env,
+)
+from vibepod.core.launch import (
+    check_custom_volume_targets as _check_custom_volume_targets,
 )
 from vibepod.core.launch import (
     get_container_ip as _get_container_ip,
@@ -84,6 +93,9 @@ from vibepod.core.launch import (
 )
 from vibepod.core.launch import (
     parse_env_pairs as _parse_env_pairs,
+)
+from vibepod.core.launch import (
+    parse_volume_specs as _parse_volume_specs,
 )
 from vibepod.core.launch import (
     prepare_x11_auth as _prepare_x11_auth,
@@ -570,6 +582,16 @@ def run(
             show_default=False,
         ),
     ] = None,
+    volume: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-v",
+            "--volume",
+            help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+            "added to configured agents.<agent>.volumes (same TARGET replaces)",
+            show_default=False,
+        ),
+    ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
     network: Annotated[
         str | None,
@@ -780,6 +802,19 @@ def run(
         agent_ports = _publish_port_bindings(publish, source="--publish") or None
     else:
         agent_ports = _agent_port_bindings(selected_agent, agent_cfg) or None
+    # Unlike --publish, -v adds to the configured list: a flag entry only
+    # replaces the configured entry mounted at the same container path.
+    # Config paths are relative to the workspace, flag paths to the shell cwd.
+    flag_volumes = _parse_volume_specs(volume or [], source="--volume", base_dir=Path.cwd())
+    custom_volumes = [
+        *_agent_custom_volumes(
+            selected_agent,
+            agent_cfg,
+            base_dir=workspace_path,
+            replaced_targets=[target for _, target, _ in flag_volumes],
+        ),
+        *flag_volumes,
+    ]
     if spec.write_roots_env and acp_workspace_mount is not None:
         # In ACP mode the workspace is also bound at its own host path, and the
         # editor sends that spelling, so the agent's file sandbox has to allow
@@ -1027,6 +1062,20 @@ def run(
             extra_volumes.extend(x11_vols)
             merged_env.update(x11_env)
 
+    # Checked before the proxy is provisioned so a bad target leaves nothing
+    # to roll back; the proxy CA target is reserved up front for the same reason.
+    _check_custom_volume_targets(
+        custom_volumes,
+        [
+            "/workspace",
+            spec.config_mount_path,
+            _PROXY_CA_MOUNT_PATH,
+            *(path for path in (acp_workspace_mount, acp_workspace_alias) if path),
+            *(target for _, target, _ in extra_volumes),
+        ],
+    )
+    extra_volumes.extend(custom_volumes)
+
     if proxy_enabled:
         proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
         proxy_db_path = (
@@ -1068,7 +1117,7 @@ def run(
         _apply_proxy_env(merged_env, proxy_policy_id)
 
         if proxy_ca_dir:
-            extra_volumes.append((str(proxy_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
+            extra_volumes.append((str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, "ro"))
 
     info(f"Starting {selected_agent} with image {image}")
     container_user = None

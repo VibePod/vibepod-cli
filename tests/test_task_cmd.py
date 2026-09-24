@@ -403,6 +403,40 @@ def test_task_create_rejects_invalid_ports_before_docker(
     assert tmp_task_store.list() == []
 
 
+def test_task_create_mounts_configured_volumes(monkeypatch, tmp_path, tmp_task_store) -> None:
+    (tmp_path / "fixtures").mkdir()
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["claude"]["volumes"] = ["./fixtures:/fixtures:ro", "cache:/cache"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    extra_volumes = stub.run_kwargs["extra_volumes"]
+    assert (str(tmp_path / "fixtures"), "/fixtures", "ro") in extra_volumes
+    assert ("cache", "/cache", "rw") in extra_volumes
+
+
+def test_task_create_rejects_volume_over_managed_mount(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["claude"]["volumes"] = ["cache:/workspace"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    with pytest.raises(typer.BadParameter, match=r"already mounted by VibePod"):
+        task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+
+
 def test_task_create_without_configured_ports_publishes_none(
     monkeypatch,
     tmp_path,

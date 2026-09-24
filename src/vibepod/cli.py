@@ -78,6 +78,16 @@ def run_command(
             show_default=False,
         ),
     ] = None,
+    volume: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-v",
+            "--volume",
+            help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+            "added to configured agents.<agent>.volumes (same TARGET replaces)",
+            show_default=False,
+        ),
+    ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
     network: Annotated[
         str | None,
@@ -124,6 +134,7 @@ def run_command(
         detach=detach,
         env=env,
         publish=publish,
+        volume=volume,
         name=name,
         network=network,
         paste_images=paste_images,
@@ -193,6 +204,16 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
                 show_default=False,
             ),
         ] = None,
+        volume: Annotated[
+            list[str] | None,
+            typer.Option(
+                "-v",
+                "--volume",
+                help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+                "added to configured agents.<agent>.volumes (same TARGET replaces)",
+                show_default=False,
+            ),
+        ] = None,
         name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
         network: Annotated[
             str | None,
@@ -241,6 +262,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             detach=detach,
             env=env,
             publish=publish,
+            volume=volume,
             name=name,
             network=network,
             paste_images=paste_images,

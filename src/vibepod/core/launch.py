@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
+import re
 import shutil
 import subprocess
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -205,6 +208,151 @@ def agent_port_bindings(agent: str, agent_cfg: dict[str, Any]) -> dict[str, Any]
     return publish_port_bindings(items, source=f"agents.{agent}.ports")
 
 
+# Docker's own rule for named volumes; any other source without a path
+# separator would be rejected by the daemon with a less helpful message.
+_VOLUME_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+_VOLUME_MODE_OPTIONS = frozenset({"ro", "rw", "z", "Z"})
+_WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:[\\/]")
+
+
+def _parse_volume_spec(
+    entry: str,
+    *,
+    source: str,
+    index: int,
+    base_dir: Path,
+    skip_targets: frozenset[str],
+) -> tuple[str, str, str] | None:
+    def invalid(reason: str) -> typer.BadParameter:
+        return typer.BadParameter(f"Invalid {source}[{index}] value '{entry}': {reason}")
+
+    # A Windows host path carries its own colon (C:\data:/data); elsewhere
+    # `c:/data` is a one-letter named volume.
+    drive = entry[:2] if os.name == "nt" and _WINDOWS_DRIVE_RE.match(entry) else ""
+    parts = entry[len(drive) :].split(":")
+    if len(parts) == 2:
+        host, target, mode = parts[0], parts[1], "rw"
+    elif len(parts) == 3:
+        host, target, mode = parts
+    else:
+        raise invalid("expected SOURCE:TARGET[:MODE].")
+    host = drive + host
+    if not host or not target:
+        raise invalid("expected SOURCE:TARGET[:MODE].")
+
+    if not target.startswith("/"):
+        raise invalid("the container path must be absolute.")
+    # normpath keeps a leading `//` (POSIX leaves it implementation-defined),
+    # but Linux resolves it to `/`, so `//workspace` must still collide.
+    target = posixpath.normpath("/" + target.lstrip("/"))
+    if target == "/":
+        raise invalid("cannot mount over the container root.")
+
+    options = mode.split(",")
+    if any(opt not in _VOLUME_MODE_OPTIONS for opt in options) or {"ro", "rw"} <= set(options):
+        raise invalid("mode must be 'ro' or 'rw', optionally combined with 'z' or 'Z'.")
+    if target in skip_targets:
+        # Replaced by a later entry for the same target: its source never gets
+        # mounted, so a host path missing on this machine must not block the run.
+        return None
+
+    if drive or host.startswith(("~", ".")) or "/" in host or "\\" in host:
+        host_path = Path(host).expanduser()
+        if not host_path.is_absolute():
+            host_path = base_dir / host_path
+        host_path = host_path.resolve()
+        # Docker would silently create a missing bind source as a root-owned
+        # directory; a typo should fail loudly instead.
+        if not host_path.exists():
+            raise invalid(f"host path '{host_path}' does not exist.")
+        host = str(host_path)
+    elif not _VOLUME_NAME_RE.fullmatch(host):
+        raise invalid("the source must be a host path or a Docker named volume.")
+    return host, target, mode
+
+
+def parse_volume_specs(
+    items: list[Any],
+    *,
+    source: str,
+    base_dir: Path,
+    skip_targets: Iterable[str] = (),
+) -> list[tuple[str, str, str]]:
+    """Validate `docker run -v` style entries as (source, container_path, mode).
+
+    Sources are host paths (absolute, `~`-prefixed, or relative to *base_dir*)
+    or Docker named volumes; `source` names the origin in error messages
+    (`agents.<agent>.volumes` or `--volume`). Entries mounted at one of
+    *skip_targets* are syntax-checked but dropped without resolving the source.
+    """
+    skip = frozenset(skip_targets)
+    volumes: list[tuple[str, str, str]] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, str) or not item.strip():
+            raise typer.BadParameter(
+                f"Invalid {source}[{index}] value, expected a string like '~/data:/data:ro'.",
+            )
+        volume = _parse_volume_spec(
+            item.strip(),
+            source=source,
+            index=index,
+            base_dir=base_dir,
+            skip_targets=skip,
+        )
+        if volume is not None:
+            volumes.append(volume)
+    return volumes
+
+
+def agent_custom_volumes(
+    agent: str,
+    agent_cfg: dict[str, Any],
+    *,
+    base_dir: Path,
+    replaced_targets: Iterable[str] = (),
+) -> list[tuple[str, str, str]]:
+    """Read and validate per-agent user volumes from config.
+
+    Entries whose container path is in *replaced_targets* (overridden by
+    `--volume`) are dropped.
+    """
+    raw_volumes = agent_cfg.get("volumes", [])
+    if raw_volumes is None:
+        return []
+    if isinstance(raw_volumes, str):
+        items: list[Any] = [raw_volumes]
+    elif isinstance(raw_volumes, list):
+        items = raw_volumes
+    else:
+        raise typer.BadParameter(
+            f"Invalid agents.{agent}.volumes value, "
+            "expected a string like '~/data:/data:ro' or a list of them.",
+        )
+    return parse_volume_specs(
+        items,
+        source=f"agents.{agent}.volumes",
+        base_dir=base_dir,
+        skip_targets=replaced_targets,
+    )
+
+
+def check_custom_volume_targets(
+    custom: list[tuple[str, str, str]],
+    managed_targets: Iterable[str],
+) -> None:
+    """Reject user volumes that collide with each other or with VibePod's own mounts."""
+    managed = set(managed_targets)
+    seen: set[str] = set()
+    for _, target, _ in custom:
+        if target in managed:
+            raise typer.BadParameter(
+                f"Volume target '{target}' is already mounted by VibePod; pick another path.",
+            )
+        if target in seen:
+            raise typer.BadParameter(f"Volume target '{target}' is mounted more than once.")
+        seen.add(target)
+
+
 def init_entrypoint(init_commands: list[str]) -> list[str]:
     """Build a shell entrypoint that runs init commands before the agent command."""
     script = "\n".join(
@@ -399,7 +547,8 @@ def provision_proxy(
 
 
 _PROXY_URL_ENV_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy")
-_PROXY_CA_PATH = "/etc/vibepod-proxy-ca/mitmproxy-ca-cert.pem"
+PROXY_CA_MOUNT_PATH = "/etc/vibepod-proxy-ca"
+_PROXY_CA_PATH = f"{PROXY_CA_MOUNT_PATH}/mitmproxy-ca-cert.pem"
 
 
 def materialize_launch_policy(
