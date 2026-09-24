@@ -9,6 +9,9 @@ vp provider edit my-provider
 vp provider models my-provider
 vp provider models my-provider --refresh
 vp provider refresh my-provider
+vp provider export my-provider -o my-provider.toml
+vp provider import ./my-provider.toml
+vp provider import https://vendor.example/vibepod/provider.toml
 vp provider remove my-provider
 ```
 
@@ -61,6 +64,50 @@ What each agent receives (only fields you set; unset fields stay agent defaults)
 | Qwen | no setting | no setting | no setting | no setting |
 
 OpenCode's `limit` needs both values; with only one set, nothing is emitted.
+
+## Sharing providers
+
+`vp provider export NAME` writes a shareable file (stdout, or `-o FILE`). It is
+the stored definition without any credential reference: protocol, URL,
+authentication mode, selected models, default, and model settings. The stored
+key is never read, so a file can go into a repository or a chat.
+
+`vp provider import SOURCE` creates a provider from such a file. `SOURCE` is a
+local path or an `http://`/`https://` URL, fetched with a size limit, no
+redirects, and TLS verification for `https`. A plain `http://` source works for
+local and internal networks; the command warns and shows the imported endpoint
+URL so it can be verified. A provider with the same name must not exist; use
+`--name` to store the file under another name.
+
+Authentication on import follows the file's `auth` value:
+
+- `none`: nothing to do.
+- `env`: the vendor's suggested variable (`key_env`) is kept; set it before use.
+- `key`: a key is required but not in the file. Pass `--key-env VAR` to reference
+  an environment variable, or answer the masked prompt and confirm plaintext
+  storage as in the wizard. Non-interactive runs must use `--key-env`.
+
+The file's model list is taken as is; run `vp provider refresh NAME` afterwards
+to sync it with the endpoint. Vendors can publish one file per endpoint:
+
+```toml
+# VibePod provider definition. Contains no credentials.
+version = 1
+name = "llmapi"
+protocol = "openai-chat"
+base_url = "https://api.llmapi.ai/v1"
+auth = "key"
+models = ["llmapi-large", "llmapi-small"]
+default_model = "llmapi-large"
+
+[model_settings."llmapi-large"]
+context_window = 128000
+reasoning_levels = ["low", "medium", "high"]
+reasoning_default = "medium"
+```
+
+Keep keys out of the file, prefer `https` hosting, and keep `name` a lowercase
+slug (importers can rename with `--name`).
 
 ## Credentials and storage
 

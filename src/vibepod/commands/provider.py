@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 
 import typer
 
 from vibepod.core.provider_discovery import discover_models
+from vibepod.core.provider_exchange import fetch_exchange
 from vibepod.core.providers import (
     PROTOCOLS,
     REASONING_LEVELS,
@@ -17,7 +20,9 @@ from vibepod.core.providers import (
     list_providers,
     load_models,
     load_provider,
+    provider_from_toml,
     remove_provider,
+    render_exchange,
     resolve_key,
     save_models,
     save_provider,
@@ -352,6 +357,84 @@ def refresh(name: Annotated[str, typer.Argument(help="Provider name")]) -> None:
             replace(previous, models=selected, default_model=default, model_settings=settings),
         )
         success(f"Refreshed models for provider '{name}'. Changes apply to future launches.")
+    except (ValueError, OSError) as exc:
+        _failure(exc)
+
+
+def _interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+@app.command("export")
+def export(
+    name: Annotated[str, typer.Argument(help="Provider name")],
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write to this file instead of stdout"),
+    ] = None,
+) -> None:
+    """Write a shareable provider file; stored credentials are never included."""
+    try:
+        text = render_exchange(load_provider(name))
+        if output is None:
+            sys.stdout.write(text)
+            return
+        output.write_text(text, encoding="utf-8")
+        success(f"Wrote provider '{name}' to {output} (no credentials included).")
+    except (ValueError, OSError) as exc:
+        _failure(exc)
+
+
+@app.command("import")
+def import_(
+    source: Annotated[str, typer.Argument(help="Local file path or http(s) URL")],
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="Store under this name instead of the file's"),
+    ] = None,
+    key_env: Annotated[
+        str | None,
+        typer.Option("--key-env", help="Read the API key from this environment variable"),
+    ] = None,
+) -> None:
+    """Create a provider from a shared file. Keys are asked for, never read from the file."""
+    try:
+        text, insecure = fetch_exchange(source)
+        if insecure:
+            warning(
+                "Fetched over plain HTTP without TLS; verify the endpoint URL below before use.",
+            )
+        p = provider_from_toml(text, name=name) if name else provider_from_toml(text)
+        p = replace(p, credential_file="credentials.json")
+        if p.name in list_providers():
+            raise ValueError(f"Provider '{p.name}' already exists; use --name for another name")
+        key = ""
+        if key_env and p.auth != "key":
+            raise ValueError('--key-env applies only to files with auth = "key"')
+        if p.auth == "key":
+            if key_env:
+                p = replace(p, auth="env", key_env=key_env)
+                p.validate()
+            elif not _interactive():
+                raise ValueError(
+                    "This provider requires an API key; pass --key-env VAR when not interactive",
+                )
+            else:
+                key = typer.prompt("API key", hide_input=True)
+                typer.confirm(
+                    "Store this key as plaintext in an owner-only file?",
+                    default=False,
+                    abort=True,
+                )
+        save_provider(p, key=key)
+        console.print(
+            f"{p.name}  {p.protocol}  {p.base_url}  auth={p.auth}  "
+            f"models={len(p.models)}  default={p.default_model or '-'}",
+            markup=False,
+        )
+        if p.auth == "env":
+            warning(f"Set {p.key_env} before using this provider.")
+        success(f"Imported provider '{p.name}'. Run `vp provider refresh {p.name}` to sync models.")
     except (ValueError, OSError) as exc:
         _failure(exc)
 
