@@ -1,4 +1,4 @@
-# Global model providers (in development)
+# Global model providers
 
 Register a compatible hosted endpoint or local model server without editing files:
 
@@ -20,6 +20,10 @@ OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages as distinct
 protocols. Model discovery uses the endpoint's compatible model-list API; enter
 model IDs manually when that endpoint is unavailable. Listing a model does not
 prove tool calling, streaming, vision, or protocol compatibility.
+
+To skip the wizard for a common endpoint, import a ready-made template from
+[VibePod/vibepod-providers](https://github.com/VibePod/vibepod-providers) (see
+[Provider templates](#provider-templates)).
 
 After successful discovery, **Use all discovered models?** defaults to Yes.
 Decline to enter specific IDs. This selects the current catalog; it does not
@@ -108,6 +112,24 @@ reasoning_default = "medium"
 
 Keep keys out of the file, prefer `https` hosting, and keep `name` a lowercase
 slug (importers can rename with `--name`).
+
+### Provider templates
+
+The [VibePod/vibepod-providers](https://github.com/VibePod/vibepod-providers)
+repository collects credential-free definitions for hosted APIs (OpenRouter,
+DeepSeek, Groq, Mistral and more, with model lists and settings synced from
+[models.dev](https://models.dev)) and for local servers (Ollama, LM Studio,
+llama.cpp, vLLM, Lemonade). Import one by its raw URL:
+
+```sh
+vp provider import https://raw.githubusercontent.com/VibePod/vibepod-providers/main/providers/cloud/openrouter.toml
+vp provider import https://raw.githubusercontent.com/VibePod/vibepod-providers/main/providers/local/ollama.toml
+```
+
+Hosted templates use `auth = "env"`, so set the variable named by `key_env`
+before launching. Local templates ship without models; run
+`vp provider refresh NAME` once the server is running. New templates and fixes
+are welcome as pull requests to that repository.
 
 ## Credentials and storage
 
@@ -271,11 +293,9 @@ have no headless mode in VibePod.
 
 `.github/workflows/provider-smoke.yml` builds a real image per supported agent and
 runs it against a local fake streaming API, checking routing, preserved profile files,
-and persistent sessions. No real API keys or paid services are used. The companion
-`vibepod-agents` ref must include the Codex entrypoint fix: select it with the manual
-workflow's `agents_ref` input or the `PROVIDER_AGENTS_REF` repository variable while
-the change is under development; the default is `main`. The provider wrapper itself
-no longer depends on that fix; the smoke test's prompt argument does.
+and persistent sessions. No real API keys or paid services are used. Images are
+built from `vibepod-agents` `main` by default; to test an agent image branch, set the
+manual workflow's `agents_ref` input or the `PROVIDER_AGENTS_REF` repository variable.
 
 The job runs `tests/integration/test_provider_smoke.py` with `VP_PROVIDER_SMOKE=1`
 and `VP_PROVIDER_SMOKE_AGENT` set to one of `pi`, `codex`, `qwen`, `tau`, `jcode`,

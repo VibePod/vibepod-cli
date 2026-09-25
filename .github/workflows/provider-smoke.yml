@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       agents_ref:
-        description: "vibepod-agents ref (must include the Codex argv-preservation fix)"
+        description: "vibepod-agents ref to build agent images from"
         default: main
         required: true
 
