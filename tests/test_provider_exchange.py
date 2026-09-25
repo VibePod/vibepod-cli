@@ -286,3 +286,20 @@ def test_non_ascii_model_ids_survive_store_and_exchange(store, tmp_path, monkeyp
     result = runner.invoke(app, ["provider", "import", str(path), "--name", "copy"])
     assert result.exit_code == 0, result.output
     assert providers.load_provider("copy").models == ("modèle-ü", "plain")
+
+
+def test_fetch_exchange_sends_a_vibepod_user_agent(file_server, monkeypatch):
+    from vibepod.core import provider_exchange
+
+    sent = []
+    real_request = provider_exchange.Request
+
+    def recording_request(url, headers):
+        sent.append(headers)
+        return real_request(url, headers=headers)
+
+    monkeypatch.setattr(provider_exchange, "Request", recording_request)
+    url, responses, _ = file_server
+    responses.append((200, b"version = 1\n", {}))
+    provider_exchange.fetch_exchange(url + "/provider.toml")
+    assert sent[0]["User-Agent"].startswith("vibepod/")

@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener
 
-from vibepod.core.provider_discovery import _NoRedirect
+from vibepod.core.provider_discovery import USER_AGENT, _NoRedirect
 
 MAX_EXCHANGE_BYTES = 256 * 1024
 
@@ -40,7 +40,10 @@ def fetch_exchange(source: str) -> tuple[str, bool]:
 
 
 def _fetch_url(url: str) -> str:
-    request = Request(url, headers={"Accept": "application/toml, text/plain"})
+    request = Request(
+        url,
+        headers={"Accept": "application/toml, text/plain", "User-Agent": USER_AGENT},
+    )
     try:
         with build_opener(_NoRedirect()).open(request, timeout=10) as response:
             raw = response.read(MAX_EXCHANGE_BYTES + 1)

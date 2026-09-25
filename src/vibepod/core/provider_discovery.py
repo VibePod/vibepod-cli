@@ -9,9 +9,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from vibepod import __version__
 from vibepod.core.providers import Provider, valid_model_id, validate_key
 
 MAX_BYTES = 2 * 1024 * 1024
+#: Some API gateways (Cloudflare, e.g. in front of Groq) reject urllib's default
+#: "Python-urllib" User-Agent with 403 before authentication is even checked.
+USER_AGENT = f"vibepod/{__version__}"
 MAX_PAGES = 20
 
 
@@ -44,7 +48,7 @@ def discover_models(
         # Anthropic clients append /v1 themselves; validation rejects a /v1 suffix.
         base += "/v1"
     endpoint = base + "/models"
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     if provider.protocol == "anthropic":
         headers["anthropic-version"] = "2023-06-01"
         if key:
@@ -62,8 +66,13 @@ def discover_models(
         except HTTPError as exc:
             status = exc.code
             exc.close()
-            if status in (401, 403):
+            if status == 401:
                 raise ValueError("Authentication failed while listing models") from None
+            if status == 403:
+                raise ValueError(
+                    "Access denied while listing models (HTTP 403): the key lacks access "
+                    "or the endpoint blocks this client",
+                ) from None
             if status in (404, 405, 501):
                 raise ValueError("Model listing unsupported; use manual model entry") from None
             if 300 <= status < 400:
