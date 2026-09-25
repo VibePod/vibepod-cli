@@ -65,4 +65,5 @@ nav:
   - Editor integration (ACP): acp.md
   - Configuration: configuration.md
   - LLM Integration: llm.md
+  - Badge: badge.md
   - CLI Reference: cli-reference.md
