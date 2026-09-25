@@ -77,7 +77,7 @@ def test_anthropic_pagination_and_headers(server):
 
 @pytest.mark.parametrize(
     "status, message",
-    [(401, "Authentication"), (403, "Authentication"), (404, "manual"), (500, "HTTP 500")],
+    [(401, "Authentication"), (403, "Access denied"), (404, "manual"), (500, "HTTP 500")],
 )
 def test_error_does_not_echo_response_body(server, status, message):
     url, _, responses = server
@@ -122,3 +122,11 @@ def test_repeated_pagination_cursor_rejected(server):
     with pytest.raises(ValueError, match="pagination"):
         discovery.discover_models(Provider("local", "anthropic", url))
     assert len(calls) == 2
+
+
+def test_discovery_sends_a_vibepod_user_agent(server):
+    # Cloudflare-fronted APIs (Groq) answer urllib's default agent with 403 / 1010.
+    url, calls, responses = server
+    responses.append((200, {"data": [{"id": "a"}]}, {}))
+    discovery.discover_models(Provider("local", "openai-chat", url))
+    assert calls[0][1]["User-Agent"].startswith("vibepod/")
