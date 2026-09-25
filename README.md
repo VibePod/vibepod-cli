@@ -11,6 +11,7 @@
   <a href="https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml"><img alt="Docs Build" src="https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml/badge.svg" /></a>
   <img alt="License" src="https://img.shields.io/github/license/VibePod/vibepod-cli" />
+  <a href="https://vibepod.dev"><img alt="Built with VibePod" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/VibePod/vibepod-cli/main/.github/badges/vibepod.json" /></a>
 </p>
 
 VibePod is a unified CLI (`vp`) for running AI coding agents in isolated
