@@ -25,6 +25,15 @@ profile — nothing moves when you start using profiles.
 
 ## Managing profiles
 
+To fill a profile from an agent you already run on your host, or to duplicate
+one profile's agent configuration into another, see
+[Importing an existing setup](import.md):
+
+```bash
+vp import claude --to-profile work --create-profile
+vp import claude --from-profile default --to-profile work
+```
+
 ```bash
 vp profile list            # list profiles; * marks the active one, agents with
                            # stored data (config, caches, credentials) in parentheses
