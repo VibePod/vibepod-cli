@@ -17,7 +17,7 @@ from vibepod.constants import (
     USER_SKILLS_DIR,
 )
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager, NotFound
+from vibepod.core.docker import DockerClientError, DockerManager, NotFound, bind_mode
 
 Scope = Literal["local", "user"]
 
@@ -202,9 +202,9 @@ def run_engine(
     local, user, cache = _ensure_dirs(cwd, local_required=local_required)
 
     volumes: dict[str, dict[str, str]] = {
-        str(local): {"bind": "/vibepod/local-skills", "mode": "rw"},
-        str(user): {"bind": "/vibepod/user-skills", "mode": "rw"},
-        str(cache): {"bind": "/vibepod/cache", "mode": "rw"},
+        str(local): {"bind": "/vibepod/local-skills", "mode": bind_mode(local)},
+        str(user): {"bind": "/vibepod/user-skills", "mode": bind_mode(user)},
+        str(cache): {"bind": "/vibepod/cache", "mode": bind_mode(cache)},
     }
     for host_path, container_path, mode in extra_mounts or []:
         volumes[str(host_path)] = {"bind": container_path, "mode": mode}

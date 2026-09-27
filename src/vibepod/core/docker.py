@@ -84,10 +84,19 @@ PROXY_POLICY_SCHEMA_LABEL = "io.vibepod.proxy.policy-schema"
 PROXY_POLICY_SCHEMA = "2"
 
 _SELINUX_ENFORCE_PATH = "/sys/fs/selinux/enforce"
-# Host paths that belong to the host, not to vibepod: relabeling them would
-# rewrite the label the host's own services depend on (the X server owns
-# /tmp/.X11-unix), so they keep their mode even on an SELinux host.
-_RELABEL_EXCLUDED_PREFIXES = ("/tmp/.X11-unix",)
+# Engines refuse to relabel these (and the home dir or its ancestors): doing so
+# would rewrite the label the host itself depends on.
+_SELINUX_PROTECTED_DIRS = frozenset(
+    "/ /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv "
+    "/sys /tmp /usr /var".split()
+)
+
+
+def _selinux_enforcing() -> bool:
+    try:
+        return Path(_SELINUX_ENFORCE_PATH).read_text().strip() == "1"
+    except OSError:
+        return False
 
 
 def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
@@ -102,19 +111,20 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
     reads the proxy's CA dir, datasette shares the proxy db dir) where the
     private `Z` would not. Non-Linux engines have no such file and stay
     unflagged -- Podman's macOS VM cannot relabel a virtiofs share anyway.
+
+    Only call this for mounts VibePod owns: relabeling a user's own volume
+    (say `~/.ssh`) would break the host services that read it. Named volumes,
+    an explicit `z`/`Z`, and the home or system dirs are left as they are.
     """
-    normalized_path = Path(host_path).resolve()
-    excluded_paths = tuple(Path(path).resolve() for path in _RELABEL_EXCLUDED_PREFIXES)
-    if any(
-        normalized_path == excluded or excluded in normalized_path.parents
-        for excluded in excluded_paths
-    ):
+    if "/" not in str(host_path) or {"z", "Z"} & set(mode.split(",")):
         return mode
-    try:
-        enforcing = Path(_SELINUX_ENFORCE_PATH).read_text().strip() == "1"
-    except OSError:
+    if not _selinux_enforcing():
         return mode
-    return f"{mode},z" if enforcing else mode
+    path = Path(host_path).resolve()
+    home = Path.home().resolve()
+    if str(path) in _SELINUX_PROTECTED_DIRS or path == home or path in home.parents:
+        return mode
+    return f"{mode},z"
 
 
 def _run_podman(podman: str, args: list[str]) -> str | None:
@@ -695,19 +705,27 @@ class DockerManager:
 
         environment = {**env}
 
+        workspace_mode = bind_mode(workspace)
+        if workspace_mode == "rw" and _selinux_enforcing():
+            from vibepod.utils.console import warning
+
+            warning(
+                f"Not relabeling {workspace} for SELinux (home or system dir); "
+                "the agent may be unable to access it."
+            )
         volumes: list[str] = [
-            f"{workspace}:/workspace:{bind_mode(workspace)}",
+            f"{workspace}:/workspace:{workspace_mode}",
             f"{config_dir}:{config_mount_path}:{bind_mode(config_dir)}",
         ]
         if workspace_mount_path:
             # ACP path parity: bind the workspace a second time onto its own
             # host path so host-side absolute paths (ACP session cwd, @-mentions,
             # diffs) resolve identically inside the container.
-            volumes.insert(1, f"{workspace}:{workspace_mount_path}:{bind_mode(workspace)}")
+            volumes.insert(1, f"{workspace}:{workspace_mount_path}:{workspace_mode}")
         if extra_volumes:
-            volumes.extend(
-                f"{host}:{bind}:{bind_mode(host, mode)}" for host, bind, mode in extra_volumes
-            )
+            # Mounted with the mode the caller chose: user volumes and host-owned
+            # files (herdr, X11) must keep their SELinux label.
+            volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
 
         try:
             if userns_mode is not None or not start:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import socket
 import subprocess
 import tempfile
@@ -182,8 +183,27 @@ def test_bind_mode_follows_enforce_file(monkeypatch, tmp_path: Path) -> None:
     enforce.write_text("1\n")
     assert bind_mode("/home/u/project") == "rw,z"
     assert bind_mode("/home/u/.config/vibepod/proxy", "ro") == "ro,z"
-    # The X server owns this one; relabeling it would break the host.
-    assert bind_mode("/tmp/.X11-unix") == "rw"
+
+
+def test_bind_mode_keeps_explicit_relabel_and_named_volumes(monkeypatch, tmp_path: Path) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path)
+
+    assert bind_mode("/home/u/data", "rw,Z") == "rw,Z"
+    assert bind_mode("/home/u/data", "ro,z") == "ro,z"
+    assert bind_mode("/home/u/data", "z") == "z"
+    assert bind_mode("cache") == "rw"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX paths")
+def test_bind_mode_never_relabels_home_or_system_dirs(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home" / "u"
+    home.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _enforcing_selinux(monkeypatch, tmp_path)
+
+    for path in (home, home.parent, tmp_path, "/", "/home", "/tmp", "/usr", "/etc", "/var"):
+        assert bind_mode(path) == "rw", path
+    assert bind_mode(home / "project") == "rw,z"
 
 
 def test_run_agent_relabels_binds_on_selinux_host(tmp_path: Path, monkeypatch) -> None:
@@ -199,14 +219,49 @@ def test_run_agent_relabels_binds_on_selinux_host(tmp_path: Path, monkeypatch) -
         manager,
         tmp_path,
         workspace_mount_path=str(tmp_path / "workspace"),
-        extra_volumes=[("/tmp/.X11-unix", "/tmp/.X11-unix", "rw")],
+        extra_volumes=[
+            ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw"),
+            ("/usr/local/bin/herdr", "/usr/local/bin/herdr", "ro"),
+            ("/home/u/.ssh", "/x", "ro"),
+        ],
         start=False,
     )
 
     binds = client.api.host_config_kwargs["binds"]
     assert f"{tmp_path / 'workspace'}:/workspace:rw,z" in binds
+    assert f"{tmp_path / 'workspace'}:{tmp_path / 'workspace'}:rw,z" in binds
     assert f"{tmp_path / 'agents' / 'claude'}:/claude:rw,z" in binds
+    # Host-owned and user volumes keep the mode they were given.
     assert "/tmp/.X11-unix:/tmp/.X11-unix:rw" in binds
+    assert "/usr/local/bin/herdr:/usr/local/bin/herdr:ro" in binds
+    assert "/home/u/.ssh:/x:ro" in binds
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX paths")
+def test_run_agent_warns_instead_of_relabeling_home_workspace(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    home = tmp_path / "home"
+    (home / "agents" / "claude").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _enforcing_selinux(monkeypatch, tmp_path)
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    _run_acp_agent(
+        manager,
+        tmp_path,
+        workspace=home,
+        config_dir=home / "agents" / "claude",
+        start=False,
+    )
+
+    binds = client.api.host_config_kwargs["binds"]
+    assert f"{home}:/workspace:rw" in binds
+    assert f"{home / 'agents' / 'claude'}:/claude:rw,z" in binds
+    captured = capsys.readouterr()
+    assert "SELinux" in captured.out + captured.err
 
 
 def test_ensure_proxy_relabels_ca_dir_on_selinux_host(tmp_path: Path, monkeypatch) -> None:

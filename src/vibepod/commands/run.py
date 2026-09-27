@@ -30,7 +30,7 @@ from vibepod.core.agents import (
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
+from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag, bind_mode
 from vibepod.core.herdr import (
     PANE_LABEL as _HERDR_PANE_LABEL,
 )
@@ -377,7 +377,7 @@ def _skills_mounts_for_agent(agent: str, workspace: Path) -> list[tuple[str, str
     mounts: list[tuple[str, str, str]] = []
     for skill_id, host_path in _resolved_skill_paths(workspace).items():
         for base in targets:
-            mounts.append((str(host_path), f"{base}/{skill_id}", "ro"))
+            mounts.append((str(host_path), f"{base}/{skill_id}", bind_mode(host_path, "ro")))
     return mounts
 
 
@@ -1020,7 +1020,7 @@ def run(
 
     extra_volumes.extend(_skills_mounts_for_agent(selected_agent, workspace_path))
     if acp_workspace_alias is not None:
-        extra_volumes.append((str(workspace_path), acp_workspace_alias, "rw"))
+        extra_volumes.append((str(workspace_path), acp_workspace_alias, bind_mode(workspace_path)))
 
     herdr_volumes, herdr_env = _apply_herdr_if_enabled(
         selected_agent,
@@ -1117,7 +1117,9 @@ def run(
         _apply_proxy_env(merged_env, proxy_policy_id)
 
         if proxy_ca_dir:
-            extra_volumes.append((str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, "ro"))
+            extra_volumes.append(
+                (str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, bind_mode(proxy_ca_dir, "ro"))
+            )
 
     info(f"Starting {selected_agent} with image {image}")
     container_user = None
