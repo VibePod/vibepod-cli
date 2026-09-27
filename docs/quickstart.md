@@ -90,6 +90,28 @@ export DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.P
     `podman info --format '{{.Host.NetworkBackend}}'` to check your current
     backend.
 
+### SELinux
+
+On an SELinux-enforcing Linux host (Fedora, RHEL, …) VibePod adds the shared
+`z` relabel option to the bind mounts it owns: the workspace, the agent config
+directories, everything else under `~/.config/vibepod` (proxy CA and database,
+logs, skills) and a project's `.vibepod/skills`. Relabeling changes the host
+files' SELinux label to `container_file_t` persistently, so the workspace stays
+relabeled after the container exits.
+
+VibePod does **not** relabel:
+
+- a workspace that is your home directory, one of its ancestors, or a system
+  directory such as `/`, `/tmp`, `/usr`, `/etc` or `/var` — it prints a warning
+  instead and the agent may be unable to access it; pick a project directory;
+- your own `agents.<agent>.volumes` / `-v` mounts — add `z`/`Z` to their mode
+  yourself (see [Mounting volumes](configuration.md#mounting-volumes));
+- host-owned files such as the herdr binary and socket or the X11 socket.
+
+Detection reads `/sys/fs/selinux/enforce` on the machine running `vp`, so a
+remote `DOCKER_HOST` whose engine runs on a different (SELinux) host is not
+detected.
+
 ## Install
 
 === "pip"
