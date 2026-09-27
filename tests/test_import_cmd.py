@@ -9,8 +9,33 @@ import pytest
 from typer.testing import CliRunner
 
 from vibepod.cli import app
+from vibepod.commands import import_cmd
+from vibepod.core.docker import DockerClientError
 
 runner = CliRunner()
+
+
+class _FakeContainer:
+    def __init__(self, name: str, labels: dict[str, str]) -> None:
+        self.name = name
+        self.labels = labels
+
+
+class _FakeDockerManager:
+    containers: list[_FakeContainer] = []
+
+    def list_managed(self, all_containers: bool = False) -> list[_FakeContainer]:  # noqa: ARG002
+        return self.containers
+
+
+@pytest.fixture(autouse=True)
+def no_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the running-container check hermetic: no engine by default."""
+
+    def _unavailable() -> None:
+        raise DockerClientError("Docker is not available")
+
+    monkeypatch.setattr(import_cmd, "DockerManager", _unavailable)
 
 
 @pytest.fixture()
@@ -243,3 +268,41 @@ def test_profile_names_with_path_traversal_are_rejected(
     assert result.exit_code == 1
     assert "Invalid profile name" in result.output
     assert sorted(p.name for p in (escape / "agents" / "claude").iterdir()) == ["settings.json"]
+
+
+def test_running_container_on_the_destination_profile_warns(
+    config_root: Path,
+    host_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Manager(_FakeDockerManager):
+        containers = [
+            _FakeContainer(
+                "vibepod-claude-1",
+                {"vibepod.agent": "claude", "vibepod.profile": "default"},
+            ),
+            _FakeContainer(
+                "vibepod-claude-2", {"vibepod.agent": "claude", "vibepod.profile": "work"}
+            ),
+            _FakeContainer(
+                "vibepod-codex-1", {"vibepod.agent": "codex", "vibepod.profile": "default"}
+            ),
+        ]
+
+    monkeypatch.setattr(import_cmd, "DockerManager", _Manager)
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home)])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace("\n", " ")
+    assert "vibepod-claude-1" in output
+    assert "vibepod-claude-2" not in output
+    assert "vibepod-codex-1" not in output
+    assert (config_root / "agents" / "claude" / "settings.json").exists()
+
+
+def test_import_without_docker_does_not_warn(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home)])
+
+    assert result.exit_code == 0, result.output
+    assert "running" not in result.output
