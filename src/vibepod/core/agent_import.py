@@ -114,11 +114,35 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ImportEntry(".codex/prompts", ".codex/prompts", "skills"),
         ImportEntry(".codex/auth.json", ".codex/auth.json", "credentials"),
     ),
-    # unverified -- replaced by researched entries once the host inventory runs
-    "gemini": (ImportEntry(".gemini", ".gemini", "settings"),),
+    # Known token files are listed as credentials; anything else matching
+    # CREDENTIAL_NAME_PATTERNS under a directory entry is reclassified too.
+    "gemini": (
+        ImportEntry(".gemini/oauth_creds.json", ".gemini/oauth_creds.json", "credentials"),
+        ImportEntry(
+            ".gemini/mcp-oauth-tokens.json",
+            ".gemini/mcp-oauth-tokens.json",
+            "credentials",
+        ),
+        ImportEntry(".gemini/.env", ".gemini/.env", "credentials"),
+        ImportEntry(".gemini", ".gemini", "settings"),
+    ),
     "devstral": (ImportEntry(".config/mistral", ".config/mistral", "settings"),),
-    "auggie": (ImportEntry(".augment", ".augment", "settings"),),
-    "copilot": (ImportEntry(".copilot", ".copilot", "settings"),),
+    "auggie": (
+        ImportEntry(".augment/session.json", ".augment/session.json", "credentials"),
+        ImportEntry(".augment", ".augment", "settings"),
+    ),
+    "copilot": (
+        ImportEntry(
+            ".copilot/config.json",
+            ".copilot/config.json",
+            "credentials",
+            note=(
+                "Without a system keychain Copilot CLI stores its token in this file, "
+                "so it is treated as a credential."
+            ),
+        ),
+        ImportEntry(".copilot", ".copilot", "settings"),
+    ),
     "pi": (
         ImportEntry(".pi/agent/models.json", ".pi/agent/models.json", "models"),
         ImportEntry(".pi/agent/auth.json", ".pi/agent/auth.json", "credentials"),
@@ -142,12 +166,23 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ),
     ),
     "jcode": (
+        ImportEntry(".jcode/auth.json", ".jcode/auth.json", "credentials"),
         ImportEntry(".jcode", ".jcode", "settings"),
         ImportEntry(".config/jcode", ".config/jcode", "models"),
     ),
-    "freebuff": (ImportEntry(".config/manicode", "", "settings"),),
-    "qwen": (ImportEntry(".qwen", "", "settings"),),
-    "dsh": (ImportEntry(".dsh", ".dsh", "settings"),),
+    "freebuff": (
+        ImportEntry(".config/manicode/credentials.json", "credentials.json", "credentials"),
+        ImportEntry(".config/manicode", "", "settings"),
+    ),
+    "qwen": (
+        ImportEntry(".qwen/oauth_creds.json", "oauth_creds.json", "credentials"),
+        ImportEntry(".qwen/.env", ".env", "credentials"),
+        ImportEntry(".qwen", "", "settings"),
+    ),
+    "dsh": (
+        ImportEntry(".dsh/.credentials.yaml", ".dsh/.credentials.yaml", "credentials"),
+        ImportEntry(".dsh", ".dsh", "settings"),
+    ),
     # ~/.hermes also holds the installer's hermes-agent checkout, so only the
     # state HERMES_HOME documents is listed; the rest is reported as other.
     "hermes": (
@@ -208,6 +243,26 @@ def _iter_files(root: Path) -> list[Path]:
     return sorted(p for p in root.rglob("*") if p.is_symlink() or p.is_file())
 
 
+#: File names treated as credentials wherever a directory entry finds them, so
+#: an agent's unlisted token file is never copied by a default-on category.
+CREDENTIAL_NAME_PATTERNS: tuple[str, ...] = (
+    "*oauth*",
+    "*credential*",
+    "*token*",
+    "*secret*",
+    "auth.json",
+    ".env",
+    ".env.*",
+    "*.key",
+    "*.pem",
+)
+
+
+def _looks_like_credential(name: str) -> bool:
+    lowered = name.lower()
+    return any(fnmatch.fnmatchcase(lowered, pattern) for pattern in CREDENTIAL_NAME_PATTERNS)
+
+
 def _is_excluded(relative: str, patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
 
@@ -255,15 +310,18 @@ def plan_import(
             if path.is_symlink() or _has_symlink_component(path, source_root):
                 skipped.append(SkippedPath(path, "symlink, not followed"))
                 continue
-            if entry.category not in categories:
-                flag = CATEGORY_FLAGS.get(entry.category)
-                reason = f"category '{entry.category}' not selected"
+            category = entry.category
+            if entry_root_is_dir and _looks_like_credential(path.name):
+                category = "credentials"
+            if category not in categories:
+                flag = CATEGORY_FLAGS.get(category)
+                reason = f"category '{category}' not selected"
                 skipped.append(SkippedPath(path, f"{reason} ({flag})" if flag else reason))
                 continue
             dest = (
                 dest_root / entry.dest / relative if entry_root_is_dir else dest_root / entry.dest
             )
-            planned = PlannedFile(path, dest, entry.category)
+            planned = PlannedFile(path, dest, category)
             files.append(planned)
             if dest.exists():
                 conflicts.append(planned)

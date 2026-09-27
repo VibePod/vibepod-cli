@@ -95,8 +95,11 @@ reported.
 ## Credentials
 
 Credentials are left behind unless you pass `--with-credentials`, so an import
-cannot silently duplicate a token into another sandbox. Copied credential files
-are written `0600` inside a `0700` directory.
+does not silently duplicate a token into another sandbox. Besides each agent's
+known token files, any file found inside a copied directory whose name looks
+like a secret (`*oauth*`, `*credential*`, `*token*`, `*secret*`, `auth.json`,
+`.env`, `*.key`, `*.pem`) is treated as a credential too. Copied credential
+files are written `0600` inside a `0700` directory.
 
 !!! note "Claude Code on macOS"
     Claude Code stores its OAuth token in the macOS Keychain, not in
@@ -104,9 +107,14 @@ are written `0600` inside a `0700` directory.
     `vp run claude` and log in inside the pod instead.
 
 opencode (`~/.local/share/opencode/auth.json`), Codex (`~/.codex/auth.json`),
-Pi (`~/.pi/agent/auth.json`), Tau (`~/.tau/credentials.json`) and Hermes
-(`~/.hermes/.env`, `~/.hermes/auth.json`) do keep credentials on disk, so
-`--with-credentials` works for them.
+Gemini (`~/.gemini/oauth_creds.json`, `mcp-oauth-tokens.json`, `.env`), Auggie
+(`~/.augment/session.json`), Copilot (`~/.copilot/config.json`, which holds the
+token when no system keychain is available), Pi (`~/.pi/agent/auth.json`), Tau
+(`~/.tau/credentials.json`), jcode (`~/.jcode/auth.json`), Freebuff
+(`~/.config/manicode/credentials.json`), Qwen (`~/.qwen/oauth_creds.json`,
+`.env`), dsh (`~/.dsh/.credentials.yaml`) and Hermes (`~/.hermes/.env`,
+`~/.hermes/auth.json`) do keep credentials on disk, so `--with-credentials`
+works for them.
 
 ## Model providers
 
