@@ -239,7 +239,9 @@ def test_run_agent_relabels_binds_on_selinux_host(tmp_path: Path, monkeypatch) -
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX paths")
 def test_run_agent_warns_instead_of_relabeling_home_workspace(
-    tmp_path: Path, monkeypatch, capsys
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
 ) -> None:
     home = tmp_path / "home"
     (home / "agents" / "claude").mkdir(parents=True)

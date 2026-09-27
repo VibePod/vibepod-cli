@@ -88,7 +88,7 @@ _SELINUX_ENFORCE_PATH = "/sys/fs/selinux/enforce"
 # would rewrite the label the host itself depends on.
 _SELINUX_PROTECTED_DIRS = frozenset(
     "/ /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv "
-    "/sys /tmp /usr /var".split()
+    "/sys /tmp /usr /var".split(),
 )
 
 
@@ -120,9 +120,12 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
         return mode
     if not _selinux_enforcing():
         return mode
-    path = Path(host_path).resolve()
+    # Check the path as given too: on macOS /home, /tmp and /etc are symlinks
+    # into /System/Volumes/Data or /private, so only the unresolved form matches.
+    given = Path(host_path).absolute()
+    path = given.resolve()
     home = Path.home().resolve()
-    if str(path) in _SELINUX_PROTECTED_DIRS or path == home or path in home.parents:
+    if {str(given), str(path)} & _SELINUX_PROTECTED_DIRS or path == home or path in home.parents:
         return mode
     return f"{mode},z"
 
@@ -711,7 +714,7 @@ class DockerManager:
 
             warning(
                 f"Not relabeling {workspace} for SELinux (home or system dir); "
-                "the agent may be unable to access it."
+                "the agent may be unable to access it.",
             )
         volumes: list[str] = [
             f"{workspace}:/workspace:{workspace_mode}",

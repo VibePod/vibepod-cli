@@ -1118,7 +1118,7 @@ def run(
 
         if proxy_ca_dir:
             extra_volumes.append(
-                (str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, bind_mode(proxy_ca_dir, "ro"))
+                (str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, bind_mode(proxy_ca_dir, "ro")),
             )
 
     info(f"Starting {selected_agent} with image {image}")
