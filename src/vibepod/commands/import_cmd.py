@@ -24,7 +24,9 @@ from vibepod.core.agent_import import (
 )
 from vibepod.core.agents import agent_config_dir, resolve_agent_name
 from vibepod.core.config import get_config
+from vibepod.core.docker import DockerManager
 from vibepod.core.profiles import (
+    DEFAULT_PROFILE,
     create_profile,
     profile_exists,
     resolve_profile,
@@ -114,6 +116,22 @@ def _resolve_source(
         for entry in agent_import_entries(agent)
     )
     return source_root, entries
+
+
+def _running_containers(agent: str, profile: str) -> list[str]:
+    """Names of running *agent* containers on *profile*; best-effort, [] on any error."""
+    try:
+        containers = DockerManager().list_managed()
+        names: list[str] = []
+        for container in containers:
+            labels = getattr(container, "labels", {}) or {}
+            if labels.get("vibepod.agent") != agent:
+                continue
+            if labels.get("vibepod.profile", DEFAULT_PROFILE) == profile:
+                names.append(str(container.name))
+        return names
+    except Exception:  # noqa: BLE001 - the check must never block an import
+        return []
 
 
 def _scan_and_report(source_home: Path) -> None:
@@ -268,6 +286,13 @@ def import_config(
     if dry_run:
         info("Dry run: nothing was written.")
         return
+
+    running = _running_containers(resolved, dest_profile)
+    if running:
+        warning(
+            f"{resolved} is running on profile '{dest_profile}' ({', '.join(running)}); "
+            "it may overwrite the imported files. Restart it to pick them up.",
+        )
 
     try:
         result = apply_import(plan, force=force)
