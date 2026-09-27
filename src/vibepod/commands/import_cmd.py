@@ -212,6 +212,14 @@ def import_config(
         error(str(exc))
         raise typer.Exit(code=1) from exc
 
+    try:
+        for name in (from_profile, to_profile):
+            if name is not None:
+                validate_profile_name(name)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from exc
+
     config = get_config()
     try:
         dest_profile = to_profile or resolve_profile(None, config)
@@ -227,7 +235,6 @@ def import_config(
             )
             raise typer.Exit(code=1)
         try:
-            validate_profile_name(to_profile)
             create_profile(to_profile)
         except (ValueError, OSError) as exc:
             error(f"Could not create profile '{to_profile}': {exc}")
