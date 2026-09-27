@@ -221,3 +221,25 @@ def test_generic_help_mentions_per_agent_help(config_root: Path) -> None:
     # Rich forces colour on CI (GITHUB_ACTIONS), which splits option names.
     plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
     assert "--help-agent" in plain_output
+
+
+@pytest.mark.parametrize("option", ["--from-profile", "--to-profile"])
+def test_profile_names_with_path_traversal_are_rejected(
+    config_root: Path,
+    host_home: Path,
+    option: str,
+) -> None:
+    # Make the traversal target exist, so only name validation can stop it.
+    (config_root / "profiles").mkdir(parents=True)
+    escape = config_root.parent / "escape"
+    (escape / "agents" / "claude").mkdir(parents=True)
+    (escape / "agents" / "claude" / "settings.json").write_text("{}")
+
+    result = runner.invoke(
+        app,
+        ["import", "claude", "--home", str(host_home), option, "../../escape"],
+    )
+
+    assert result.exit_code == 1
+    assert "Invalid profile name" in result.output
+    assert sorted(p.name for p in (escape / "agents" / "claude").iterdir()) == ["settings.json"]
