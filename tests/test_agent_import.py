@@ -307,6 +307,98 @@ def test_apply_tightens_credential_permissions(tmp_path: Path) -> None:
     assert stat.S_IMODE(dest.stat().st_mode) == 0o700
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
+def test_dangling_destination_symlink_is_not_written_through(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / "settings.json", "new")
+    dest.mkdir()
+    outside = tmp_path / "outside" / "planted.json"
+    (dest / "settings.json").symlink_to(outside)
+
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES)
+    assert not plan.files
+    assert any("destination" in s.reason and "symlink" in s.reason for s in plan.skipped)
+
+    apply_import(plan, force=True)
+    assert not outside.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
+def test_symlinked_destination_directory_is_refused(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / "commands" / "ship.md", "body")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    dest.mkdir()
+    (dest / "commands").symlink_to(outside)
+
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES)
+    apply_import(plan, force=True)
+
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
+def test_apply_rechecks_destination_symlinks(tmp_path: Path) -> None:
+    """A symlink planted between planning and applying is still refused."""
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / "settings.json", "new")
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES)
+    dest.mkdir()
+    outside = tmp_path / "outside.json"
+    (dest / "settings.json").symlink_to(outside)
+
+    result = apply_import(plan, force=True)
+
+    assert result.copied == 0
+    assert len(result.failed) == 1
+    assert "symlink" in result.failed[0][1]
+    assert not outside.exists()
+    assert (dest / "settings.json").is_symlink()
+
+
+def test_failed_copy_leaves_destination_and_no_temp_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / "settings.json", "new")
+    _write(dest / "settings.json", "old")
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES)
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("vibepod.core.agent_import.shutil.copyfileobj", _boom)
+    result = apply_import(plan, force=True)
+
+    assert result.copied == 0
+    assert (dest / "settings.json").read_text() == "old"
+    assert sorted(p.name for p in dest.iterdir()) == ["settings.json"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="file modes are POSIX-only")
+def test_credential_is_never_visible_with_a_wider_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / ".credentials.json", "{}")
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES | {"credentials"})
+    modes: list[int] = []
+    real_replace = os.replace
+
+    def _replace(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        modes.append(stat.S_IMODE(os.stat(src).st_mode))
+        real_replace(src, dst)
+
+    monkeypatch.setattr("vibepod.core.agent_import.os.replace", _replace)
+    apply_import(plan, force=False)
+
+    assert modes == [0o600]
+    assert (dest / ".credentials.json").read_text() == "{}"
+
+
 @pytest.mark.skipif(
     os.name == "nt" or os.geteuid() == 0,
     reason="file modes are POSIX-only and root bypasses them",

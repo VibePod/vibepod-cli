@@ -13,7 +13,9 @@ directory maps onto the destination root.
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
+import secrets
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -276,6 +278,11 @@ def _has_symlink_component(path: Path, root: Path) -> bool:
     return False
 
 
+#: The agent directory is mounted read-write into containers, so a symlink in
+#: it may have been planted to redirect a host-side write.
+_DEST_SYMLINK_REASON = "destination path contains a symlink, not written"
+
+
 def plan_import(
     agent: str,
     source_root: Path,
@@ -321,6 +328,9 @@ def plan_import(
             dest = (
                 dest_root / entry.dest / relative if entry_root_is_dir else dest_root / entry.dest
             )
+            if _has_symlink_component(dest, dest_root):
+                skipped.append(SkippedPath(path, _DEST_SYMLINK_REASON))
+                continue
             planned = PlannedFile(path, dest, category)
             files.append(planned)
             if dest.exists():
@@ -355,8 +365,10 @@ class ImportResult:
 def apply_import(plan: ImportPlan, *, force: bool) -> ImportResult:
     """Copy every file in *plan*. Raises ImportConflictError unless *force*.
 
-    ``shutil.copyfile`` rather than ``copy2``: host mtimes and modes carry no
-    meaning inside the pod, and credential files get their mode set explicitly.
+    Each file is written to a temporary sibling created with its final mode
+    (``0600`` for credentials) and renamed into place, so a destination is
+    either the old file or the complete new one and never a symlink target.
+    Host mtimes and modes carry no meaning inside the pod, so they are not kept.
     """
     if plan.conflicts and not force:
         raise ImportConflictError(plan.conflicts)
@@ -365,15 +377,37 @@ def apply_import(plan: ImportPlan, *, force: bool) -> ImportResult:
     failed: list[tuple[Path, str]] = []
     for planned in plan.files:
         try:
-            planned.dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(planned.source, planned.dest)
-            if planned.category == "credentials":
-                planned.dest.chmod(CREDENTIAL_FILE_MODE)
-                planned.dest.parent.chmod(CREDENTIAL_DIR_MODE)
+            _copy_file(planned, plan.dest_root)
             copied += 1
         except OSError as exc:
             failed.append((planned.source, str(exc)))
     return ImportResult(copied, failed)
+
+
+def _copy_file(planned: PlannedFile, dest_root: Path) -> None:
+    if _has_symlink_component(planned.dest, dest_root):
+        raise OSError(f"{planned.dest}: {_DEST_SYMLINK_REASON}")
+    credential = planned.category == "credentials"
+    parent = planned.dest.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    if _has_symlink_component(parent, dest_root):
+        raise OSError(f"{planned.dest}: {_DEST_SYMLINK_REASON}")
+    if credential:
+        parent.chmod(CREDENTIAL_DIR_MODE)
+    mode = CREDENTIAL_FILE_MODE if credential else 0o666
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_BINARY", 0)
+    temp = parent / f".{planned.dest.name}.vp-import-{secrets.token_hex(4)}"
+    fd = os.open(temp, flags, mode)
+    try:
+        with os.fdopen(fd, "wb") as out, planned.source.open("rb") as src:
+            shutil.copyfileobj(src, out)
+        if credential:
+            temp.chmod(CREDENTIAL_FILE_MODE)
+        os.replace(temp, planned.dest)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
 
 
 def _unclassified(
