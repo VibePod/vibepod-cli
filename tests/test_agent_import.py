@@ -11,6 +11,7 @@ import pytest
 from vibepod.constants import SUPPORTED_AGENTS
 from vibepod.core.agent_import import (
     DEFAULT_CATEGORIES,
+    IMPORT_SPECS,
     OPT_IN_CATEGORIES,
     ImportConflictError,
     agent_import_entries,
@@ -122,14 +123,33 @@ def test_plan_skips_categories_not_selected(tmp_path: Path) -> None:
     assert any("credentials" in s.reason for s in plan.skipped)
 
 
+#: A known on-disk credential per agent; every agent in the import table is listed.
+_KNOWN_CREDENTIALS: dict[str, tuple[str, ...]] = {
+    "claude": (".claude/.credentials.json",),
+    "opencode": (".local/share/opencode/auth.json",),
+    "codex": (".codex/auth.json",),
+    "gemini": (".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json", ".gemini/.env"),
+    "devstral": (".config/mistral/.env",),
+    "auggie": (".augment/session.json",),
+    "copilot": (".copilot/config.json",),
+    "pi": (".pi/agent/auth.json",),
+    "agy": (".agy/oauth_token.json",),
+    "tau": (".tau/credentials.json",),
+    "jcode": (".jcode/auth.json", ".config/jcode/auth.json"),
+    "freebuff": (".config/manicode/credentials.json",),
+    "qwen": (".qwen/oauth_creds.json", ".qwen/.env"),
+    "dsh": (".dsh/.credentials.yaml",),
+    "hermes": (".hermes/.env", ".hermes/auth.json"),
+}
+
+
+def test_known_credentials_cover_every_agent() -> None:
+    assert set(_KNOWN_CREDENTIALS) == set(IMPORT_SPECS)
+
+
 @pytest.mark.parametrize(
     ("agent", "credential"),
-    [
-        ("pi", ".pi/agent/auth.json"),
-        ("tau", ".tau/credentials.json"),
-        ("hermes", ".hermes/.env"),
-        ("hermes", ".hermes/auth.json"),
-    ],
+    [(agent, path) for agent, paths in _KNOWN_CREDENTIALS.items() for path in paths],
 )
 def test_blanket_entries_leave_credentials_opt_in(
     tmp_path: Path,
@@ -146,6 +166,37 @@ def test_blanket_entries_leave_credentials_opt_in(
 
     plan = plan_import(agent, home, dest, DEFAULT_CATEGORIES | {"credentials"})
     assert [f.category for f in plan.files] == ["credentials"]
+
+
+_CREDENTIAL_LIKE_NAMES = (
+    "oauth_creds.json",
+    "mcp-oauth-tokens.json",
+    "credentials.json",
+    ".credentials.yaml",
+    "auth.json",
+    "api_token",
+    "client_secret.json",
+    ".env",
+    "private.key",
+    "cert.pem",
+)
+
+
+@pytest.mark.parametrize("agent", sorted(IMPORT_SPECS))
+def test_credential_named_files_under_any_entry_stay_opt_in(tmp_path: Path, agent: str) -> None:
+    """Whatever a directory entry holds, credential-looking files are never default-on."""
+    home = tmp_path / "home"
+    dest = tmp_path / "dest"
+    for entry in agent_import_entries(agent):
+        for name in _CREDENTIAL_LIKE_NAMES:
+            _write(home / entry.source / "nested" / name, "{}")
+
+    plan = plan_import(agent, home, dest, DEFAULT_CATEGORIES)
+    assert plan.files == []
+
+    plan = plan_import(agent, home, dest, DEFAULT_CATEGORIES | {"credentials"})
+    assert plan.files
+    assert {f.category for f in plan.files} == {"credentials"}
 
 
 def test_pi_models_live_under_the_agent_dir(tmp_path: Path) -> None:
