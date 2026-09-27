@@ -860,7 +860,7 @@ def launch_task(
             apply_proxy_env(merged_env, proxy_policy_id)
 
             extra_volumes.append(
-                (str(actual_ca_dir), PROXY_CA_MOUNT_PATH, bind_mode(actual_ca_dir, "ro"))
+                (str(actual_ca_dir), PROXY_CA_MOUNT_PATH, bind_mode(actual_ca_dir, "ro")),
             )
 
         info(f"Starting task on {selected} with image {image}")
