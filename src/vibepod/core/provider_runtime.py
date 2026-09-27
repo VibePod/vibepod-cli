@@ -16,6 +16,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from vibepod.core.config import get_config_root
+from vibepod.core.docker import bind_mode
 
 #: Container paths of the mounted bootstrap scripts (read-only bind mounts).
 BOOTSTRAP_MOUNT = "/opt/vibepod/provider-bootstrap.cjs"
@@ -74,7 +75,7 @@ def bootstrap_volume(agent: str) -> tuple[str, str, str]:
             os.replace(temporary, target)
         finally:
             Path(temporary).unlink(missing_ok=True)
-    return str(target), _BOOTSTRAP_MOUNTS[filename], "ro"
+    return str(target), _BOOTSTRAP_MOUNTS[filename], bind_mode(target, "ro")
 
 
 def wrap_provider_command(agent: str, command: list[str]) -> tuple[list[str], dict[str, str]]:
