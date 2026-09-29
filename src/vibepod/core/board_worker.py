@@ -283,7 +283,11 @@ def validate_branch_template(template: str) -> None:
 
 
 RESULT_TAG = "vibepod-result"
-RESULT_BLOCK = re.compile(rf"<{RESULT_TAG}>\s*(.*?)\s*</{RESULT_TAG}>", re.DOTALL | re.IGNORECASE)
+# A block never spans another opening tag, so a mention of the tag in the agent's prose
+# cannot swallow the real block after it.
+RESULT_BLOCK = re.compile(
+    rf"<{RESULT_TAG}>((?:(?!<{RESULT_TAG}>).)*?)</{RESULT_TAG}>", re.DOTALL | re.IGNORECASE
+)
 RESULT_STATUSES = ("done", "needs_input", "failed")
 # How much of the earlier conversation of a task goes into the prompt.
 CONVERSATION_LIMIT = 20
@@ -814,9 +818,12 @@ class BoardWorker:
         result = TaskResult()
         repo: Path | None = None
         worktree: worktrees.Worktree | None = None
-        # A task sent back from Review keeps the branch it was handed over on: the rework
-        # continues there, whatever --existing says.
+        # A task sent back from Review keeps the branch it was handed over on, and a task that
+        # asked a question keeps the branch its draft is on: both continue there, whatever
+        # --existing says.
         rework = bool(card.get("branchName"))
+        earlier = self._conversation(task)
+        answered = any(event.get("kind") in {"question", "answer"} for event in earlier)
         try:
             try:
                 repo = self._repository(task)
@@ -825,6 +832,11 @@ class BoardWorker:
                     if rework
                     else branch_name(self.options.branch_template, task)
                 )
+                if rework and not worktrees.branch_exists(repo, result.branch):
+                    raise TaskProblem(
+                        f"The rework needs the branch {result.branch} it was handed over on, "
+                        f"and it is not in {repo}"
+                    )
                 # Checking a branch out can take long in a large repository.
                 with self._keepalive():
                     worktree = worktrees.prepare_worktree(
@@ -832,13 +844,13 @@ class BoardWorker:
                         self._worktree_dir(repo),
                         result.branch,
                         self.options.base or worktrees.current_branch(repo) or "HEAD",
-                        "continue" if rework else self.options.existing,
+                        "continue" if rework or answered else self.options.existing,
                     )
                 if worktree.continued:
                     self.say("info", f"Continuing on branch {worktree.branch} in {worktree.path}")
                 else:
                     self.say("info", f"Working on branch {worktree.branch} in {worktree.path}")
-                self._run(task, repo, worktree, result, started, rework)
+                self._run(task, repo, worktree, result, started, earlier, rework)
             except worktrees.BranchExistsError as exc:
                 raise TaskProblem(f"{exc}; not continuing on it (--existing refuse)") from exc
             except worktrees.GitError as exc:
@@ -910,10 +922,10 @@ class BoardWorker:
         worktree: worktrees.Worktree,
         result: TaskResult,
         started: float,
+        earlier: Sequence[dict[str, Any]] = (),
         rework: bool = False,
     ) -> None:
         deadline = started + self.options.timeout_seconds if self.options.timeout_seconds else None
-        earlier = self._conversation(task)
         self._set("working", step=STEP_AGENT)
         with self._keepalive():
             mounts = worktrees.agent_mounts(repo, worktree.path)
