@@ -11,6 +11,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Annotated, Any
 
+import docker.errors
 import typer
 from rich.prompt import Confirm
 
@@ -33,6 +34,9 @@ from vibepod.core.profiles import resolve_profile
 from vibepod.core.tasks import TASK_STATUS_CANCELLED, TERMINAL_TASK_STATUSES
 from vibepod.core.worktrees import GitError, repository_root
 from vibepod.utils.console import error, info, success, warning
+
+# The watcher backstop fires this long after the worker's own time limit.
+WATCHER_SLACK_SECONDS = 120
 
 app = typer.Typer(
     name="board",
@@ -66,8 +70,13 @@ class DockerAgentRun:
         container = self.launched.container
         try:
             container.reload()
-        except Exception:  # docker SDK raises NotFound / APIError when the container is gone
+        except docker.errors.NotFound:
+            # Removed behind the worker's back: there is no exit code to wait for.
             return 1
+        except Exception as exc:  # docker SDK raises APIError / DockerException
+            # A hiccup of the engine is not an exit; the worker's deadline still applies.
+            warning(f"Could not read the state of task {self.record.id[:12]}: {exc}")
+            return None
         state = container.attrs.get("State", {}) or {}
         if not isinstance(state, dict):
             state = {}
@@ -112,6 +121,7 @@ class DockerAgentRunner:
         profile: str | None = None,
         provider_names: list[str] | None = None,
         forbidden_env_values: tuple[str, ...] = (),
+        timeout_seconds: int | None = None,
     ) -> None:
         self.agent = agent
         self.env = env
@@ -121,6 +131,7 @@ class DockerAgentRunner:
         self.profile = profile
         self.provider_names = provider_names
         self.forbidden_env_values = forbidden_env_values
+        self.timeout_seconds = timeout_seconds
 
     def start(
         self,
@@ -149,6 +160,12 @@ class DockerAgentRunner:
             raise RunnerError(f"{self.agent} could not be started (exit {exc.exit_code})") from exc
         except (typer.BadParameter, DockerClientError, ValueError) as exc:
             raise RunnerError(str(exc)) from exc
+        if self.timeout_seconds is not None:
+            # A backstop outside this process: the container still stops at its time limit
+            # when the worker itself dies. The worker enforces the limit first.
+            task_cmd._start_timeout_watcher(
+                launched.record.id, self.timeout_seconds + WATCHER_SLACK_SECONDS
+            )
         return DockerAgentRun(launched)
 
 
@@ -182,6 +199,11 @@ def _ensure_allowed(repo: Path) -> None:
 
 def _raise_interrupt(_signum: int, _frame: FrameType | None) -> None:
     raise KeyboardInterrupt
+
+
+def _repo_allowed(path: Path) -> bool:
+    """A repository an agent may work in: on the allow list and not home or root."""
+    return not is_protected_dir(path) and is_dir_allowed(path)
 
 
 @app.command("work")
@@ -390,6 +412,7 @@ def board_work(
         profile=profile,
         provider_names=provider,
         forbidden_env_values=(settings.token,),
+        timeout_seconds=timeout_seconds,
     )
     lock = (
         None
@@ -399,10 +422,18 @@ def board_work(
         )
     )
     worker = BoardWorker(
-        BoardClient(settings.url, settings.token), runner, options, lock=lock, say=_say
+        BoardClient(settings.url, settings.token),
+        runner,
+        options,
+        lock=lock,
+        say=_say,
+        allow_repo=_repo_allowed,
     )
 
-    previous: Any = signal.signal(signal.SIGTERM, _raise_interrupt)
+    # A stopped or closed terminal ends the worker like Ctrl+C: the run in progress is
+    # stopped and its task given back.
+    handled = [signal.SIGTERM] + ([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])
+    previous: dict[int, Any] = {sig: signal.signal(sig, _raise_interrupt) for sig in handled}
     try:
         summary = worker.run()
     except (WorkerError, BoardApiError) as exc:
@@ -412,7 +443,8 @@ def board_work(
         warning("Interrupted; the task in progress went back to Planned.")
         raise typer.Exit(130) from exc
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
     info(f"Handed over {len(summary.handed_over)} task(s), gave back {len(summary.returned)}.")
     if summary.ended_because.startswith("The agent could not be started"):

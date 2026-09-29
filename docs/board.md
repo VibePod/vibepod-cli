@@ -103,6 +103,24 @@ vp board work VP --agent codex --repo ~/src/app --poll 2m
 | `--parallel` | Run alongside other workers on the same profile (see below). |
 | `--usage-limit-wait 30m` | How long to pause after a usage limit when the agent names no reset time. |
 
+## Safety
+
+The agent runs in its container; the worker keeps it there:
+
+- Git on your machine never runs hooks or an fsmonitor while the worker uses it. The agent
+  container can commit to the repository, but its git configuration, hooks and the
+  worktree's pointers into the repository are read-only there. A run that changed them
+  anyway, moved other branches or tags (they are put back), or left its own branch blocks
+  the task for a look instead of being handed over.
+- Only worktrees in the worktree folder are reused or removed. A branch checked out
+  anywhere else, such as in your own worktree, is never taken over.
+- A repository named by a task on the board must be on the allowed directories list,
+  like any `vp task` workspace, before the worker touches it.
+- `--verify` runs on your machine, in the worktree, with the agent's changes: it runs
+  code the agent wrote with your permissions. The board token is left out of its
+  environment. Use it in repositories you would run the agent's tests in yourself, or
+  make the command run them in a container.
+
 ## Subscriptions and usage limits
 
 The agent runs with the saved login of its [profile](profiles.md), so Claude

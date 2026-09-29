@@ -30,6 +30,8 @@ class FakeBoard:
     paused: str | None = None
     # Returns extra instructions for a heartbeat body; lets a test cancel or stop a run.
     on_heartbeat: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
+    # "METHOD /path/prefix" -> how many requests to fail with 503 before answering.
+    failures: dict[str, int] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     # --- setup ----------------------------------------------------------------------
@@ -77,6 +79,11 @@ class FakeBoard:
     def handle(self, method: str, path: str, body: dict[str, Any] | None) -> tuple[int, Any]:
         with self.lock:
             self.calls.append((method, path, body))
+            for prefix, remaining in self.failures.items():
+                method_name, _, route = prefix.partition(" ")
+                if remaining and method == method_name and path.startswith(route):
+                    self.failures[prefix] = remaining - 1
+                    return 503, {"error": "Board restarting"}
             parts = [unquote(part) for part in path.strip("/").split("/")]
             body = body or {}
             if parts[:3] == ["api", "board", "claim"]:

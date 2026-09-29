@@ -21,7 +21,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -42,6 +44,13 @@ REPORT_OUTPUT_TAIL = 60_000
 SUMMARY_LINES = 40
 SUMMARY_CHARS = 4_000
 DEFAULT_BRANCH_TEMPLATE = "issue-{issue}"
+# The board takes up to this many tasks to pass over in one claim.
+PASS_OVER_LIMIT = 50
+# How long a stopped verify command gets to exit before it is killed.
+TERMINATE_GRACE_SECONDS = 10.0
+# Board writes that fail on the board's side (5xx) or on the way there are tried this often
+# before they wait for the next round of the loop.
+DELIVERY_ATTEMPTS = 5
 DEFAULT_USAGE_LIMIT_WAIT = 30 * 60
 MAX_USAGE_LIMIT_WAIT = 24 * 60 * 60
 
@@ -82,6 +91,10 @@ class AgentRunner(Protocol):
         mounts: list[tuple[str, str, str]],
         allow_check_path: Path,
     ) -> AgentRun: ...
+
+
+# Environment variables the verify command never gets: it runs code the agent wrote.
+PRIVATE_ENV = ("VP_BOARD_TOKEN",)
 
 
 class RunnerError(Exception):
@@ -214,7 +227,9 @@ class TaskResult:
     # when it is no longer held (a run cancelled from the board).
     release: str | None = "failed"
     summary: str = ""
+    # The commits this run made, and all the work the branch holds.
     commits: list[dict[str, str]] = field(default_factory=list)
+    branch_commits: list[dict[str, str]] = field(default_factory=list)
     branch: str | None = None
     verify: VerifyResult | None = None
 
@@ -344,6 +359,7 @@ class BoardWorker:
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         poll_seconds: float = 2.0,
+        allow_repo: Callable[[Path], bool] | None = None,
     ) -> None:
         self.client = client
         self.runner = runner
@@ -354,6 +370,8 @@ class BoardWorker:
         self.sleep = sleep
         self.now = now
         self.poll_seconds = poll_seconds
+        # Whether a repository may be handed to an agent; checked before git touches it.
+        self.allow_repo = allow_repo
         self.worker_id: str | None = None
         self.heartbeat_seconds = 15.0
         self._last_heartbeat = float("-inf")
@@ -367,10 +385,12 @@ class BoardWorker:
         self.usage_pause_until: float | None = None
         self.usage_resume_at: datetime | None = None
         self.summary = WorkSummary()
-        self._stop_active: Callable[[], None] | None = None
         # Tasks whose run was cancelled from the board: planned again, but passed over by
         # this worker so it does not restart what it was told to stop.
-        self.passed_over: list[str] = []
+        self.passed_over: deque[str] = deque(maxlen=PASS_OVER_LIMIT)
+        # Board writes that kept failing, tried again on every round of the loop.
+        self.undelivered: list[tuple[str, Callable[[], object]]] = []
+        self._heartbeat_lock = threading.Lock()
 
     # --- lifecycle ------------------------------------------------------------------
 
@@ -386,6 +406,7 @@ class BoardWorker:
         try:
             self._loop()
         finally:
+            self._redeliver()
             with contextlib.suppress(BoardApiError):
                 self.client.sign_off(self.worker_id)
             self.say("info", f"Signed off: {self.summary.ended_because or 'stopped'}")
@@ -394,6 +415,7 @@ class BoardWorker:
     def _loop(self) -> None:
         processed = 0
         while True:
+            self._redeliver()
             if self.stop_requested:
                 self.summary.ended_because = self.summary.ended_because or "Stopped from the board"
                 return
@@ -487,13 +509,13 @@ class BoardWorker:
                 task=self.options.task,
                 labels=self.options.labels,
                 min_readiness=self.options.min_readiness,
-                exclude=self.passed_over,
+                exclude=list(self.passed_over),
                 lease_seconds=self.options.lease_seconds,
             )
         except BoardApiError as exc:
             if self.options.task and exc.status in {400, 404, 409}:
                 raise WorkerError(exc.message) from exc
-            if exc.status is None and self.options.poll_seconds is not None:
+            if _transient(exc) and self.options.poll_seconds is not None:
                 self.say("warning", f"{exc.message}; retrying")
                 return None
             raise
@@ -515,6 +537,10 @@ class BoardWorker:
             self._heartbeat(force=True)
 
     def _heartbeat(self, force: bool = False) -> None:
+        with self._heartbeat_lock:
+            self._send_heartbeat(force)
+
+    def _send_heartbeat(self, force: bool) -> None:
         if self.worker_id is None:
             return
         if not force and self.clock() - self._last_heartbeat < self.heartbeat_seconds:
@@ -575,8 +601,8 @@ class BoardWorker:
         deadline: float | None,
     ) -> tuple[int | None, str]:
         """Waits for a process while heartbeating. Ends it on a stop or cancel from the board
-        or at the deadline, and says why it ended: exit, stop, cancel or timeout."""
-        self._stop_active = stop
+        or at the deadline, and says why it ended: exit, stop, cancel or timeout. An
+        interruption of the worker itself, such as Ctrl+C, ends the process too."""
         try:
             waited = 0
             while True:
@@ -591,8 +617,28 @@ class BoardWorker:
                 # Quick commands finish without a full poll interval of waiting.
                 self.sleep(min(self.poll_seconds, 0.1 * 2 ** min(waited, 5)))
                 waited += 1
+        except BaseException:
+            with contextlib.suppress(Exception):
+                stop()
+            raise
+
+    @contextlib.contextmanager
+    def _keepalive(self) -> Iterator[None]:
+        """Keeps heartbeats going while the main thread is busy, such as while an image is
+        pulled or an overlay built for the agent, so the claim does not lapse meanwhile."""
+        done = threading.Event()
+
+        def beat() -> None:
+            while not done.wait(1.0):
+                self._heartbeat()
+
+        thread = threading.Thread(target=beat, daemon=True)
+        thread.start()
+        try:
+            yield
         finally:
-            self._stop_active = None
+            done.set()
+            thread.join(timeout=5)
 
     def _interruption(self, deadline: float | None) -> str | None:
         if self.stop_requested:
@@ -644,9 +690,7 @@ class BoardWorker:
             self.stop_requested = True
             self.summary.ended_because = f"The agent could not be started: {exc}"
         except KeyboardInterrupt:
-            if self._stop_active is not None:
-                with contextlib.suppress(Exception):
-                    self._stop_active()
+            # A running agent or verify command was ended where it was waited for.
             result.outcome, result.reason, result.release = (
                 "cancelled",
                 "The worker was interrupted",
@@ -664,7 +708,14 @@ class BoardWorker:
             raise TaskProblem(
                 "No repository to work in: pass --repo, or set the task's local repository path"
             )
-        return worktrees.repository_root(path)
+        # Checked before git runs in it: the path may come from the board.
+        resolved = path.resolve()
+        if self.allow_repo is not None and not self.allow_repo(resolved):
+            raise TaskProblem(
+                f"Repository {resolved} is not allowed for agents: run "
+                f"`vp config allow-dir {resolved}`"
+            )
+        return worktrees.repository_root(resolved)
 
     def _worktree_dir(self, repo: Path) -> Path:
         return self.options.worktree_dir or repo.parent / f"{repo.name}-worktrees"
@@ -682,19 +733,23 @@ class BoardWorker:
     ) -> None:
         deadline = started + self.options.timeout_seconds if self.options.timeout_seconds else None
         self._set("working", step=STEP_AGENT)
-        git_dir = str(worktrees.common_git_dir(repo))
-        run = self.runner.start(
-            build_prompt(task, worktree.branch),
-            worktree.path,
-            mounts=[(git_dir, git_dir, "rw")],
-            allow_check_path=repo,
-        )
+        mounts = worktrees.agent_mounts(repo, worktree.path)
+        pointers = worktrees.pointers(worktree.path)
+        refs = worktrees.branch_refs(repo)
+        with self._keepalive():
+            run = self.runner.start(
+                build_prompt(task, worktree.branch),
+                worktree.path,
+                mounts=mounts,
+                allow_check_path=repo,
+            )
         self.say(
             "info", f"Agent running as task {run.task_id[:12]} (vp task logs {run.task_id[:12]})"
         )
         code, ended = self._wait_for(run.poll, run.stop, deadline)
         logs = run.logs()
         result.summary = summarize_logs(logs)
+        self._check_after_run(repo, worktree, pointers, refs)
         if self._ended_early(ended, result):
             return
         if code != 0:
@@ -714,7 +769,9 @@ class BoardWorker:
             return
         worktrees.commit_all(worktree.path, _commit_message(task))
         result.commits = worktrees.commits_since(worktree.path, worktree.start)
-        if not result.commits:
+        # A continued branch may already hold the work, such as after a flaky verify.
+        result.branch_commits = worktrees.commits_since(worktree.path, worktree.base)
+        if not result.branch_commits:
             result.outcome, result.reason, result.release = (
                 "failed",
                 "The agent made no changes",
@@ -734,6 +791,30 @@ class BoardWorker:
                 )
                 return
         result.outcome, result.reason, result.release = "done", None, None
+
+    def _check_after_run(
+        self,
+        repo: Path,
+        worktree: worktrees.Worktree,
+        pointers: dict[str, str],
+        refs: dict[str, str],
+    ) -> None:
+        """What the agent must not have done, checked before git on the host touches the
+        worktree: redirect it to another git directory, move other branches or tags, or leave
+        its own branch."""
+        worktrees.verify_pointers(worktree.path, pointers)
+        restored = worktrees.restore_refs(repo, refs, worktree.branch)
+        if restored:
+            raise TaskProblem(
+                f"The agent moved {', '.join(restored)}; restored them, and the work on "
+                f"{worktree.branch} needs a look"
+            )
+        on = worktrees.current_branch(worktree.path)
+        if on != worktree.branch:
+            raise TaskProblem(
+                f"The agent left the branch {worktree.branch} (now on {on or 'a detached HEAD'}); "
+                f"the worktree at {worktree.path} needs a look"
+            )
 
     def _ended_early(self, ended: str, result: TaskResult) -> bool:
         if ended == "stop":
@@ -759,11 +840,19 @@ class BoardWorker:
     def _verify(self, path: Path, deadline: float | None) -> VerifyResult:
         command = str(self.options.verify)
         self.say("info", f"Verifying with: {command}")
+        # It runs code the agent wrote: the board token stays out of its environment.
+        token = str(getattr(self.client, "token", "") or "")
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in PRIVATE_ENV and not (token and value == token)
+        }
         with tempfile.TemporaryFile() as output:
             process = subprocess.Popen(
                 command,
                 shell=True,
                 cwd=path,
+                env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=output,
                 stderr=subprocess.STDOUT,
@@ -802,30 +891,33 @@ class BoardWorker:
         if result.outcome == "done" and self.cancel_reason is not None:
             result.outcome, result.reason, result.release = "cancelled", self.cancel_reason, None
         card_ref = str(card["id"])
+        branch, note = result.branch, self._handover_note(result)
         if result.outcome == "done":
             self._set("working", step=STEP_HANDING_OVER)
-            try:
-                self.client.hand_over(
-                    card_ref, self.options.name, result.branch, self._handover_note(result)
-                )
+            delivered = self._deliver(
+                f"Handing {key} over",
+                lambda: self.client.hand_over(card_ref, self.options.name, branch, note),
+            )
+            if delivered is True:
                 self.summary.handed_over.append(key)
                 self.say("success", f"Handed {key} over to Review on branch {result.branch}")
-            except BoardApiError as exc:
+            elif isinstance(delivered, BoardApiError):
                 # The claim was taken back meanwhile, such as by a cancel from the board.
-                result.outcome, result.reason, result.release = "cancelled", exc.message, None
-                self.say("warning", f"Could not hand {key} over: {exc.message}")
-        elif result.release is not None:
-            outcome = "blocked" if result.release == "blocked" else result.release
-            try:
-                self.client.release(
-                    card_ref,
-                    self.options.name,
-                    outcome,
-                    result.reason,
-                    self.options.max_attempts if outcome == "failed" else None,
+                result.outcome, result.reason, result.release = (
+                    "cancelled",
+                    delivered.message,
+                    None,
                 )
-            except BoardApiError as exc:
-                self.say("warning", f"Could not give {key} back: {exc.message}")
+        elif result.release is not None:
+            outcome = result.release
+            reason = result.reason
+            max_attempts = self.options.max_attempts if outcome == "failed" else None
+            self._deliver(
+                f"Giving {key} back",
+                lambda: self.client.release(
+                    card_ref, self.options.name, outcome, reason, max_attempts
+                ),
+            )
             self.summary.returned.append(key)
             self.say("warning", f"{key}: {result.reason} ({outcome})")
         else:
@@ -841,15 +933,49 @@ class BoardWorker:
             and not self.options.keep_worktree
         ):
             try:
-                worktrees.remove_worktree(repo, worktree.path)
+                worktrees.remove_worktree(repo, self._worktree_dir(repo), worktree.path)
             except worktrees.GitError as exc:
                 self.say("warning", f"Could not remove the worktree: {exc}")
         self.task = None
         self.cancel_reason = None
         self._set("idle")
 
+    def _deliver(self, what: str, write: Callable[[], object]) -> bool | BoardApiError | None:
+        """A board write that must not get lost: tried again while the board is unreachable
+        or failing, then kept for the next round of the loop. Says True once it went through,
+        the error when the board refused it, and None when it is kept for later."""
+        delay = 1.0
+        for attempt in range(DELIVERY_ATTEMPTS):
+            try:
+                write()
+                return True
+            except BoardApiError as exc:
+                if not _transient(exc):
+                    self.say("warning", f"{what}: {exc.message}")
+                    return exc
+                if attempt == DELIVERY_ATTEMPTS - 1:
+                    self.say("warning", f"{what} failed ({exc.message}); trying again later")
+                    self.undelivered.append((what, write))
+                    return None
+                self.say("warning", f"{what} failed ({exc.message}); retrying")
+                self._idle_wait(delay)
+                delay = min(delay * 2, 30.0)
+        return None
+
+    def _redeliver(self) -> None:
+        pending, self.undelivered = self.undelivered, []
+        for what, write in pending:
+            try:
+                write()
+                self.say("info", f"{what}: delivered")
+            except BoardApiError as exc:
+                if _transient(exc):
+                    self.undelivered.append((what, write))
+                else:
+                    self.say("warning", f"{what}: {exc.message}")
+
     def _handover_note(self, result: TaskResult) -> str:
-        commits = len(result.commits)
+        commits = len(result.branch_commits or result.commits)
         note = f"{commits} commit{'s' if commits != 1 else ''}"
         if result.verify is not None:
             note += f"; verify passed ({result.verify.command})"
@@ -872,25 +998,39 @@ class BoardWorker:
             "startedAt": _iso(started_at),
             "finishedAt": _iso(self.now()),
         }
-        try:
-            self.client.add_run_report(str(self._task_id()), report)
-        except BoardApiError as exc:
-            self.say("warning", f"Could not add the run report to {key}: {exc.message}")
+        task_id = self._task_id()
+        self._deliver(
+            f"Adding the run report to {key}",
+            lambda: self.client.add_run_report(task_id, report),
+        )
 
     def _task_id(self) -> str:
         assert self.task is not None
         return str(self.task["id"])
 
 
+def _transient(exc: BoardApiError) -> bool:
+    """Unreachable, or failing on its side: worth trying again."""
+    return exc.status is None or exc.status >= 500
+
+
 def _terminate(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        if sys.platform != "win32":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
+    """Stops a verify command and everything it started: politely first, then for good,
+    since test runners leave children behind that outlive their shell."""
+    if sys.platform == "win32":
+        with contextlib.suppress(OSError):
             process.terminate()
-        process.wait(timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=TERMINATE_GRACE_SECONDS)
         with contextlib.suppress(OSError):
             process.kill()
+        return
+    with contextlib.suppress(OSError):
+        os.killpg(process.pid, signal.SIGTERM)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=TERMINATE_GRACE_SECONDS)
+    # The group outlives its shell when a child ignored the signal.
+    with contextlib.suppress(OSError):
+        os.killpg(process.pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=TERMINATE_GRACE_SECONDS)

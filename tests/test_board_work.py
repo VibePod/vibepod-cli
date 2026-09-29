@@ -147,6 +147,7 @@ def work(
     runner: FakeRunner,
     repo: Path | None,
     clock: Clock | None = None,
+    allow_repo: Callable[[Path], bool] | None = None,
     **options: Any,
 ) -> tuple[BoardWorker, list[tuple[str, str]]]:
     messages: list[tuple[str, str]] = []
@@ -165,6 +166,7 @@ def work(
         say=lambda level, message: messages.append((level, message)),
         clock=clock,
         sleep=clock.sleep,
+        allow_repo=allow_repo,
     )
     worker.run()
     return worker, messages
@@ -229,10 +231,22 @@ def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
     assert "Build the feature described here." in start["prompt"]
     assert "- feature.txt exists" in start["prompt"]
     assert "`vp-1`" in start["prompt"]
-    git_dir = str((repo / ".git").resolve())
-    assert start["mounts"] == [(git_dir, git_dir, "rw")]
+    git_dir = (repo / ".git").resolve()
+    worktree = (repo.parent / "app-worktrees" / "vp-1").resolve()
+    admin = git_dir / "worktrees" / "vp-1"
+    # The git directory is writable for commits; what makes git run programs, and the
+    # worktree's pointers into it, are not.
+    assert start["mounts"] == [
+        (str(git_dir), str(git_dir), "rw"),
+        (str(git_dir / "hooks"), str(git_dir / "hooks"), "ro"),
+        (str(git_dir / "info"), str(git_dir / "info"), "ro"),
+        (str(git_dir / "config"), str(git_dir / "config"), "ro"),
+        (str(admin / "commondir"), str(admin / "commondir"), "ro"),
+        (str(admin / "gitdir"), str(admin / "gitdir"), "ro"),
+        (str(worktree / ".git"), "/workspace/.git", "ro"),
+    ]
     assert start["allow"] == repo.resolve()
-    assert start["workspace"] == (repo.parent / "app-worktrees" / "vp-1").resolve()
+    assert start["workspace"] == worktree
 
 
 def test_reports_its_status_steps_and_task_in_heartbeats(
@@ -673,6 +687,257 @@ def test_detects_usage_limits_only_at_the_end_of_the_output() -> None:
     assert usage_limit_reset("usage limit reached") is None
 
 
+# --- what the agent must not do, and what the worker must not do to it ----------------
+
+
+def test_an_interrupt_stops_the_agent_and_gives_the_task_back(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Interrupted")
+
+    class InterruptedRun(FakeRun):
+        def poll(self) -> int | None:
+            if self.polled == 1 and not self.stopped:
+                self.polled += 1
+                raise KeyboardInterrupt
+            return super().poll()
+
+    class Runner(FakeRunner):
+        def start(self, prompt: str, workspace: Path, **kwargs: Any) -> FakeRun:
+            run = InterruptedRun("task-interrupted", self.behaviour, workspace, prompt, None)
+            self.runs.append(run)
+            return run
+
+    runner = Runner()
+    with pytest.raises(KeyboardInterrupt):
+        work(server, runner, repo)
+
+    assert runner.runs[0].stopped is True
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert (release["outcome"], release["note"]) == ("released", "The worker was interrupted")
+    assert board.runs[0]["outcome"] == "cancelled"
+    assert board.requests("POST", "/api/workers/worker-1/sign-off") == [None]
+
+
+def test_stopping_a_verify_command_kills_its_whole_group(monkeypatch, tmp_path: Path) -> None:
+    import time
+
+    from vibepod.core import board_worker
+
+    monkeypatch.setattr(board_worker, "TERMINATE_GRACE_SECONDS", 0.3)
+    child_file = tmp_path / "child"
+    process = subprocess.Popen(
+        f"trap '' TERM; sleep 30 & echo $! > {child_file}; wait",
+        shell=True,
+        start_new_session=True,
+    )
+    for _ in range(100):
+        if child_file.exists() and child_file.read_text().strip():
+            break
+        time.sleep(0.05)
+    child = int(child_file.read_text())
+
+    board_worker._terminate(process)
+
+    assert process.poll() is not None
+    time.sleep(0.2)
+    state = Path(f"/proc/{child}/stat")
+    assert not state.exists() or state.read_text().split()[2] == "Z"
+
+
+def test_host_git_never_runs_repository_hooks(
+    board: FakeBoard, server: FakeBoardServer, repo: Path, tmp_path: Path
+) -> None:
+    board.add_task("Leaves changes behind")
+    marker = tmp_path / "hook-ran"
+    for hook in ("post-checkout", "post-commit", "pre-commit"):
+        path = repo / ".git" / "hooks" / hook
+        path.write_text(f"#!/bin/sh\necho {hook} >> {marker}\n")
+        path.chmod(0o755)
+
+    def writes_only(path: Path, prompt: str) -> tuple[int, str]:
+        (path / "notes.txt").write_text("uncommitted\n")
+        return 0, "Done."
+
+    work(server, FakeRunner(writes_only), repo)
+
+    assert board.card("VP-1")["column"] == "review"
+    assert not marker.exists()
+
+
+def test_a_worktree_pointing_elsewhere_is_left_alone(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Redirected")
+
+    def redirects(path: Path, prompt: str) -> tuple[int, str]:
+        (path / ".git").write_text("gitdir: /tmp/somewhere-else\n")
+        return 0, "Done."
+
+    work(server, FakeRunner(redirects), repo, once=True)
+
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert "changed the worktree's git metadata" in release["note"]
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+
+
+def test_other_branches_the_agent_moved_are_restored(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Overreaches")
+    main_before = git(repo, "rev-parse", "main")
+
+    def moves_main(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        git(path, "update-ref", "refs/heads/main", "HEAD")
+        return 0, "Done."
+
+    work(server, FakeRunner(moves_main), repo, once=True)
+
+    assert git(repo, "rev-parse", "main") == main_before
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith("The agent moved main; restored them")
+
+
+def test_an_agent_that_left_its_branch_blocks_the_task(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Wanders off")
+
+    def detaches(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        git(path, "checkout", "--quiet", "--detach")
+        return 0, "Done."
+
+    work(server, FakeRunner(detaches), repo, once=True)
+
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert "left the branch vp-1 (now on a detached HEAD)" in release["note"]
+
+
+def test_a_branch_checked_out_in_someone_elses_worktree_is_not_taken_over(
+    board: FakeBoard, server: FakeBoardServer, repo: Path, tmp_path: Path
+) -> None:
+    board.add_task("Mine, actually", githubIssueNumber=12)
+    mine = tmp_path / "my-checkout"
+    git(repo, "worktree", "add", "--quiet", "-b", "issue-12", str(mine))
+    (mine / "wip.txt").write_text("work in progress\n")
+    runner = FakeRunner()
+
+    work(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert f"checked out in {mine.resolve()}" in release["note"]
+    assert (mine / "wip.txt").read_text() == "work in progress\n"
+    assert git(mine, "status", "--porcelain") == "?? wip.txt"
+
+
+def test_a_repository_that_is_not_allowed_is_never_touched(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Somewhere private", repositoryLocalPath=str(repo))
+    runner = FakeRunner()
+
+    work(server, runner, None, allow_repo=lambda path: False, once=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert "is not allowed for agents: run `vp config allow-dir" in release["note"]
+    assert not (repo.parent / "app-worktrees").exists()
+
+
+def test_a_continued_branch_that_already_holds_the_work_is_handed_over(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Done last time")
+    git(repo, "checkout", "--quiet", "-b", "vp-1")
+    (repo / "feature.txt").write_text("from the earlier run\n")
+    git(repo, "add", "feature.txt")
+    git(repo, "commit", "--quiet", "-m", "Earlier work")
+    git(repo, "checkout", "--quiet", "main")
+
+    def nothing_left(path: Path, prompt: str) -> tuple[int, str]:
+        return 0, "Everything was already done."
+
+    work(server, FakeRunner(nothing_left), repo, once=True)
+
+    [handover] = board.requests("POST", "/api/board/card-1/handover")
+    assert handover["note"] == "1 commit"
+    assert board.runs[0]["commits"] == []
+
+
+def test_board_writes_survive_a_board_restart(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Fails while the board restarts")
+    board.add_task("Handed over after the restart")
+    board.failures = {
+        "POST /api/board/card-1/release": 2,
+        "POST /api/board/card-2/handover": 5,
+    }
+
+    def first_fails(path: Path, prompt: str) -> tuple[int, str]:
+        if "Fails while" in prompt:
+            return 1, "Error"
+        return commits_a_feature(path, prompt)
+
+    work(server, FakeRunner(first_fails), repo, max_tasks=2, max_attempts=1)
+
+    assert board.card("VP-1")["blockedReason"] == "The agent exited with code 1"
+    assert len(board.requests("POST", "/api/board/card-1/release")) == 3
+    # Kept after five tries and delivered on the next round, before signing off.
+    assert board.card("VP-2")["column"] == "review"
+    assert len(board.requests("POST", "/api/board/card-2/handover")) == 6
+
+
+def test_claims_ride_out_a_board_restart_while_polling(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Waiting for the board")
+    board.failures = {"POST /api/board/claim": 1}
+
+    worker, messages = work(server, FakeRunner(), repo, poll_seconds=30, max_tasks=1)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    assert ("warning", "Board restarting; retrying") in messages
+
+
+def test_the_verify_command_never_sees_the_board_token(
+    monkeypatch, board: FakeBoard, server: FakeBoardServer, repo: Path, tmp_path: Path
+) -> None:
+    board.add_task("Verified")
+    monkeypatch.setenv("VP_BOARD_TOKEN", TOKEN)
+    monkeypatch.setenv("COPIED_TOKEN", TOKEN)
+    monkeypatch.setenv("HARMLESS", "kept")
+    seen = tmp_path / "env.txt"
+
+    work(server, FakeRunner(), repo, verify=f"env > {seen}")
+
+    environment = seen.read_text()
+    assert TOKEN not in environment
+    assert "VP_BOARD_TOKEN" not in environment
+    assert "HARMLESS=kept" in environment
+
+
+def test_a_worker_passes_over_at_most_as_many_tasks_as_a_claim_takes() -> None:
+    from vibepod.core.board_worker import PASS_OVER_LIMIT
+
+    worker = BoardWorker(
+        BoardClient("http://127.0.0.1:9", TOKEN),
+        FakeRunner(),
+        WorkOptions(project="VP", agent="claude", name="n"),
+    )
+    worker.passed_over.extend(f"idea-{number}" for number in range(PASS_OVER_LIMIT + 10))
+    assert len(worker.passed_over) == PASS_OVER_LIMIT
+    assert worker.passed_over[-1] == f"idea-{PASS_OVER_LIMIT + 9}"
+
+
 # --- branch names, prompt, lock ------------------------------------------------------
 
 
@@ -871,6 +1136,51 @@ def test_the_docker_runner_keeps_the_board_token_from_the_agent(
     assert manager.container.stopped is True
 
 
+def test_the_docker_runner_backs_the_time_limit_and_tells_hiccups_from_exits(
+    monkeypatch, tmp_path: Path, repo: Path
+) -> None:
+    import docker.errors
+
+    from vibepod.commands import task as task_cmd
+    from vibepod.core.tasks import TaskStore
+
+    manager = _Manager()
+    watchers: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        task_cmd,
+        "get_config",
+        lambda: {"agents": {"claude": {"env": {}, "init": []}}, "proxy": {"enabled": False}},
+    )
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: manager)
+    monkeypatch.setattr(task_cmd, "is_dir_allowed", lambda path: True)
+    monkeypatch.setattr(task_cmd, "_task_store", lambda: TaskStore(tmp_path / "tasks.db"))
+    monkeypatch.setattr(
+        task_cmd,
+        "_start_timeout_watcher",
+        lambda task_id, seconds: watchers.append((task_id, seconds)),
+    )
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    run = board_cmd.DockerAgentRunner("claude", timeout_seconds=600).start(
+        "Do it", worktree, mounts=[], allow_check_path=repo
+    )
+
+    assert watchers == [(run.task_id, 600 + board_cmd.WATCHER_SLACK_SECONDS)]
+
+    def engine_hiccup() -> None:
+        raise docker.errors.APIError("engine busy")
+
+    manager.container.reload = engine_hiccup  # type: ignore[method-assign]
+    assert run.poll() is None
+
+    def gone() -> None:
+        raise docker.errors.NotFound("no such container")
+
+    manager.container.reload = gone  # type: ignore[method-assign]
+    assert run.poll() == 1
+
+
 def test_the_docker_runner_turns_launch_failures_into_runner_errors(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -978,6 +1288,8 @@ def test_worktree_helpers_prepare_and_clean_up(repo: Path, tmp_path: Path) -> No
     with pytest.raises(worktrees.GitError, match="Invalid branch name"):
         worktrees.prepare_worktree(repo, tmp_path / "trees", "bad..name", "main")
 
-    worktrees.remove_worktree(repo, fresh.path)
+    with pytest.raises(worktrees.GitError, match="outside"):
+        worktrees.remove_worktree(repo, tmp_path / "elsewhere", fresh.path)
+    worktrees.remove_worktree(repo, tmp_path / "trees", fresh.path)
     assert not fresh.path.exists()
     assert worktrees.branch_exists(repo, "vp-9")
