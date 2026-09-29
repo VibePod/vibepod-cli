@@ -1551,7 +1551,9 @@ def test_a_worker_passes_over_at_most_as_many_tasks_as_a_claim_takes() -> None:
 
 
 def test_a_run_without_a_readable_result_counts_as_failed(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Silent agent")
 
@@ -1570,7 +1572,9 @@ def test_a_run_without_a_readable_result_counts_as_failed(
 
 
 def test_an_agent_that_says_it_failed_gives_its_reason(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Impossible")
 
@@ -1584,7 +1588,9 @@ def test_an_agent_that_says_it_failed_gives_its_reason(
 
 
 def test_needs_input_blocks_the_task_with_the_agents_question(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Add a cache")
     question = "Should the cache live in Redis or in Postgres?"
@@ -1592,7 +1598,9 @@ def test_needs_input_blocks_the_task_with_the_agents_question(
     def asks(path: Path, prompt: str) -> tuple[int, str]:
         (path / "draft.txt").write_text("started\n")
         return 0, "Thinking...\n" + result_block(
-            "needs_input", summary="Drafted the interface.", question=question
+            "needs_input",
+            summary="Drafted the interface.",
+            question=question,
         )
 
     worker, _ = work(server, FakeRunner(asks), repo)
@@ -1612,7 +1620,9 @@ def test_needs_input_blocks_the_task_with_the_agents_question(
 
 
 def test_the_next_run_gets_the_question_and_its_answer(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Add a cache")
     board.history["idea-1"] = [
@@ -1628,14 +1638,16 @@ def test_the_next_run_gets_the_question_and_its_answer(
     prompt = runner.starts[0]["prompt"]
     assert "## Earlier questions, answers and review feedback" in prompt
     assert prompt.index("Your question: Redis or Postgres?") < prompt.index(
-        "Answer from admin: Postgres, no new services."
+        "Answer from admin: Postgres, no new services.",
     )
     assert "Claimed by" not in prompt
     assert board.card("VP-1")["column"] == "review"
 
 
 def test_a_rework_continues_on_its_branch_with_the_feedback(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Add a cache", githubIssueNumber=99)
     board.card("VP-1")["branchName"] = "issue-7"
@@ -1665,6 +1677,48 @@ def test_a_rework_continues_on_its_branch_with_the_feedback(
     assert [commit["subject"] for commit in board.runs[0]["commits"]] == ["Add the feature"]
 
 
+def test_an_answered_question_continues_on_its_draft_even_when_refusing_branches(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add a cache")
+    board.history["idea-1"] = [
+        {"kind": "answer", "actor": "admin", "message": "Postgres."},
+        {"kind": "question", "actor": "claude@laptop", "message": "Redis or Postgres?"},
+    ]
+    git(repo, "checkout", "--quiet", "-b", "vp-1")
+    (repo / "draft.txt").write_text("started\n")
+    git(repo, "add", "draft.txt")
+    git(repo, "commit", "--quiet", "-m", "Draft")
+    git(repo, "checkout", "--quiet", "main")
+
+    work(server, FakeRunner(), repo, existing="refuse")
+
+    assert board.card("VP-1")["column"] == "review"
+    assert git(repo, "log", "--format=%s", "main..vp-1").splitlines() == [
+        "Add the feature",
+        "Draft",
+    ]
+
+
+def test_a_rework_without_its_branch_is_blocked(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Handed over elsewhere")
+    board.card("VP-1")["branchName"] = "issue-7"
+    runner = FakeRunner()
+
+    work(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith("The rework needs the branch issue-7")
+
+
 def test_reads_the_last_well_formed_result() -> None:
     echoed = build_prompt({"key": "VP-1", "title": "Echoed"}, "vp-1")
     assert parse_result(echoed) is None
@@ -1678,6 +1732,10 @@ def test_reads_the_last_well_formed_result() -> None:
     assert parse_result(result_block("needs_input")) is None
     assert parse_result("<vibepod-result>{not json}</vibepod-result>") is None
     assert parse_result(result_block("maybe")) is None
+    mentioned = "I will finish with a <vibepod-result> block as asked.\n" + result_block(
+        summary="Real one",
+    )
+    assert parse_result(mentioned) == AgentResult("done", summary="Real one")
 
 
 # --- branch names, prompt, lock ------------------------------------------------------
