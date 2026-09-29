@@ -28,6 +28,8 @@ class FakeBoard:
     calls: list[tuple[str, str, dict[str, Any] | None]] = field(default_factory=list)
     heartbeats: list[dict[str, Any]] = field(default_factory=list)
     paused: str | None = None
+    # Task history by task id, newest first, as the board lists it.
+    history: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     # Returns extra instructions for a heartbeat body; lets a test cancel or stop a run.
     on_heartbeat: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
     # "METHOD /path/prefix" -> how many requests to fail with 503 before answering.
@@ -104,6 +106,9 @@ class FakeBoard:
                     return self._heartbeat(parts[2], body)
                 if parts[3] == "sign-off":
                     return self._sign_off(parts[2])
+            if parts[:2] == ["api", "ideas"] and parts[3:] == ["history"]:
+                task = self.task(parts[2])
+                return 200, {"items": self.history.get(task["id"], [])}
             if parts[:2] == ["api", "ideas"] and parts[3:] == ["runs"]:
                 self.runs.append({"task": parts[2], **body})
                 return 201, {"item": {"id": f"run-{len(self.runs)}", **body}}
@@ -170,6 +175,9 @@ class FakeBoard:
                 card["blockedReason"] = body.get("note") or "Failed"
         elif outcome == "blocked":
             card["blockedReason"] = body.get("note")
+        elif outcome == "needs_input":
+            card["blockedReason"] = f"Needs input: {body.get('note')}"
+            card["question"] = body.get("note")
         return 200, {"item": dict(card)}
 
     def _register(self, body: dict[str, Any]) -> tuple[int, Any]:
