@@ -14,6 +14,7 @@ Heartbeats are sent from the worker's own wait loops, so it stays single-threade
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import signal
@@ -232,8 +233,8 @@ class TaskResult:
     # done, failed, timed_out, cancelled or usage_limit.
     outcome: str = "failed"
     reason: str | None = None
-    # How the task goes back when it is not handed over: failed, blocked, released, or None
-    # when it is no longer held (a run cancelled from the board).
+    # How the task goes back when it is not handed over: failed, blocked, needs_input,
+    # released, or None when it is no longer held (a run cancelled from the board).
     release: str | None = "failed"
     summary: str = ""
     # The commits this run made, and all the work the branch holds.
@@ -281,9 +282,77 @@ def validate_branch_template(template: str) -> None:
         ) from exc
 
 
-def build_prompt(task: dict[str, Any], branch: str) -> str:
-    """The agent's instructions: the task's title, description and acceptance criteria, and
-    how to leave the work."""
+RESULT_TAG = "vibepod-result"
+RESULT_BLOCK = re.compile(rf"<{RESULT_TAG}>\s*(.*?)\s*</{RESULT_TAG}>", re.DOTALL | re.IGNORECASE)
+RESULT_STATUSES = ("done", "needs_input", "failed")
+# How much of the earlier conversation of a task goes into the prompt.
+CONVERSATION_LIMIT = 20
+
+RESULT_INSTRUCTIONS = f"""## How to finish
+
+End your final message with a result block in this form, and nothing after it:
+
+<{RESULT_TAG}>
+{{"status": "<done | needs_input | failed>", "summary": "<what you did, in a sentence or two>"}}
+</{RESULT_TAG}>
+
+- `done`: the task is implemented and committed.
+- `needs_input`: the task is unclear and you cannot go on without an answer. Add
+  `"question"` with one precise question, and do not guess instead.
+- `failed`: you cannot complete the task. Add `"reason"` with why."""
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    """How the agent says its run ended."""
+
+    status: str
+    summary: str = ""
+    question: str = ""
+    reason: str = ""
+
+
+def parse_result(logs: str) -> AgentResult | None:
+    """The last well-formed result block in the agent's output, or None. The instructions in
+    the prompt may be echoed, but their placeholder status never parses."""
+    found: AgentResult | None = None
+    for block in RESULT_BLOCK.findall(logs):
+        text = block.strip()
+        if text.startswith("```"):
+            text = text.strip("`").removeprefix("json").strip()
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict) or data.get("status") not in RESULT_STATUSES:
+            continue
+        result = AgentResult(
+            status=str(data["status"]),
+            summary=str(data.get("summary") or "").strip(),
+            question=str(data.get("question") or "").strip(),
+            reason=str(data.get("reason") or "").strip(),
+        )
+        if result.status == "needs_input" and not result.question:
+            continue
+        found = result
+    return found
+
+
+def conversation(history: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The questions, answers and review feedback of a task, oldest first."""
+    kept = [event for event in history if event.get("kind") in {"question", "answer", "feedback"}]
+    return list(reversed(kept))[-CONVERSATION_LIMIT:]
+
+
+def build_prompt(
+    task: dict[str, Any],
+    branch: str,
+    earlier: Sequence[dict[str, Any]] = (),
+    rework: bool = False,
+) -> str:
+    """The agent's instructions: the task's title, description and acceptance criteria, what
+    was asked, answered and fed back in earlier runs, how to leave the work, and how to say
+    how the run ended."""
     key = task.get("key") or "the task"
     description = str(task.get("details") or task.get("summary") or "").strip()
     criteria = [str(item).strip() for item in task.get("acceptanceCriteria") or []]
@@ -298,6 +367,25 @@ def build_prompt(task: dict[str, Any], branch: str) -> str:
         "## Acceptance criteria",
         "",
         *([f"- {item}" for item in criteria] or ["None were given."]),
+    ]
+    if earlier:
+        lines += ["", "## Earlier questions, answers and review feedback", ""]
+        if rework:
+            lines += [
+                "This task was reviewed and sent back. The branch already holds the earlier "
+                "work: continue it and address the review feedback.",
+                "",
+            ]
+        labels = {"question": "Your question", "answer": "Answer", "feedback": "Review feedback"}
+        for event in earlier:
+            label = labels.get(str(event.get("kind")), "Note")
+            actor = (
+                f" from {event['actor']}"
+                if event.get("actor") and event["kind"] != "question"
+                else ""
+            )
+            lines.append(f"- {label}{actor}: {str(event.get('message') or '').strip()}")
+    lines += [
         "",
         "## How to work",
         "",
@@ -305,7 +393,8 @@ def build_prompt(task: dict[str, Any], branch: str) -> str:
         "- Commit your work with clear messages as you go. Do not push, and do not switch or "
         "create branches.",
         "- Run the relevant tests or checks before you finish.",
-        "- End with a short summary of what you changed.",
+        "",
+        RESULT_INSTRUCTIONS,
     ]
     return "\n".join(lines)
 
@@ -716,10 +805,17 @@ class BoardWorker:
         result = TaskResult()
         repo: Path | None = None
         worktree: worktrees.Worktree | None = None
+        # A task sent back from Review keeps the branch it was handed over on: the rework
+        # continues there, whatever --existing says.
+        rework = bool(card.get("branchName"))
         try:
             try:
                 repo = self._repository(task)
-                result.branch = branch_name(self.options.branch_template, task)
+                result.branch = (
+                    str(card["branchName"])
+                    if rework
+                    else branch_name(self.options.branch_template, task)
+                )
                 # Checking a branch out can take long in a large repository.
                 with self._keepalive():
                     worktree = worktrees.prepare_worktree(
@@ -727,13 +823,13 @@ class BoardWorker:
                         self._worktree_dir(repo),
                         result.branch,
                         self.options.base or worktrees.current_branch(repo) or "HEAD",
-                        self.options.existing,
+                        "continue" if rework else self.options.existing,
                     )
                 if worktree.continued:
                     self.say("info", f"Continuing on branch {worktree.branch} in {worktree.path}")
                 else:
                     self.say("info", f"Working on branch {worktree.branch} in {worktree.path}")
-                self._run(task, repo, worktree, result, started)
+                self._run(task, repo, worktree, result, started, rework)
             except worktrees.BranchExistsError as exc:
                 raise TaskProblem(f"{exc}; not continuing on it (--existing refuse)") from exc
             except worktrees.GitError as exc:
@@ -805,8 +901,10 @@ class BoardWorker:
         worktree: worktrees.Worktree,
         result: TaskResult,
         started: float,
+        rework: bool = False,
     ) -> None:
         deadline = started + self.options.timeout_seconds if self.options.timeout_seconds else None
+        earlier = self._conversation(task)
         self._set("working", step=STEP_AGENT)
         with self._keepalive():
             mounts = worktrees.agent_mounts(repo, worktree.path)
@@ -818,7 +916,7 @@ class BoardWorker:
             if self._ended_early(self._interruption(deadline) or "exit", result):
                 return
             run = self.runner.start(
-                build_prompt(task, worktree.branch),
+                build_prompt(task, worktree.branch, earlier, rework),
                 worktree.path,
                 mounts=mounts,
                 allow_check_path=repo,
@@ -852,6 +950,33 @@ class BoardWorker:
                 self._failure(),
             )
             return
+        said = parse_result(logs)
+        if said is None:
+            result.outcome, result.reason, result.release = (
+                "failed",
+                "The run ended without a readable result",
+                self._failure(),
+            )
+            return
+        result.summary = said.summary or result.summary
+        if said.status == "needs_input":
+            # The work so far stays on the branch; the answered task continues there.
+            with self._keepalive():
+                worktrees.commit_all(worktree.path, _commit_message(task))
+                result.commits = worktrees.commits_since(worktree.path, worktree.start)
+            result.outcome, result.reason, result.release = (
+                "needs_input",
+                said.question,
+                "needs_input",
+            )
+            return
+        if said.status == "failed":
+            result.outcome, result.reason, result.release = (
+                "failed",
+                f"The agent could not finish: {said.reason or 'no reason given'}",
+                self._failure(),
+            )
+            return
         with self._keepalive():
             worktrees.commit_all(worktree.path, _commit_message(task))
             result.commits = worktrees.commits_since(worktree.path, worktree.start)
@@ -860,7 +985,7 @@ class BoardWorker:
         if not result.branch_commits:
             result.outcome, result.reason, result.release = (
                 "failed",
-                "The agent made no changes",
+                "The agent reported done but made no changes",
                 self._failure(),
             )
             return
@@ -931,6 +1056,13 @@ class BoardWorker:
                 f"The agent left the branch {worktree.branch} (now on {on or 'a detached HEAD'}); "
                 f"the worktree at {worktree.path} needs a look",
             )
+
+    def _conversation(self, task: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            return conversation(self.client.task_history(str(task["id"])))
+        except BoardApiError as exc:
+            self.say("warning", f"Could not read the task history: {exc.message}")
+            return []
 
     def _ended_early(self, ended: str, result: TaskResult) -> bool:
         if ended == "stop":
@@ -1160,7 +1292,13 @@ class BoardWorker:
             "verifyExitCode": verify.exit_code if verify else None,
             "verifyOutput": verify.output if verify else None,
             "durationSeconds": max(0, int(self.clock() - started)),
-            "failureReason": result.reason if result.outcome != "done" else None,
+            "failureReason": (
+                f"Needs input: {result.reason}"
+                if result.outcome == "needs_input"
+                else result.reason
+                if result.outcome != "done"
+                else None
+            ),
             "startedAt": _iso(started_at),
             "finishedAt": _iso(self.now()),
         }

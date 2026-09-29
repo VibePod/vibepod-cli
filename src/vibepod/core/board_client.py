@@ -201,6 +201,12 @@ class BoardClient:
         result: dict[str, Any] = self.request("POST", f"/api/workers/{_ref(worker_id)}/sign-off")
         return _item(result)
 
+    def task_history(self, task: str) -> list[dict[str, Any]]:
+        """The task's history, newest first: claims, questions, answers, feedback."""
+        result: dict[str, Any] = self.request("GET", f"/api/ideas/{_ref(task)}/history")
+        items: list[dict[str, Any]] = result["items"]
+        return items
+
     # --- reports --------------------------------------------------------------------
 
     def add_run_report(self, task: str, report: dict[str, Any]) -> dict[str, Any]:
