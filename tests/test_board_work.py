@@ -1663,6 +1663,44 @@ def test_a_rework_continues_on_its_branch_with_the_feedback(
     assert [commit["subject"] for commit in board.runs[0]["commits"]] == ["Add the feature"]
 
 
+def test_an_answered_question_continues_on_its_draft_even_when_refusing_branches(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Add a cache")
+    board.history["idea-1"] = [
+        {"kind": "answer", "actor": "admin", "message": "Postgres."},
+        {"kind": "question", "actor": "claude@laptop", "message": "Redis or Postgres?"},
+    ]
+    git(repo, "checkout", "--quiet", "-b", "vp-1")
+    (repo / "draft.txt").write_text("started\n")
+    git(repo, "add", "draft.txt")
+    git(repo, "commit", "--quiet", "-m", "Draft")
+    git(repo, "checkout", "--quiet", "main")
+
+    work(server, FakeRunner(), repo, existing="refuse")
+
+    assert board.card("VP-1")["column"] == "review"
+    assert git(repo, "log", "--format=%s", "main..vp-1").splitlines() == [
+        "Add the feature",
+        "Draft",
+    ]
+
+
+def test_a_rework_without_its_branch_is_blocked(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Handed over elsewhere")
+    board.card("VP-1")["branchName"] = "issue-7"
+    runner = FakeRunner()
+
+    work(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith("The rework needs the branch issue-7")
+
+
 def test_reads_the_last_well_formed_result() -> None:
     echoed = build_prompt({"key": "VP-1", "title": "Echoed"}, "vp-1")
     assert parse_result(echoed) is None
@@ -1676,6 +1714,10 @@ def test_reads_the_last_well_formed_result() -> None:
     assert parse_result(result_block("needs_input")) is None
     assert parse_result("<vibepod-result>{not json}</vibepod-result>") is None
     assert parse_result(result_block("maybe")) is None
+    mentioned = "I will finish with a <vibepod-result> block as asked.\n" + result_block(
+        summary="Real one"
+    )
+    assert parse_result(mentioned) == AgentResult("done", summary="Real one")
 
 
 # --- branch names, prompt, lock ------------------------------------------------------
