@@ -12,7 +12,9 @@
    repository. The repository's own checkout is left alone.
 3. **Run the agent** headless, like `vp task create`, with the task's title,
    description and acceptance criteria as the prompt. The agent commits its
-   work; anything it leaves uncommitted is committed for it.
+   work; anything it leaves uncommitted is committed for it. It ends its run
+   with a short structured result: done, needs input (with its question), or
+   failed (with the reason).
 4. **Verify** with an optional command, such as the test suite, run in the
    worktree.
 5. **Hand over** the task to Review with its branch name, or give it back to
@@ -102,6 +104,28 @@ vp board work VP --agent codex --repo ~/src/app --poll 2m
 | `--max-attempts` | Failed attempts before the board blocks a task. |
 | `--parallel` | Run alongside other workers on the same profile (see below). |
 | `--usage-limit-wait 30m` | How long to pause after a usage limit when the agent names no reset time. |
+
+## Questions and rework
+
+The prompt asks the agent to end every run with a result block:
+
+```text
+<vibepod-result>
+{"status": "done", "summary": "Added the command and its tests."}
+</vibepod-result>
+```
+
+`status` is `done`, `needs_input` with a `question`, or `failed` with a
+`reason`. A run whose output has no readable result counts as failed.
+
+- **Needs input.** When the task is unclear, the agent asks instead of
+  guessing. The task is blocked on the board with the question on its card,
+  without counting a failed attempt, and the work so far stays on the branch.
+  Once someone answers on the board, the task is planned again, and the next
+  run gets the question and the answer in its prompt.
+- **Rework.** When a reviewer sends a task back from Review with feedback, the
+  next run continues on the branch the task was handed over on and gets the
+  feedback in its prompt, instead of starting from scratch.
 
 ## Safety
 
