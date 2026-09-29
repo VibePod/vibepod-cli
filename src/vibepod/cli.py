@@ -9,6 +9,7 @@ import typer
 
 from vibepod.commands import (
     attach,
+    board,
     config,
     doctor,
     list_cmd,
@@ -163,6 +164,7 @@ app.add_typer(proxy.app, name="proxy")
 app.add_typer(doctor.app, name="doctor")
 app.add_typer(skills.app, name="skills")
 app.add_typer(task.app, name="task")
+app.add_typer(board.app, name="board")
 
 
 def _register_run_alias(command_name: str, agent_name: str) -> None:

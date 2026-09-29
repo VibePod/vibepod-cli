@@ -1,0 +1,136 @@
+# Board automation
+
+`vp board work` lets an agent work through a project on
+[vibepod-board](https://github.com/VibePod/vibepod-board). It takes the next
+**Planned** task, implements it on a branch of its own, and moves the task to
+**Review** when done:
+
+1. **Claim** the next planned task in the board's work order. Tasks whose
+   dependencies are not done, blocked tasks and tasks someone holds are
+   skipped. The card moves to In Progress, with the worker as its holder.
+2. **Check out** the task's branch in a git worktree of its own, next to the
+   repository. The repository's own checkout is left alone.
+3. **Run the agent** headless, like `vp task create`, with the task's title,
+   description and acceptance criteria as the prompt. The agent commits its
+   work; anything it leaves uncommitted is committed for it.
+4. **Verify** with an optional command, such as the test suite, run in the
+   worktree.
+5. **Hand over** the task to Review with its branch name, or give it back to
+   Planned (or block it) with a note saying why.
+
+Every run adds a report to its task on the board: the agent's summary, the
+commits it made, the verify output, the duration and the reason when it
+failed.
+
+## Connect to the board
+
+Create an API token for the project on the board (**API Tokens**), then point
+VibePod at the board in your config:
+
+```yaml
+# ~/.config/vibepod/config.yaml
+board:
+  url: http://localhost:3000
+  token: vbp_... # project-scoped board API token
+```
+
+or in the environment, which wins over the config:
+
+```bash
+export VP_BOARD_URL=http://localhost:3000
+export VP_BOARD_TOKEN=vbp_...
+```
+
+The token stays with `vp`: it is never passed to the agent's container.
+
+## Example
+
+Work through the planned tasks of project `VP` with Claude Code, in a local
+checkout, running the tests before each hand-over:
+
+```bash
+vp config allow-dir ~/src/vibepod-cli       # once per repository
+vp board work VP --agent claude \
+  --repo ~/src/vibepod-cli \
+  --verify "python -m pytest -q" \
+  --ikwid
+```
+
+```text
+Connected to the board as claude@laptop
+Claimed VP-12: Add `vp board work`
+Working on branch issue-201 in /home/me/src/vibepod-cli-worktrees/issue-201
+Starting task on claude with image vibepod/claude:latest
+Agent running as task 3f2c9a1b7e40 (vp task logs 3f2c9a1b7e40)
+Verifying with: python -m pytest -q
+Handed VP-12 over to Review on branch issue-201
+No planned task can be claimed
+Signed off: No planned task left to claim
+Handed over 1 task(s), gave back 0.
+```
+
+Follow the agent while it works with `vp task logs <id> --follow`; every run is
+a regular [background task](cli-reference.md).
+
+To keep going as new tasks are planned, poll instead of exiting:
+
+```bash
+vp board work VP --agent codex --repo ~/src/app --poll 2m
+```
+
+## Options
+
+| Option | Meaning |
+| --- | --- |
+| `--agent`, `-a` | The agent that implements the tasks (required; it needs headless mode). |
+| `--name` | The worker's name on the board, and the holder of its claims. Defaults to `<agent>@<host>`. Give two workers on one machine different names. |
+| `--label` | Only claim tasks carrying this label; repeat to require more. |
+| `--min-readiness` | Only claim tasks with at least this readiness score. |
+| `--task` | Work on this one task, such as `VP-12`, then exit. |
+| `--once` / `--max N` | Exit after one / after `N` tasks. |
+| `--poll 2m` | When no task is left, wait and look again instead of exiting. |
+| `--repo` | The repository to work in. Defaults to the task's local repository path on the board. |
+| `--worktree-dir` | Where task worktrees go. Defaults to `<repo>-worktrees` next to the repository. |
+| `--base` | Where new branches start. Defaults to the repository's current branch. |
+| `--branch-template` | The branch name, from `{issue}` (GitHub issue number), `{number}` (task number), `{key}` (`vp-12`) and `{project}` (`vp`). Defaults to `issue-{issue}`; a task without a GitHub issue gets `{key}`, such as `vp-12`. |
+| `--existing continue\|refuse` | When the task's branch or worktree exists, such as from an earlier attempt: continue on it (default) or refuse, which blocks the task. |
+| `--keep-worktree` | Keep the worktree after the hand-over; by default it is removed, and the branch stays. |
+| `--profile`, `--provider`, `--ikwid`, `-e/--env`, `--network`, `--no-overlay` | Passed to every agent run, as for `vp task create`. |
+| `--timeout 2h` | Time limit per task (`none` for no limit). |
+| `--verify` | A command that must pass in the worktree before the task moves to Review. |
+| `--on-fail planned\|blocked` | Where failed and timed-out tasks go: back to Planned, counting a failed attempt (default), or blocked. The board blocks a task after too many failed attempts. |
+| `--max-attempts` | Failed attempts before the board blocks a task. |
+| `--parallel` | Run alongside other workers on the same profile (see below). |
+| `--usage-limit-wait 30m` | How long to pause after a usage limit when the agent names no reset time. |
+
+## Subscriptions and usage limits
+
+The agent runs with the saved login of its [profile](profiles.md), so Claude
+Code and Codex subscription logins work as they do for `vp run`. Log in once
+with `vp run claude` (or `vp run codex`) and keep the profile for the worker.
+
+Only one task runs at a time per profile, across all `vp board work` processes
+on the machine, since runs on one login share its limits. A second worker on
+the same profile waits for the first to finish its task; `--parallel` turns
+the lock off.
+
+When the agent stops at a usage limit, the task goes back to Planned without
+counting a failed attempt, and the worker pauses until the limit resets (when
+the agent says when) or for `--usage-limit-wait`. The board shows the worker as
+paused with the reason.
+
+## The board's controls
+
+The worker registers with the board when it starts and signs off when it stops,
+so the board lists it with its status, current task and step. A heartbeat
+every few seconds keeps the worker online and its claim alive, and the reply
+carries the board's instructions:
+
+- **Pause** automation of the project: the worker finishes its current task
+  and takes no new one until automation is resumed.
+- **Stop** the worker: the run in progress ends, its task goes back to
+  Planned, and the worker signs off.
+- **Cancel** a run: the task is already back in Planned; the worker ends the
+  run and reports it as cancelled.
+
+`Ctrl+C` stops the worker the same way.

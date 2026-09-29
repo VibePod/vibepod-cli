@@ -61,6 +61,7 @@ nav:
   - Project overlays:
       - Overview: overlays/index.md
       - Recipes: overlays/recipes.md
+  - Board automation: board.md
   - Herdr integration: herdr.md
   - Editor integration (ACP): acp.md
   - Configuration: configuration.md
