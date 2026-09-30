@@ -14,6 +14,7 @@ from vibepod.core.agent_import import (
     DEFAULT_CATEGORIES,
     IMPORT_SPECS,
     OPT_IN_CATEGORIES,
+    SHARED_SKILLS,
     ImportConflictError,
     agent_import_entries,
     apply_import,
@@ -75,6 +76,8 @@ def test_config_dir_agents_strip_their_host_prefix() -> None:
     }
     for agent, prefix in prefixes.items():
         for entry in agent_import_entries(agent):
+            if entry == SHARED_SKILLS:
+                continue
             assert entry.source.startswith(prefix), (agent, entry.source)
             assert not entry.dest.startswith(prefix), (agent, entry.dest)
 
@@ -218,6 +221,40 @@ def test_jcode_sessions_and_mcp_are_classified(tmp_path: Path) -> None:
         ("mcp", ".jcode/mcp.json"),
     }
     assert any("--with-sessions" in s.reason for s in plan.skipped)
+
+
+#: Agents that discover skills in ~/.agents/skills inside their persisted mount.
+_SHARED_SKILLS_AGENTS = {"codex", "opencode", "auggie", "tau", "jcode", "dsh", "hermes"}
+
+
+def test_shared_skills_are_imported_where_the_agent_reads_them() -> None:
+    from vibepod.commands.run import _agent_skill_paths
+
+    for agent in SUPPORTED_AGENTS:
+        uses_shared = SHARED_SKILLS in agent_import_entries(agent)
+        assert uses_shared == (agent in _SHARED_SKILLS_AGENTS), agent
+        if uses_shared:
+            mount = get_agent_spec(agent).config_mount_path
+            assert f"{mount}/{SHARED_SKILLS.dest}" in _agent_skill_paths(agent), agent
+
+
+@pytest.mark.parametrize("agent", sorted(_SHARED_SKILLS_AGENTS))
+def test_shared_skills_directory_is_imported(tmp_path: Path, agent: str) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".agents" / "skills" / "review" / "SKILL.md", "---\nname: review\n---\n")
+
+    plan = plan_import(agent, home, dest, {"skills"})
+
+    assert [(f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files] == [
+        ("skills", ".agents/skills/review/SKILL.md"),
+    ]
+
+
+def test_shared_skills_alone_do_not_count_as_an_installation(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _write(home / ".agents" / "skills" / "review" / "SKILL.md", "")
+
+    assert scan_host(home) == {}
 
 
 def test_pi_models_live_under_the_agent_dir(tmp_path: Path) -> None:
@@ -540,6 +577,8 @@ def test_agent_roots_map_every_entry() -> None:
     assert set(AGENT_ROOTS) == set(IMPORT_SPECS)
     for agent, entries in IMPORT_SPECS.items():
         for entry in entries:
+            if entry == SHARED_SKILLS:
+                continue
             matches = [
                 root
                 for root in AGENT_ROOTS[agent]
