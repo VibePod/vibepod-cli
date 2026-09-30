@@ -1488,6 +1488,68 @@ def test_hermes_maps_host_user_onto_runtime_user_on_rootless_podman(
     assert stub.run_kwargs["env"]["USER_GID"] == "0"
 
 
+@pytest.mark.parametrize(
+    "override",
+    ["HERMES_UID=1000", "PUID=1000", "HERMES_GID=1000", "PGID=1000"],
+)
+def test_hermes_rejects_conflicting_runtime_id_on_rootless_podman(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    override: str,
+) -> None:
+    stub = _StubDockerManager(rootless_podman=True)
+    config = _make_config()
+    config["agents"]["hermes"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(
+        stub,
+        "ensure_network",
+        lambda name: pytest.fail("must reject before provisioning"),
+    )
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent="hermes", workspace=tmp_path, detach=True, env=[override])
+
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    output = capsys.readouterr()
+    assert override in output.out + output.err
+
+
+def test_hermes_accepts_matching_runtime_id_on_rootless_podman(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stub = _StubDockerManager(rootless_podman=True)
+    config = _make_config()
+    config["agents"]["hermes"] = {"env": {"PUID": "10000", "HERMES_GID": "10000"}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="hermes", workspace=tmp_path, detach=True)
+
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["userns_mode"] == "keep-id:uid=10000,gid=10000"
+
+
+def test_hermes_runtime_id_override_allowed_off_rootless_podman(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stub = _StubDockerManager(rootless_podman=False)
+    config = _make_config()
+    config["agents"]["hermes"] = {"env": {}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    run_cmd.run(agent="hermes", workspace=tmp_path, detach=True, env=["HERMES_UID=1000"])
+
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["env"]["HERMES_UID"] == "1000"
+
+
 def test_hermes_keeps_default_identity_off_rootless_podman(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

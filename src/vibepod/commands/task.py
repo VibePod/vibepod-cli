@@ -629,7 +629,11 @@ def task_create(
     agent_userns_mode: str | None = None
     rootless_user: str | None = None
     if rootless_podman:
-        agent_userns_mode, rootless_user = rootless_podman_identity(selected)
+        try:
+            agent_userns_mode, rootless_user = rootless_podman_identity(selected, merged_env)
+        except ValueError as exc:
+            error(str(exc))
+            raise typer.Exit(1) from exc
         merged_env["USER_UID"] = "0"
         merged_env["USER_GID"] = "0"
 

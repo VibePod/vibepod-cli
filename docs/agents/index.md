@@ -1166,7 +1166,9 @@ therefore launches Hermes with `--userns=keep-id:uid=10000,gid=10000` and
 `--user 0:0` instead of the plain `keep-id` used for other agents: the image
 bootstraps as namespace root, and the `hermes` user it drops to is your host
 user, so files written to the workspace and config directory stay owned by
-you on the host.
+you on the host. An explicit `HERMES_UID`/`HERMES_GID` (or `PUID`/`PGID`)
+other than `10000` is rejected there, since Hermes would drop to a UID
+outside that mapping.
 
 **Headless one-shot:**
 

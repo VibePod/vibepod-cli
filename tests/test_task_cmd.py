@@ -1302,6 +1302,37 @@ def test_task_hermes_maps_host_user_onto_runtime_user_on_rootless_podman(
     assert stub.run_kwargs["env"]["USER_GID"] == "0"
 
 
+def test_task_hermes_rejects_conflicting_runtime_id_on_rootless_podman(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    capsys,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(stub, "is_rootless_podman", lambda: True, raising=False)
+    monkeypatch.setattr(
+        stub,
+        "ensure_network",
+        lambda name: pytest.fail("must reject before provisioning"),
+    )
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    with pytest.raises(typer.Exit) as exc:
+        task_cmd.task_create(
+            agent="hermes",
+            prompt="hello",
+            workspace=tmp_path,
+            env=["PGID=1000"],
+        )
+
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+    output = capsys.readouterr()
+    assert "PGID=1000" in output.out + output.err
+
+
 def test_task_create_preserves_host_user_for_non_podman(
     monkeypatch,
     tmp_path,
