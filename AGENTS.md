@@ -30,6 +30,10 @@ image needs its own runtime user and rejects the UID rootless keep-id maps the
 container to, including 0), and `/opt/hermes` (its install root) is reserved so
 an `--acp` workspace bind cannot shadow the entrypoint/venv/`hermes-acp`.
 
+Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
+Its published `devstral` image and credentials subdirectory are retained for
+compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

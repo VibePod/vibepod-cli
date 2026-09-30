@@ -299,7 +299,7 @@ def _agent_skill_paths(agent: str) -> list[str]:
 
     Gemini wraps skills inside an extension manifest and would need a generated
     gemini-extension.json — handled separately when we add that support.
-    Copilot CLI and Devstral Vibe have no documented SKILL.md auto-discovery.
+    Copilot CLI and Mistral Vibe have no documented SKILL.md auto-discovery.
     """
     if agent == "claude":
         return ["/claude/skills"]

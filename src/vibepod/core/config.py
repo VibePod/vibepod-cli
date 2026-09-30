@@ -63,9 +63,9 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
-            "devstral": {
+            "vibe": {
                 "enabled": True,
-                "image": DEFAULT_IMAGES["devstral"],
+                "image": DEFAULT_IMAGES["vibe"],
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
@@ -218,7 +218,19 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not content.strip():
         return {}
     loaded = yaml.safe_load(content)
-    return loaded if isinstance(loaded, dict) else {}
+    if not isinstance(loaded, dict):
+        return {}
+    # Normalize each layer before merging so project overrides retain precedence.
+    agents = loaded.get("agents")
+    if isinstance(agents, dict) and "devstral" in agents:
+        legacy = agents.pop("devstral")
+        current = agents.get("vibe", {})
+        agents["vibe"] = (
+            deep_merge(legacy, current)
+            if isinstance(legacy, dict) and isinstance(current, dict)
+            else current
+        )
+    return loaded
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
