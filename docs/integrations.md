@@ -53,6 +53,16 @@ networks:
 - The alias is plain container DNS. On Podman this needs a DNS-enabled
   network; see [Quickstart — Using Podman](quickstart.md#using-podman-instead-of-docker).
 
+!!! warning "Plain HTTP between containers"
+    The examples on this page use `http://<alias>:<port>`, so API keys and
+    subscription tokens cross the container network unencrypted. A network
+    does not encrypt traffic between its containers. That is acceptable on a
+    single-host bridge network that only your own containers join; it is not
+    once the network spans hosts (an overlay or a remote engine) or runs
+    containers you do not trust. In those cases put TLS in front of the
+    service (a reverse proxy, or the tool's own TLS options) and use an
+    `https://` URL.
+
 ### Pointing the agent at the service
 
 Agents are configured through environment variables, so referencing the
