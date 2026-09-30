@@ -136,6 +136,19 @@ virtual keys and fallbacks. It serves `/v1/messages`, so Claude Code talks to
 it natively, and `/v1/chat/completions` and `/v1/responses` for OpenAI-style
 clients.
 
+!!! tip "LiteLLM as a VibePod model provider"
+    LiteLLM can also be registered with `vp provider add` as a
+    [model provider](providers.md) and selected per launch with
+    `vp run <agent> --provider <name>`. A provider has one protocol, so
+    register one entry per protocol you need: `anthropic` for Claude (base URL
+    without `/v1`), `openai-responses` for Codex, `openai-chat` for Pi, Qwen,
+    Tau, Jcode and OpenCode (base URL ending in `/v1`). Authenticated
+    provider launches require an `https://` URL, so this route fits a LiteLLM
+    deployment behind TLS. The plain `http://litellm:4000` sidecar below,
+    with its master key, is wired through the `llm:` section and agent `env`
+    instead. The host cannot resolve the `litellm` alias, so enter model IDs
+    by hand rather than using discovery.
+
 **1. Start it on the VibePod network**
 
 ```yaml
