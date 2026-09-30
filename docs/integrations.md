@@ -16,8 +16,9 @@ four tools from [issue #130](https://github.com/VibePod/vibepod-cli/issues/130).
 
 ## Services on the VibePod network
 
-Every `vp run` creates (or reuses) the Docker network `vibepod-network` and
-attaches the agent and the built-in `vibepod-proxy` container to it. The
+Every `vp run` creates (or reuses) the Docker network named by the `network:`
+config key — `vibepod-network` unless you changed it — and attaches the agent
+and the built-in `vibepod-proxy` container to it. The
 fastest way to make a service reachable from agents is to start it on that
 network under a stable alias — the same wiring
 [vibepod-board](https://github.com/VibePod/vibepod-board/blob/main/compose.yml)
@@ -413,6 +414,7 @@ Then, in the agent:
 ## Verifying the wiring
 
 ```bash
+# use your `network:` value if you changed it (see `vp config show`)
 docker network inspect vibepod-network --format '{{range .Containers}}{{.Name}} {{end}}'
 vp config show            # merged config: env, llm and init sections
 vp logs start             # requests to a sidecar alias appear like any other traffic
