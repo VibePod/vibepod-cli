@@ -169,8 +169,16 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
     ),
     "jcode": (
         ImportEntry(".jcode/auth.json", ".jcode/auth.json", "credentials"),
+        ImportEntry(".jcode/openai-auth.json", ".jcode/openai-auth.json", "credentials"),
+        ImportEntry(".jcode/mcp.json", ".jcode/mcp.json", "mcp"),
+        ImportEntry(".jcode/sessions", ".jcode/sessions", "sessions"),
         ImportEntry(".jcode", ".jcode", "settings"),
-        ImportEntry(".config/jcode", ".config/jcode", "models"),
+        ImportEntry(
+            ".config/jcode",
+            ".config/jcode",
+            "credentials",
+            note="Provider env files for custom endpoints; they hold API keys.",
+        ),
     ),
     "freebuff": (
         ImportEntry(".config/manicode/credentials.json", "credentials.json", "credentials"),
@@ -299,6 +307,8 @@ CREDENTIAL_NAME_PATTERNS: tuple[str, ...] = (
     "*token*",
     "*secret*",
     "auth.json",
+    "*-auth.json",
+    "*_auth.json",
     ".env",
     ".env.*",
     "*.key",
