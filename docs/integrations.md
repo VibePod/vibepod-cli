@@ -367,14 +367,21 @@ compact output — up to 90 % less bash output for the agent to read.
 
 ```dockerfile
 # .vibepod/overlay/Dockerfile — no FROM line
-ADD https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-x86_64-unknown-linux-musl.tar.gz /tmp/rtk.tar.gz
-RUN tar -xzf /tmp/rtk.tar.gz -C /usr/local/bin rtk \
+ADD https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-x86_64-unknown-linux-musl.tar.gz /tmp/rtk-x86_64.tar.gz
+ADD https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-aarch64-unknown-linux-gnu.tar.gz /tmp/rtk-aarch64.tar.gz
+RUN arch="$(uname -m)" \
+    && case "$arch" in x86_64|aarch64) ;; *) echo "no RTK build for $arch" >&2; exit 1 ;; esac \
+    && tar -xzf "/tmp/rtk-$arch.tar.gz" -C /usr/local/bin rtk \
     && chmod 755 /usr/local/bin/rtk \
-    && rm /tmp/rtk.tar.gz
+    && rm /tmp/rtk-*.tar.gz
 ```
 
-- On an arm64 host (Apple silicon) use `rtk-aarch64-unknown-linux-gnu.tar.gz`
-  — note the different libc suffix.
+- **Architecture** — the archive is picked by `uname -m` inside the build,
+  i.e. by the image's platform, not the host's. That matters because some
+  agents pin `linux/amd64` and run emulated on an arm64 host. Overlays build
+  with the classic builder, so `TARGETARCH` is not available; `ADD` cannot be
+  conditional, hence both downloads. Note the different libc suffix of the
+  two builds (`musl` vs. `gnu`).
 - Pin the release: with a moving URL the overlay cache would keep whatever it
   downloaded first.
 - Some RTK filters shell out to ripgrep; the `vibepod/claude` image ships it.
