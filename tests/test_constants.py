@@ -11,6 +11,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_CLAUDE",
         "VP_IMAGE_GEMINI",
         "VP_IMAGE_OPENCODE",
+        "VP_IMAGE_VIBE",
         "VP_IMAGE_DEVSTRAL",
         "VP_IMAGE_AUGGIE",
         "VP_IMAGE_COPILOT",
@@ -33,7 +34,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["claude"] == "vibepod/claude:latest"
     assert images["gemini"] == "vibepod/gemini:latest"
     assert images["opencode"] == "vibepod/opencode:latest"
-    assert images["devstral"] == "vibepod/devstral:latest"
+    assert images["vibe"] == "vibepod/devstral:latest"
     assert images["auggie"] == "vibepod/auggie:latest"
     assert images["copilot"] == "vibepod/copilot:latest"
     assert images["codex"] == "vibepod/codex:latest"
@@ -111,3 +112,11 @@ def test_hermes_image_override(monkeypatch) -> None:
     images = get_default_images()
 
     assert images["hermes"] == "example/hermes:dev"
+
+
+def test_vibe_image_override_accepts_legacy_name(monkeypatch) -> None:
+    monkeypatch.delenv("VP_IMAGE_VIBE", raising=False)
+    monkeypatch.setenv("VP_IMAGE_DEVSTRAL", "example/legacy:dev")
+    assert get_default_images()["vibe"] == "example/legacy:dev"
+    monkeypatch.setenv("VP_IMAGE_VIBE", "example/vibe:dev")
+    assert get_default_images()["vibe"] == "example/vibe:dev"

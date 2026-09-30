@@ -9,7 +9,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `claude` | Anthropic | `vp c` | `vibepod/claude:latest` |
 | `gemini` | Google | `vp g` | `vibepod/gemini:latest` |
 | `opencode` | OpenAI | `vp o` | `vibepod/opencode:latest` |
-| `devstral` (alias: `vibe`) | Mistral | `vp d` | `vibepod/devstral:latest` |
+| `vibe` (alias: `devstral`) | Mistral | `vp d` | `vibepod/devstral:latest` |
 | `auggie` | Augment Code | `vp a` | `vibepod/auggie:latest` |
 | `copilot` | GitHub | `vp p` | `vibepod/copilot:latest` |
 | `codex` | OpenAI | `vp x` | `vibepod/codex:latest` |
@@ -22,7 +22,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
 | `hermes` | Nous Research | `vp h` | `vibepod/hermes:latest` |
 
-Alias note: `vp run vibe` resolves to `vp run devstral`, `vp run qwen-cli`
+Alias note: `vp run devstral` resolves to `vp run vibe`, `vp run qwen-cli`
 resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
 resolve to `vp run dsh`.
 
@@ -119,7 +119,7 @@ Or for a specific agent only:
 
 ```yaml
 agents:
-  devstral:
+  vibe:
     auto_pull: false
 ```
 
@@ -158,7 +158,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -277,7 +277,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 |-------|--------------------------|
 | `claude` | `--dangerously-skip-permissions` |
 | `gemini` | `--approval-mode=yolo` |
-| `devstral` | `--auto-approve` |
+| `vibe` | `--auto-approve` |
 | `copilot` | `--yolo` |
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `pi` | `--approve` |
@@ -697,15 +697,21 @@ vp run opencode   # or: vp o
 
 Credentials and settings are persisted to `~/.config/vibepod/agents/opencode/` on the host and mounted at `/config` inside the container. In addition, the XDG data and config directories (`/root/.local/share/opencode` and `/root/.config/opencode`) are bind-mounted from the host so that authentication state is preserved across container restarts.
 
-### Devstral / Vibe (Mistral)
+### Mistral Vibe
 
 ```bash
-vp run devstral   # or: vp d
-vp run vibe       # alias of devstral
+vp run vibe   # or: vp d
+vp run devstral   # alias of vibe
 ```
 
+The canonical agent ID is `vibe`; `devstral` remains a compatibility alias.
+Existing `agents.devstral` configuration is accepted (use `agents.vibe` for new
+configuration). The published image remains `vibepod/devstral:latest`, and the
+existing `agents/devstral` storage directory is retained for credentials and
+sessions. `VP_IMAGE_VIBE` takes precedence over the legacy `VP_IMAGE_DEVSTRAL`.
+
 !!! note
-    Devstral runs under your host user (uid:gid) and requires the `linux/amd64` platform. On Apple Silicon, Docker's Rosetta emulation is used automatically.
+    Vibe runs under your host user (uid:gid) and requires the `linux/amd64` platform. On Apple Silicon, Docker's Rosetta emulation is used automatically.
 
 ### Auggie (Augment Code)
 

@@ -21,7 +21,7 @@ differ in what has to happen before the first JSON-RPC frame:
 | `jcode`    | `jcode acp` — built into the CLI             |
 | `gemini`   | `gemini --experimental-acp` — built in       |
 | `qwen`     | `qwen --experimental-acp` — built in         |
-| `devstral` | `vibe-acp` — separate binary in the image    |
+| `vibe` | `vibe-acp` — separate binary in the image    |
 | `hermes`   | `hermes-acp` — separate binary in the image  |
 | `claude`   | `npx @agentclientprotocol/claude-agent-acp`  |
 | `codex`    | `npx @agentclientprotocol/codex-acp`         |

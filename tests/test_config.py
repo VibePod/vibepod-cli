@@ -352,3 +352,25 @@ def test_default_config_includes_hermes_agent(monkeypatch, tmp_path: Path) -> No
     # Unlike dsh, this integration publishes nothing.
     assert hermes["ports"] == []
     assert hermes["init"] == []
+
+
+def test_legacy_devstral_config_merges_as_vibe(monkeypatch, tmp_path: Path) -> None:
+    config_root = tmp_path / "global"
+    config_root.mkdir()
+    monkeypatch.setenv("VP_CONFIG_DIR", str(config_root))
+    monkeypatch.chdir(tmp_path)
+    (config_root / "config.yaml").write_text(
+        "default_agent: devstral\n"
+        "agents:\n  devstral:\n    image: custom/legacy:latest\n"
+        "    env:\n      LEGACY: preserved\n      SHARED: global\n"
+    )
+    project = tmp_path / ".vibepod"
+    project.mkdir()
+    (project / "config.yaml").write_text(
+        "agents:\n  devstral:\n    env:\n      SHARED: project\n"
+        "  vibe:\n    image: custom/vibe:latest\n"
+    )
+    config = get_config()
+    assert "devstral" not in config["agents"]
+    assert config["agents"]["vibe"]["image"] == "custom/vibe:latest"
+    assert config["agents"]["vibe"]["env"] == {"LEGACY": "preserved", "SHARED": "project"}

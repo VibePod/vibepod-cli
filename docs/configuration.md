@@ -16,7 +16,7 @@ Run `vp config path` to print the exact paths in use, and `vp config show` to pr
 version: 1
 
 # Agent to run when no argument is given to `vp run`
-# Alias `vibe` resolves to `devstral`.
+# Alias `devstral` resolves to `vibe`.
 default_agent: claude
 
 # Pull the latest image before every run (default: true)
@@ -56,7 +56,7 @@ agents:
     overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
     # acp_command: ACP adapter command for `vp run <agent> --acp` (editor
     # integration via the Agent Client Protocol). Defaults exist for claude,
-    # gemini, qwen, codex, opencode, copilot, auggie, jcode and devstral;
+    # gemini, qwen, codex, opencode, copilot, auggie, jcode and vibe;
     # override with a list, or a string parsed with shell quoting rules. Not
     # present by default — just add the key to override.
     # acp_command: ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
@@ -77,7 +77,7 @@ agents:
     ports: []
     init: []
 
-  devstral:
+  vibe:
     enabled: true
     image: vibepod/devstral:latest
     env: {}
@@ -232,7 +232,8 @@ Each agent image can be overridden individually:
 | `VP_IMAGE_CLAUDE`        | claude                              |
 | `VP_IMAGE_GEMINI`        | gemini                              |
 | `VP_IMAGE_OPENCODE`      | opencode                            |
-| `VP_IMAGE_DEVSTRAL`      | devstral                            |
+| `VP_IMAGE_VIBE`          | vibe                                |
+| `VP_IMAGE_DEVSTRAL`      | vibe (legacy; `VP_IMAGE_VIBE` wins)   |
 | `VP_IMAGE_AUGGIE`        | auggie                              |
 | `VP_IMAGE_COPILOT`       | copilot                             |
 | `VP_IMAGE_CODEX`         | codex                               |
