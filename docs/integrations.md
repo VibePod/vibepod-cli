@@ -8,7 +8,7 @@ down to *where the tool lives*:
 | [LiteLLM](https://github.com/BerriAI/litellm) | Model gateway: one endpoint and key for 100+ providers | Its own container | [Service on the VibePod network](#services-on-the-vibepod-network) |
 | [Headroom](https://github.com/headroomlabs-ai/headroom) | Compression proxy: shrinks tool output, logs and files before they reach the model | Its own container | [Service on the VibePod network](#services-on-the-vibepod-network) |
 | [RTK](https://github.com/rtk-ai/rtk) | Rewrites shell commands so the agent reads compact output | Inside the agent container | [Tool in the agent image](#tools-inside-the-agent-container) |
-| [Graphify](https://github.com/Graphify-Labs/graphify) | Knowledge graph of the codebase the agent queries instead of grepping | Inside the agent container | [Tool in the agent image](#tools-inside-the-agent-container) |
+| [Graphify](https://github.com/Graphify-Labs/graphify) | Knowledge graph of the codebase the agent can query instead of grepping | Inside the agent container | [Tool in the agent image](#tools-inside-the-agent-container) |
 
 Both patterns use configuration VibePod already has — no plugin or code change
 is involved. This page describes each pattern once and then applies it to the
@@ -418,7 +418,7 @@ container user's home, which is not persisted — the hook is.
 
 [Graphify](https://github.com/Graphify-Labs/graphify) parses the codebase
 into a knowledge graph (`graphify-out/` in the workspace) that the agent
-queries instead of grepping: `/graphify .` builds it; `graphify query`,
+can query instead of grepping: `/graphify .` builds it; `graphify query`,
 `path` and `explain` answer questions against it. The Python package is
 `graphifyy` (double y).
 
@@ -472,6 +472,12 @@ This writes `/claude/skills/graphify/SKILL.md` and a pointer in
 host with `pipx install graphifyy`); it writes `.claude/skills/graphify/` for
 you to commit. For Codex use `graphify install --platform codex`, which
 targets `~/.codex` — the persisted `agents/codex/` mount.
+
+The default install only nudges the agent to run `graphify query` before
+reading files; it may still grep. For Claude Code, `graphify install --project
+--strict` blocks the first raw source read of a session and redirects it to
+the graph (once per session, then back to the nudge); `GRAPHIFY_HOOK_STRICT=1`
+or `0` in `agents.claude.env` toggles that at runtime.
 
 Then, in the agent:
 
