@@ -50,6 +50,11 @@ class AgentSpec:
     # user is mapped onto it via keep-id:uid=,gid= and the container starts
     # as namespace root instead of as the host UID. None keeps plain keep-id.
     rootless_runtime_ids: str | None = None
+    # rootless_runtime_id_env names the env vars through which the image's
+    # init overrides its runtime (uid, gid). On rootless Podman any explicit
+    # value must equal rootless_runtime_ids, or the init would drop to a UID
+    # the keep-id mapping does not cover.
+    rootless_runtime_id_env: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())
 
 
 AGENT_SPECS: dict[str, AgentSpec] = {
@@ -317,6 +322,9 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # `useradd -u 10000 hermes`; main-wrapper and stage2-hook exit 1 for
         # any non-root start under a different UID.
         rootless_runtime_ids="10000:10000",
+        # The image's init hooks keep an explicit HERMES_UID/HERMES_GID (or
+        # the upstream PUID/PGID aliases) over the USER_UID/USER_GID bridge.
+        rootless_runtime_id_env=(("HERMES_UID", "PUID"), ("HERMES_GID", "PGID")),
         # Hermes is pre-1.0 and its PyPI release line trails upstream main.
         preview=True,
     ),
@@ -358,7 +366,7 @@ def validate_llm_support(agent: str, config: dict[str, Any]) -> None:
         )
 
 
-def rootless_podman_identity(agent: str) -> tuple[str, str | None]:
+def rootless_podman_identity(agent: str, env: dict[str, str]) -> tuple[str, str | None]:
     """Return ``(userns_mode, container_user)`` for a rootless Podman launch.
 
     Plain ``keep-id`` runs the container as the invoking user's UID, so files
@@ -366,11 +374,29 @@ def rootless_podman_identity(agent: str) -> tuple[str, str | None]:
     runtime user (``rootless_runtime_ids``) instead map the host user onto that
     user and start as namespace root, so their init can bootstrap before
     dropping privileges to a UID that is the host user on the host side.
+
+    Raises ``ValueError`` when ``env`` explicitly sets the image's runtime
+    UID/GID to anything other than ``rootless_runtime_ids``: the init would
+    then drop to an ID outside the keep-id mapping and lose access to the
+    workspace and config mounts.
     """
-    ids = get_agent_spec(agent).rootless_runtime_ids
+    spec = get_agent_spec(agent)
+    ids = spec.rootless_runtime_ids
     if ids is None:
         return "keep-id", None
     uid, gid = ids.split(":")
+    uid_names, gid_names = spec.rootless_runtime_id_env
+    conflicts = [
+        f"{name}={env[name]}"
+        for names, expected in ((uid_names, uid), (gid_names, gid))
+        for name in names
+        if name in env and env[name].strip() != expected
+    ]
+    if conflicts:
+        raise ValueError(
+            f"{agent} on rootless Podman must run as its image user {ids}; "
+            f"remove the conflicting override(s): {', '.join(conflicts)}.",
+        )
     return f"keep-id:uid={uid},gid={gid}", "0:0"
 
 
