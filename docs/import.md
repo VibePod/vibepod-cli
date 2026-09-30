@@ -108,7 +108,7 @@ Credentials are left behind unless you pass `--with-credentials`, so an import
 does not silently duplicate a token into another sandbox. Besides each agent's
 known token files, any file found inside a copied directory whose name looks
 like a secret (`*oauth*`, `*credential*`, `*token*`, `*secret*`, `auth.json`,
-`.env`, `*.key`, `*.pem`) is treated as a credential too. Copied credential
+`*-auth.json`, `*_auth.json`, `.env`, `*.key`, `*.pem`) is treated as a credential too. Copied credential
 files are written `0600` inside a `0700` directory.
 
 !!! note "Claude Code on macOS"
@@ -120,7 +120,8 @@ opencode (`~/.local/share/opencode/auth.json`), Codex (`~/.codex/auth.json`),
 Gemini (`~/.gemini/oauth_creds.json`, `mcp-oauth-tokens.json`, `.env`), Auggie
 (`~/.augment/session.json`), Copilot (`~/.copilot/config.json`, which holds the
 token when no system keychain is available), Pi (`~/.pi/agent/auth.json`), Tau
-(`~/.tau/credentials.json`), jcode (`~/.jcode/auth.json`), Freebuff
+(`~/.tau/credentials.json`), jcode (`~/.jcode/auth.json`, `openai-auth.json` and the provider env
+files under `~/.config/jcode`), Freebuff
 (`~/.config/manicode/credentials.json`), Qwen (`~/.qwen/oauth_creds.json`,
 `.env`), dsh (`~/.dsh/.credentials.yaml`) and Hermes (`~/.hermes/.env`,
 `~/.hermes/auth.json`) do keep credentials on disk, so `--with-credentials`
