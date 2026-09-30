@@ -97,7 +97,8 @@ agent directory is mounted read-write into its container, so such a file is
 reported and left alone.
 
 Each file is written to a temporary file and renamed into place, so a single
-destination file is never left half-written. The import as a whole is not
+destination file is never left half-written. Execute bits are kept, so hook
+and skill helper scripts still run inside the pod. The import as a whole is not
 atomic, though: if one file fails (unreadable source, full disk) the others are
 still copied, the failures are listed and the command exits non-zero. Fix the
 cause and re-run with `--force`.
