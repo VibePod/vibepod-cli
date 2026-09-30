@@ -227,6 +227,41 @@ def test_profile_copy_reports_unmapped_files(config_root: Path) -> None:
     ).exists()
 
 
+def test_with_other_copies_unmapped_files(config_root: Path) -> None:
+    source_dir = config_root / "agents" / "claude"
+    source_dir.mkdir(parents=True)
+    (source_dir / "brand-new-thing.json").write_text("{}")
+
+    result = runner.invoke(
+        app,
+        [
+            "import",
+            "claude",
+            "--from-profile",
+            "default",
+            "--to-profile",
+            "work",
+            "--create-profile",
+            "--with-other",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    dest = config_root / "profiles" / "work" / "agents" / "claude"
+    assert (dest / "brand-new-thing.json").read_text() == "{}"
+
+
+def test_host_import_with_other_copies_unmapped_files(config_root: Path, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude" / "ide").mkdir(parents=True)
+    (home / ".claude" / "ide" / "state.json").write_text("{}")
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(home), "--with-other"])
+
+    assert result.exit_code == 0, result.output
+    assert (config_root / "agents" / "claude" / "ide" / "state.json").read_text() == "{}"
+
+
 def test_agent_help_lists_categories_and_paths(config_root: Path) -> None:
     result = runner.invoke(app, ["import", "claude", "--help-agent"])
 

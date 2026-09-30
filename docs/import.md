@@ -45,8 +45,10 @@ vp import claude --skip memory
 that agent, which categories they belong to, and which flags opt the rest in.
 
 Anything under an agent's config directory that no category claims is **not
-copied silently** — the run reports it, and `--with-other` includes it. New
-upstream releases add files; you see them rather than losing them.
+copied silently** — the run reports it, and `--with-other` includes it at the
+same relative path. New upstream releases add files; you see them rather than
+losing them. A secret-looking file (see [Credentials](#credentials)) still
+needs `--with-credentials` as well.
 
 ## Per-agent sources
 

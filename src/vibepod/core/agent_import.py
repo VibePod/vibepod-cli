@@ -350,6 +350,20 @@ def plan_import(
     conflicts: list[PlannedFile] = []
     claimed: set[Path] = set()
 
+    def add(path: Path, dest: Path, category: Category) -> None:
+        if category not in categories:
+            flag = CATEGORY_FLAGS.get(category)
+            reason = f"category '{category}' not selected"
+            skipped.append(SkippedPath(path, f"{reason} ({flag})" if flag else reason))
+            return
+        if _has_symlink_component(dest, dest_root):
+            skipped.append(SkippedPath(path, _DEST_SYMLINK_REASON))
+            return
+        planned = PlannedFile(path, dest, category)
+        files.append(planned)
+        if dest.exists():
+            conflicts.append(planned)
+
     for entry in resolved_entries:
         entry_root = source_root / entry.source
         entry_root_is_dir = entry_root.is_dir() and not entry_root.is_symlink()
@@ -366,24 +380,21 @@ def plan_import(
             category = entry.category
             if entry_root_is_dir and _looks_like_credential(path.name):
                 category = "credentials"
-            if category not in categories:
-                flag = CATEGORY_FLAGS.get(category)
-                reason = f"category '{category}' not selected"
-                skipped.append(SkippedPath(path, f"{reason} ({flag})" if flag else reason))
-                continue
             dest = (
                 dest_root / entry.dest / relative if entry_root_is_dir else dest_root / entry.dest
             )
-            if _has_symlink_component(dest, dest_root):
-                skipped.append(SkippedPath(path, _DEST_SYMLINK_REASON))
-                continue
-            planned = PlannedFile(path, dest, category)
-            files.append(planned)
-            if dest.exists():
-                conflicts.append(planned)
+            add(path, dest, category)
 
     roots = agent_roots(agent) if unclassified_roots is None else unclassified_roots
-    unclassified = [path for path, _root in _unclassified(source_root, roots, claimed)]
+    unclassified: list[Path] = []
+    for path, root in _unclassified(source_root, roots, claimed):
+        if "other" not in categories:
+            unclassified.append(path)
+            continue
+        # A file no entry claims is still a credential when its name says so.
+        category = "credentials" if _looks_like_credential(path.name) else "other"
+        root_relative = path.relative_to(source_root / root.source)
+        add(path, dest_root / root.dest / root_relative, category)
     return ImportPlan(agent, source_root, dest_root, files, skipped, conflicts, unclassified)
 
 
