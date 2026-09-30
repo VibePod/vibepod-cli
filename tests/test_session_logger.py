@@ -91,6 +91,61 @@ class TestSessionLogger:
         assert row == ("migrated",)
         conn.close()
 
+    def test_profile_migration_tolerates_concurrent_launch(self, tmp_path, monkeypatch):
+        """A second launcher adding ``profile`` mid-migration must not abort the run."""
+        db_path = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "CREATE TABLE sessions ("
+            "id TEXT PRIMARY KEY, agent TEXT NOT NULL, image TEXT NOT NULL, "
+            "workspace TEXT NOT NULL, container_id TEXT NOT NULL, "
+            "container_name TEXT NOT NULL, started_at TEXT NOT NULL, "
+            "ended_at TEXT, exit_reason TEXT, vibepod_version TEXT NOT NULL)",
+        )
+        conn.execute(
+            "INSERT INTO sessions (id, agent, image, workspace, container_id, "
+            "container_name, started_at, vibepod_version) "
+            "VALUES ('legacy', 'claude', 'img', '/w', 'c', 'n', 't', '0.1')",
+        )
+        conn.commit()
+        conn.close()
+
+        real_connect = sqlite3.connect
+        raced = []
+
+        class _RacingConnection(sqlite3.Connection):
+            def execute(self, sql, *args):  # type: ignore[override]
+                cursor = super().execute(sql, *args)
+                if sql.startswith("PRAGMA table_info") and not raced:
+                    # Another launcher adds ``profile`` right after this
+                    # process read the (now stale) column list.
+                    stale = cursor.fetchall()
+                    other = real_connect(str(db_path))
+                    other.execute(
+                        "ALTER TABLE sessions ADD COLUMN profile TEXT NOT NULL DEFAULT 'default'"
+                    )
+                    other.commit()
+                    other.close()
+                    raced.append(True)
+                    return type("_Rows", (), {"fetchall": lambda _self: stale})()
+                return cursor
+
+        monkeypatch.setattr(
+            sqlite3,
+            "connect",
+            lambda *a, **kw: real_connect(*a, factory=_RacingConnection, **kw),
+        )
+
+        logger = SessionLogger(db_path, enabled=True)
+        sid = self._open(logger, profile="racer")
+        logger.close_session()
+
+        assert raced
+        conn = real_connect(str(db_path))
+        rows = dict(conn.execute("SELECT id, profile FROM sessions").fetchall())
+        conn.close()
+        assert rows == {"legacy": "default", sid: "racer"}
+
     def test_close_sets_ended_at_and_reason(self, tmp_path):
         logger = self._make_logger(tmp_path)
         sid = self._open(logger)

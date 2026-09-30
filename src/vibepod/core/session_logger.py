@@ -41,6 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
 """
 
 _MIGRATION_COLUMNS: Final[dict[str, str]] = {
+    "profile": "TEXT NOT NULL DEFAULT 'default'",
     "image_tag": "TEXT",
     "image_hash": "TEXT",
     "agent_version": "TEXT",
@@ -95,10 +96,9 @@ class SessionLogger:
 
         self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
-        # Backfill columns first: databases from older versions may not have
-        # the profile column yet, and CREATE TABLE IF NOT EXISTS won't add it.
-        self._migrate_schema()
         self._conn.executescript(_SCHEMA)
+        # Databases from older versions may lack newer columns, and CREATE
+        # TABLE IF NOT EXISTS won't add them.
         add_missing_columns(self._conn, "sessions", _MIGRATION_COLUMNS)
 
         self._session_id = uuid4().hex
@@ -193,23 +193,6 @@ class SessionLogger:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
-
-    def _migrate_schema(self) -> None:
-        """Backfill columns on existing databases created by older versions."""
-        assert self._conn is not None
-        self._ensure_column("sessions", "profile", "TEXT NOT NULL DEFAULT 'default'")
-
-    def _ensure_column(self, table: str, column: str, definition: str) -> None:
-        assert self._conn is not None
-        rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
-        if not rows:
-            # Table does not exist yet; _SCHEMA will create it in full.
-            return
-        existing = {str(row[1]) for row in rows}
-        if column in existing:
-            return
-        self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-        self._conn.commit()
 
     def _flush_message(self) -> None:
         """Write the current input buffer as a message row and clear it."""
