@@ -253,12 +253,15 @@ def import_config(
                 f"vp profile create {to_profile} (or pass --create-profile)",
             )
             raise typer.Exit(code=1)
-        try:
-            create_profile(to_profile)
-        except (ValueError, OSError) as exc:
-            error(f"Could not create profile '{to_profile}': {exc}")
-            raise typer.Exit(code=1) from exc
-        success(f"Created profile '{to_profile}'")
+        if dry_run:
+            info(f"Dry run: profile '{to_profile}' would be created.")
+        else:
+            try:
+                create_profile(to_profile)
+            except (ValueError, OSError) as exc:
+                error(f"Could not create profile '{to_profile}': {exc}")
+                raise typer.Exit(code=1) from exc
+            success(f"Created profile '{to_profile}'")
 
     dest_root = agent_config_dir(resolved, dest_profile)
     source_root, entries = _resolve_source(resolved, source_home, from_profile, dest_root)

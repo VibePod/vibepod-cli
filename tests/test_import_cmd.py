@@ -108,6 +108,27 @@ def test_create_profile_flag_creates_it(config_root: Path, host_home: Path) -> N
     assert (config_root / "profiles" / "work" / "agents" / "claude" / "settings.json").exists()
 
 
+def test_dry_run_does_not_create_the_profile(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "import",
+            "claude",
+            "--home",
+            str(host_home),
+            "--to-profile",
+            "work",
+            "--create-profile",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "would be created" in result.output
+    assert "settings.json" in result.output
+    assert not (config_root / "profiles" / "work").exists()
+
+
 def test_only_narrows_the_selection(config_root: Path, host_home: Path) -> None:
     result = runner.invoke(app, ["import", "claude", "--home", str(host_home), "--only", "skills"])
     assert result.exit_code == 0, result.output
