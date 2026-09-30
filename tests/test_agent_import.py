@@ -136,7 +136,12 @@ _KNOWN_CREDENTIALS: dict[str, tuple[str, ...]] = {
     "pi": (".pi/agent/auth.json",),
     "agy": (".agy/oauth_token.json",),
     "tau": (".tau/credentials.json",),
-    "jcode": (".jcode/auth.json", ".config/jcode/auth.json"),
+    "jcode": (
+        ".jcode/auth.json",
+        ".jcode/openai-auth.json",
+        ".config/jcode/auth.json",
+        ".config/jcode/openrouter.env",
+    ),
     "freebuff": (".config/manicode/credentials.json",),
     "qwen": (".qwen/oauth_creds.json", ".qwen/.env"),
     "dsh": (".dsh/.credentials.yaml",),
@@ -198,6 +203,21 @@ def test_credential_named_files_under_any_entry_stay_opt_in(tmp_path: Path, agen
     plan = plan_import(agent, home, dest, DEFAULT_CATEGORIES | {"credentials"})
     assert plan.files
     assert {f.category for f in plan.files} == {"credentials"}
+
+
+def test_jcode_sessions_and_mcp_are_classified(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".jcode" / "config.toml", "")
+    _write(home / ".jcode" / "mcp.json", "{}")
+    _write(home / ".jcode" / "sessions" / "s1.json", "{}")
+
+    plan = plan_import("jcode", home, dest, DEFAULT_CATEGORIES)
+
+    assert {(f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files} == {
+        ("settings", ".jcode/config.toml"),
+        ("mcp", ".jcode/mcp.json"),
+    }
+    assert any("--with-sessions" in s.reason for s in plan.skipped)
 
 
 def test_pi_models_live_under_the_agent_dir(tmp_path: Path) -> None:
