@@ -303,6 +303,21 @@ agents:
       ANTHROPIC_BASE_URL: http://headroom:8787
 ```
 
+With `HEADROOM_PROXY_TOKEN` set, Headroom answers `401` to every caller that
+is not on its own loopback — agents on the VibePod network included — unless
+the request carries the token. `Authorization: Bearer` is already taken by the
+provider credential, so send it in Headroom's dedicated header through
+Claude Code's `ANTHROPIC_CUSTOM_HEADERS`:
+
+```yaml
+# .vibepod/config.yaml
+agents:
+  claude:
+    env:
+      ANTHROPIC_BASE_URL: http://headroom:8787
+      ANTHROPIC_CUSTOM_HEADERS: "X-Headroom-Proxy-Token: <HEADROOM_PROXY_TOKEN value>"
+```
+
 OpenAI-style clients use `http://headroom:8787/v1`; for Codex put that in a
 `model_providers` block as shown for [LiteLLM](#litellm).
 
