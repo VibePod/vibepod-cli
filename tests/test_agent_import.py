@@ -613,6 +613,28 @@ def test_host_path_warnings_flags_absolute_host_paths(tmp_path: Path) -> None:
     assert "/Users/harald/bin/lint.sh" in warnings[0][1]
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        r'{"hook": "C:\\Users\\me\\bin\\hook.exe"}',
+        '{"hook": "C:/Users/me/bin/hook.exe"}',
+        "command = 'D:\\tools\\lint.cmd'",
+    ],
+)
+def test_host_path_warnings_flags_windows_drive_paths(tmp_path: Path, value: str) -> None:
+    config = tmp_path / "settings.json"
+    _write(config, value)
+
+    assert len(host_path_warnings([config])) == 1
+
+
+def test_host_path_warnings_ignores_urls(tmp_path: Path) -> None:
+    config = tmp_path / "settings.json"
+    _write(config, '{"url": "https://example.com/a", "s3": "s3://bucket/key"}')
+
+    assert host_path_warnings([config]) == []
+
+
 def test_host_path_warnings_ignores_binaries_and_clean_config(tmp_path: Path) -> None:
     _write(tmp_path / "clean.json", '{"model": "opus"}')
     (tmp_path / "blob.bin").write_bytes(b"\x00\xff/Users/x")

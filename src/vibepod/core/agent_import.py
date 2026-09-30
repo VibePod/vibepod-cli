@@ -502,7 +502,11 @@ def _unclassified(
 
 #: Config files worth linting for host paths that will not resolve in a pod.
 _LINTED_SUFFIXES = {".json", ".jsonc", ".toml", ".yaml", ".yml", ".md"}
-_HOST_PATH_RE = re.compile(r"(/Users/[^\"'\s,:]+|/home/[^\"'\s,:]+)")
+_HOST_PATH_RE = re.compile(
+    r"(/Users/[^\"'\s,:]+|/home/[^\"'\s,:]+"
+    # Windows drive paths: C:\dir, C:/dir and JSON-escaped C:\\dir.
+    r"|(?<![A-Za-z0-9])[A-Za-z]:(?:\\{1,2}|/)[^\"'\s,]+)",
+)
 
 
 def scan_host(home: Path) -> dict[str, list[Path]]:

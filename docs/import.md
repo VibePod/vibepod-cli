@@ -140,9 +140,9 @@ definition file and is unrelated to `vp import`.
 ## Known limits
 
 - **Host paths are reported, not rewritten.** A hook command or MCP server
-  entry pointing at `/Users/you/bin/something` will not resolve in the
-  container, where the project is mounted at `/workspace`. The import warns per
-  file and leaves the value untouched.
+  entry pointing at `/Users/you/bin/something` (or `C:\Users\you\bin\...` on
+  Windows) will not resolve in the container, where the project is mounted at
+  `/workspace`. The import warns per file and leaves the value untouched.
 - **`~/.claude.json` is not mounted by VibePod.** It holds Claude Code's
   user-level MCP servers and project history; the container writes its own copy
   that does not persist. Define MCP servers in a project-level `.mcp.json`
