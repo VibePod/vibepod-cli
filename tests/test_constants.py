@@ -23,6 +23,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_QWEN",
         "VP_IMAGE_DSH",
         "VP_IMAGE_HERMES",
+        "VP_IMAGE_CURSOR",
         "VP_DATASETTE_IMAGE",
         "VP_PROXY_IMAGE",
     ):
