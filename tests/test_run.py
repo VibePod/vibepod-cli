@@ -3084,7 +3084,8 @@ def _script_acp_editor(
 
 @_requires_posix_workspace
 def test_acp_hermes_maps_host_user_onto_runtime_user_on_rootless_podman(
-    monkeypatch, _acp_env
+    monkeypatch,
+    _acp_env,
 ) -> None:
     captured: dict = {}
     manager_cls = _make_acp_manager(captured)
