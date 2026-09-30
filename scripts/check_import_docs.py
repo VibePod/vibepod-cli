@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from vibepod.constants import SUPPORTED_AGENTS  # noqa: E402
-from vibepod.core.agent_import import agent_import_entries  # noqa: E402
+from vibepod.core.agent_import import agent_roots  # noqa: E402
 
 
 def main() -> int:
@@ -18,10 +18,11 @@ def main() -> int:
     for agent in SUPPORTED_AGENTS:
         if f"`{agent}`" not in docs:
             problems.append(f"docs/import.md is missing agent '{agent}'")
-        for entry in agent_import_entries(agent):
-            root = entry.source.split("/")[0]
-            if root not in docs:
-                problems.append(f"docs/import.md is missing source root '{root}' ({agent})")
+        for root in agent_roots(agent):
+            if f"`~/{root.source}`" not in docs:
+                problems.append(
+                    f"docs/import.md is missing source root '~/{root.source}' ({agent})",
+                )
     for problem in sorted(set(problems)):
         print(problem, file=sys.stderr)
     return 1 if problems else 0

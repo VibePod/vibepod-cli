@@ -12,6 +12,7 @@ from vibepod.core.agent_import import (
     ALL_CATEGORIES,
     CATEGORY_FLAGS,
     DEFAULT_CATEGORIES,
+    AgentRoot,
     Category,
     ImportConflictError,
     ImportEntry,
@@ -264,7 +265,7 @@ def import_config(
 
     # A profile source is a single directory, so unmapped files are looked for
     # in it directly rather than under the host dotdirs the table names.
-    unclassified_roots = ("",) if from_profile else None
+    unclassified_roots = (AgentRoot("", ""),) if from_profile else None
     plan = plan_import(
         resolved,
         source_root,

@@ -10,6 +10,7 @@ import pytest
 
 from vibepod.constants import SUPPORTED_AGENTS
 from vibepod.core.agent_import import (
+    AGENT_ROOTS,
     DEFAULT_CATEGORIES,
     IMPORT_SPECS,
     OPT_IN_CATEGORIES,
@@ -426,6 +427,67 @@ def test_scan_host_reports_agents_with_an_installation(tmp_path: Path) -> None:
 
     assert set(found) == {"claude", "codex"}
     assert home / ".claude" in found["claude"]
+
+
+def test_agent_roots_map_every_entry() -> None:
+    """Each entry sits under one agent root and maps onto the root's destination."""
+    assert set(AGENT_ROOTS) == set(IMPORT_SPECS)
+    for agent, entries in IMPORT_SPECS.items():
+        for entry in entries:
+            matches = [
+                root
+                for root in AGENT_ROOTS[agent]
+                if entry.source == root.source or entry.source.startswith(f"{root.source}/")
+            ]
+            assert len(matches) == 1, (agent, entry.source)
+            root = matches[0]
+            rest = entry.source[len(root.source) :].lstrip("/")
+            expected = "/".join(part for part in (root.dest, rest) if part)
+            assert entry.dest == expected, (agent, entry.source, entry.dest)
+
+
+def test_agent_roots_are_agent_specific() -> None:
+    for agent, roots in AGENT_ROOTS.items():
+        for root in roots:
+            assert root.source not in {".config", ".local", ".local/share"}, (agent, root)
+
+
+def test_scan_host_ignores_unrelated_config_files(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _write(home / ".config" / "git" / "config", "")
+    _write(home / ".local" / "share" / "fonts" / "a.ttf", "")
+
+    assert scan_host(home) == {}
+
+
+def test_scan_host_reports_the_agent_directory(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _write(home / ".config" / "opencode" / "opencode.json", "{}")
+
+    assert scan_host(home) == {"opencode": [home / ".config" / "opencode"]}
+
+
+def test_unclassified_files_come_from_agent_directories_only(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".config" / "opencode" / "opencode.json", "{}")
+    _write(home / ".config" / "opencode" / "themes" / "dark.json", "{}")
+    _write(home / ".config" / "git" / "config", "")
+
+    plan = plan_import("opencode", home, dest, DEFAULT_CATEGORIES)
+
+    assert [p.relative_to(home).as_posix() for p in plan.unclassified] == [
+        ".config/opencode/themes/dark.json",
+    ]
+
+
+def test_hermes_installer_checkout_is_not_reported(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".hermes" / "config.yaml", "")
+    _write(home / ".hermes" / "hermes-agent" / "run.py", "")
+
+    plan = plan_import("hermes", home, dest, DEFAULT_CATEGORIES)
+
+    assert plan.unclassified == []
 
 
 def test_scan_host_ignores_empty_directories(tmp_path: Path) -> None:

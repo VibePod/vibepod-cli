@@ -199,6 +199,52 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
 }
 
 
+@dataclass(frozen=True)
+class AgentRoot:
+    """A directory the agent owns on the host, and where it lands in the destination.
+
+    Used to detect an installation, to find files no entry claims, and to map
+    those files onto the destination. ``exclude`` holds glob patterns, relative
+    to ``source``, that are neither reported nor copied.
+    """
+
+    source: str
+    dest: str
+    exclude: tuple[str, ...] = ()
+
+
+#: The agent-specific directories under the source home. Generic parents such
+#: as ``~/.config`` are never listed: they hold every other tool's config too.
+AGENT_ROOTS: dict[str, tuple[AgentRoot, ...]] = {
+    "claude": (AgentRoot(".claude", ""),),
+    "opencode": (
+        AgentRoot(".config/opencode", ".config/opencode"),
+        AgentRoot(".local/share/opencode", ".local/share/opencode"),
+    ),
+    "codex": (AgentRoot(".codex", ".codex"),),
+    "gemini": (AgentRoot(".gemini", ".gemini"),),
+    "devstral": (AgentRoot(".config/mistral", ".config/mistral"),),
+    "auggie": (AgentRoot(".augment", ".augment"),),
+    "copilot": (AgentRoot(".copilot", ".copilot"),),
+    "pi": (AgentRoot(".pi", ".pi"),),
+    "agy": (AgentRoot(".agy", ".agy"),),
+    "tau": (AgentRoot(".tau", ".tau"),),
+    "jcode": (AgentRoot(".jcode", ".jcode"), AgentRoot(".config/jcode", ".config/jcode")),
+    "freebuff": (AgentRoot(".config/manicode", ""),),
+    "qwen": (AgentRoot(".qwen", ""),),
+    "dsh": (AgentRoot(".dsh", ".dsh"),),
+    # The installer clones its hermes-agent checkout into ~/.hermes.
+    "hermes": (AgentRoot(".hermes", "", exclude=("hermes-agent", "hermes-agent/*")),),
+}
+
+
+def agent_roots(agent: str) -> tuple[AgentRoot, ...]:
+    """Return the agent-specific source roots for *agent*."""
+    if agent not in AGENT_ROOTS:
+        raise ValueError(f"Unsupported agent: {agent}")
+    return AGENT_ROOTS[agent]
+
+
 def agent_import_entries(agent: str) -> tuple[ImportEntry, ...]:
     """Return the import entries for *agent*."""
     if agent not in IMPORT_SPECS:
@@ -289,7 +335,7 @@ def plan_import(
     dest_root: Path,
     categories: frozenset[Category] | set[Category],
     entries: tuple[ImportEntry, ...] | None = None,
-    unclassified_roots: tuple[str, ...] | None = None,
+    unclassified_roots: tuple[AgentRoot, ...] | None = None,
 ) -> ImportPlan:
     """Resolve *agent*'s entries under *source_root* into a concrete plan.
 
@@ -336,11 +382,8 @@ def plan_import(
             if dest.exists():
                 conflicts.append(planned)
 
-    if unclassified_roots is None:
-        roots = tuple(entry.source.split("/")[0] for entry in resolved_entries)
-    else:
-        roots = unclassified_roots
-    unclassified = _unclassified(source_root, roots, claimed)
+    roots = agent_roots(agent) if unclassified_roots is None else unclassified_roots
+    unclassified = [path for path, _root in _unclassified(source_root, roots, claimed)]
     return ImportPlan(agent, source_root, dest_root, files, skipped, conflicts, unclassified)
 
 
@@ -412,17 +455,20 @@ def _copy_file(planned: PlannedFile, dest_root: Path) -> None:
 
 def _unclassified(
     source_root: Path,
-    relative_roots: tuple[str, ...],
+    roots: tuple[AgentRoot, ...],
     claimed: set[Path],
-) -> list[Path]:
-    """Files under *relative_roots* that no entry claimed."""
-    roots = {source_root / relative for relative in relative_roots}
-    found: list[Path] = []
-    for root in sorted(roots):
-        for path in _iter_files(root):
-            if path not in claimed and not path.is_symlink():
-                found.append(path)
-    return sorted(found)
+) -> list[tuple[Path, AgentRoot]]:
+    """Files under *roots* that no entry claimed, each with the root it was found in."""
+    found: dict[Path, AgentRoot] = {}
+    for root in roots:
+        base = source_root / root.source
+        for path in _iter_files(base):
+            if path in claimed or path in found or path.is_symlink():
+                continue
+            if _is_excluded(path.relative_to(base).as_posix(), root.exclude):
+                continue
+            found[path] = root
+    return sorted(found.items())
 
 
 #: Config files worth linting for host paths that will not resolve in a pod.
@@ -435,8 +481,8 @@ def scan_host(home: Path) -> dict[str, list[Path]]:
     found: dict[str, list[Path]] = {}
     for agent in IMPORT_SPECS:
         roots: list[Path] = []
-        for top in sorted({entry.source.split("/")[0] for entry in agent_import_entries(agent)}):
-            candidate = home / top
+        for root in agent_roots(agent):
+            candidate = home / root.source
             if _iter_files(candidate):
                 roots.append(candidate)
         if roots:
