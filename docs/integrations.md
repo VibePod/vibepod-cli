@@ -169,8 +169,15 @@ general_settings:
 
 ```bash
 cd litellm
-LITELLM_MASTER_KEY=sk-litellm-... ANTHROPIC_API_KEY=sk-ant-... docker compose up -d
+LITELLM_MASTER_KEY=sk-litellm-... \
+ANTHROPIC_API_KEY=sk-ant-... \
+OPENAI_API_KEY=sk-... \
+docker compose up -d
 ```
+
+Export a key for every provider in `model_list`; a missing one reaches
+LiteLLM as an empty string and only that model's requests fail. Drop the
+`gpt-5.3-codex` entry (and `OPENAI_API_KEY`) if you only route Claude Code.
 
 **2. Point agents at `http://litellm:4000`**
 
