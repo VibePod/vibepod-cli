@@ -82,7 +82,9 @@ vp run claude -e ANTHROPIC_BASE_URL=http://mytool:4000   # this run only
 ```
 
 For LLM gateways the [`llm:` section](llm.md) sets base URL, key and model
-for every agent with an LLM mapping (Claude Code, Codex) in one place.
+for Claude Code in one place. Its Codex mapping passes only the base URL and
+model (Codex's `--oss` mode, no key), so authenticated gateways need Codex's
+own provider config as shown below.
 
 Some agents read endpoints from their own config files rather than the
 environment (Codex's `config.toml`, Pi's `models.json`, Tau's
