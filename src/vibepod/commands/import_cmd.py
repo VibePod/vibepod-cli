@@ -274,7 +274,7 @@ def import_config(
         entries=entries,
         unclassified_roots=unclassified_roots,
     )
-    if plan.is_empty and not plan.skipped:
+    if plan.is_empty and not plan.skipped and not plan.unclassified:
         checked = ", ".join(
             str(source_root / entry.source) for entry in agent_import_entries(resolved)
         )

@@ -259,6 +259,65 @@ def test_plan_reports_unclassified_files(tmp_path: Path) -> None:
     assert [p.name for p in plan.unclassified] == ["brand-new-thing.json"]
 
 
+def test_with_other_copies_unclassified_files(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / "settings.json", "{}")
+    _write(home / ".claude" / "ide" / "state.json", "{}")
+
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES | {"other"})
+
+    assert plan.unclassified == []
+    assert {(f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files} == {
+        ("settings", "settings.json"),
+        ("other", "ide/state.json"),
+    }
+    apply_import(plan, force=False)
+    assert (dest / "ide" / "state.json").read_text() == "{}"
+
+
+def test_with_other_keeps_the_home_relative_layout(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".config" / "opencode" / "themes" / "dark.json", "{}")
+
+    plan = plan_import("opencode", home, dest, DEFAULT_CATEGORIES | {"other"})
+
+    assert [f.dest.relative_to(dest).as_posix() for f in plan.files] == [
+        ".config/opencode/themes/dark.json",
+    ]
+
+
+def test_with_other_reports_conflicts(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / "ide" / "state.json", "new")
+    _write(dest / "ide" / "state.json", "old")
+
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES | {"other"})
+
+    assert [c.dest.relative_to(dest).as_posix() for c in plan.conflicts] == ["ide/state.json"]
+
+
+def test_with_other_leaves_credential_named_files_opt_in(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / "ide" / "api_token", "t")
+
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES | {"other"})
+    assert plan.files == []
+    assert any("--with-credentials" in s.reason for s in plan.skipped)
+
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES | {"other", "credentials"})
+    assert [f.category for f in plan.files] == ["credentials"]
+
+
+def test_with_other_skips_the_hermes_installer_checkout(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".hermes" / "hermes-agent" / "run.py", "")
+    _write(home / ".hermes" / "cron" / "jobs.json", "{}")
+
+    plan = plan_import("hermes", home, dest, DEFAULT_CATEGORIES | {"other"})
+
+    assert [f.dest.relative_to(dest).as_posix() for f in plan.files] == ["cron/jobs.json"]
+
+
 def test_apply_copies_files_and_creates_parents(tmp_path: Path) -> None:
     home, dest = tmp_path / "home", tmp_path / "dest"
     _write(home / ".claude" / "commands" / "ship.md", "body")
