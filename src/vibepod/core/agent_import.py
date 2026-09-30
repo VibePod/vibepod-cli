@@ -410,6 +410,7 @@ def plan_import(
 
 CREDENTIAL_FILE_MODE = 0o600
 CREDENTIAL_DIR_MODE = 0o700
+_EXECUTE_BITS = 0o111
 
 
 class ImportConflictError(RuntimeError):
@@ -432,7 +433,7 @@ def apply_import(plan: ImportPlan, *, force: bool) -> ImportResult:
     Each file is written to a temporary sibling created with its final mode
     (``0600`` for credentials) and renamed into place, so a destination is
     either the old file or the complete new one and never a symlink target.
-    Host mtimes and modes carry no meaning inside the pod, so they are not kept.
+    Host mtimes are not kept; of the host mode only the execute bits are.
     """
     if plan.conflicts and not force:
         raise ImportConflictError(plan.conflicts)
@@ -458,20 +459,27 @@ def _copy_file(planned: PlannedFile, dest_root: Path) -> None:
         raise OSError(f"{planned.dest}: {_DEST_SYMLINK_REASON}")
     if credential:
         parent.chmod(CREDENTIAL_DIR_MODE)
-    mode = CREDENTIAL_FILE_MODE if credential else 0o666
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_BINARY", 0)
     temp = parent / f".{planned.dest.name}.vp-import-{secrets.token_hex(4)}"
-    fd = os.open(temp, flags, mode)
-    try:
-        with os.fdopen(fd, "wb") as out, planned.source.open("rb") as src:
-            shutil.copyfileobj(src, out)
-        if credential:
-            temp.chmod(CREDENTIAL_FILE_MODE)
-        os.replace(temp, planned.dest)
-    except BaseException:
-        temp.unlink(missing_ok=True)
-        raise
+    with planned.source.open("rb") as src:
+        # Hooks and skill helpers are run directly, so their execute bits are
+        # kept; everything else gets the umask's default file mode.
+        mode = (
+            CREDENTIAL_FILE_MODE
+            if credential
+            else 0o666 | (os.fstat(src.fileno()).st_mode & _EXECUTE_BITS)
+        )
+        fd = os.open(temp, flags, mode)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                shutil.copyfileobj(src, out)
+            if credential:
+                temp.chmod(CREDENTIAL_FILE_MODE)
+            os.replace(temp, planned.dest)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
 
 
 def _unclassified(

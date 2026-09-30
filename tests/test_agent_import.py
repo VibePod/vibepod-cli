@@ -387,6 +387,33 @@ def test_apply_tightens_credential_permissions(tmp_path: Path) -> None:
     assert stat.S_IMODE(dest.stat().st_mode) == 0o700
 
 
+@pytest.mark.skipif(os.name == "nt", reason="file modes are POSIX-only")
+def test_apply_keeps_execute_bits_of_helpers(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    hook = home / ".claude" / "plugins" / "lint.sh"
+    _write(hook, "#!/bin/sh\n")
+    hook.chmod(0o755)
+    _write(home / ".claude" / "plugins" / "README.md", "docs")
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES)
+
+    apply_import(plan, force=False)
+
+    assert os.access(dest / "plugins" / "lint.sh", os.X_OK)
+    assert stat.S_IMODE((dest / "plugins" / "README.md").stat().st_mode) & 0o111 == 0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="file modes are POSIX-only")
+def test_executable_credential_is_still_private(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".claude" / ".credentials.json", "{}")
+    (home / ".claude" / ".credentials.json").chmod(0o755)
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES | {"credentials"})
+
+    apply_import(plan, force=False)
+
+    assert stat.S_IMODE((dest / ".credentials.json").stat().st_mode) == 0o600
+
+
 @pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
 def test_dangling_destination_symlink_is_not_written_through(tmp_path: Path) -> None:
     home, dest = tmp_path / "home", tmp_path / "dest"
