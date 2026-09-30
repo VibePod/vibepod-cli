@@ -66,6 +66,16 @@ class ImportEntry:
     note: str | None = None
 
 
+#: The cross-agent skills directory. Agents whose persisted mount holds it
+#: (see ``_agent_skill_paths`` in ``vibepod.commands.run``) list this entry;
+#: freebuff reads it from ``/config``, which its ``/freebuff`` mount is not.
+SHARED_SKILLS = ImportEntry(
+    ".agents/skills",
+    ".agents/skills",
+    "skills",
+    note="Shared skills directory, read by several agents.",
+)
+
 IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
     "claude": (
         ImportEntry(".claude/settings.json", "settings.json", "settings"),
@@ -104,6 +114,7 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ImportEntry(".config/opencode/command", ".config/opencode/command", "skills"),
         ImportEntry(".config/opencode/agent", ".config/opencode/agent", "skills"),
         ImportEntry(".config/opencode/plugin", ".config/opencode/plugin", "hooks"),
+        SHARED_SKILLS,
         ImportEntry(
             ".local/share/opencode/auth.json",
             ".local/share/opencode/auth.json",
@@ -114,6 +125,7 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ImportEntry(".codex/config.toml", ".codex/config.toml", "settings"),
         ImportEntry(".codex/AGENTS.md", ".codex/AGENTS.md", "memory"),
         ImportEntry(".codex/prompts", ".codex/prompts", "skills"),
+        SHARED_SKILLS,
         ImportEntry(".codex/auth.json", ".codex/auth.json", "credentials"),
     ),
     # Known token files are listed as credentials; anything else matching
@@ -132,6 +144,7 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
     "auggie": (
         ImportEntry(".augment/session.json", ".augment/session.json", "credentials"),
         ImportEntry(".augment", ".augment", "settings"),
+        SHARED_SKILLS,
     ),
     "copilot": (
         ImportEntry(
@@ -166,6 +179,7 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
             "settings",
             exclude=("providers.json", "catalog.toml", "credentials.json"),
         ),
+        SHARED_SKILLS,
     ),
     "jcode": (
         ImportEntry(".jcode/auth.json", ".jcode/auth.json", "credentials"),
@@ -173,6 +187,7 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ImportEntry(".jcode/mcp.json", ".jcode/mcp.json", "mcp"),
         ImportEntry(".jcode/sessions", ".jcode/sessions", "sessions"),
         ImportEntry(".jcode", ".jcode", "settings"),
+        SHARED_SKILLS,
         ImportEntry(
             ".config/jcode",
             ".config/jcode",
@@ -192,6 +207,7 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
     "dsh": (
         ImportEntry(".dsh/.credentials.yaml", ".dsh/.credentials.yaml", "credentials"),
         ImportEntry(".dsh", ".dsh", "settings"),
+        SHARED_SKILLS,
     ),
     # ~/.hermes also holds the installer's hermes-agent checkout, so only the
     # state HERMES_HOME documents is listed; the rest is reported as other.
@@ -200,6 +216,7 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ImportEntry(".hermes/SOUL.md", "SOUL.md", "memory"),
         ImportEntry(".hermes/memories", "memories", "memory"),
         ImportEntry(".hermes/skills", "skills", "skills"),
+        SHARED_SKILLS,
         ImportEntry(".hermes/sessions", "sessions", "sessions"),
         ImportEntry(".hermes/.env", ".env", "credentials"),
         ImportEntry(".hermes/auth.json", "auth.json", "credentials"),

@@ -70,6 +70,11 @@ needs `--with-credentials` as well.
 | `dsh`      | `~/.dsh`                                               |
 | `hermes`   | `~/.hermes`                                            |
 
+Codex, opencode, Auggie, Tau, jcode, dsh and Hermes also read skills from the
+shared `~/.agents/skills` directory, so their import copies it too (category
+`skills`). Freebuff reads that directory as well, but outside its persisted
+config mount, so it is not imported for Freebuff.
+
 Use `--home PATH` when your agent config lives under a different home.
 
 ## Profiles
