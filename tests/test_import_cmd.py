@@ -282,10 +282,12 @@ def test_running_container_on_the_destination_profile_warns(
                 {"vibepod.agent": "claude", "vibepod.profile": "default"},
             ),
             _FakeContainer(
-                "vibepod-claude-2", {"vibepod.agent": "claude", "vibepod.profile": "work"}
+                "vibepod-claude-2",
+                {"vibepod.agent": "claude", "vibepod.profile": "work"},
             ),
             _FakeContainer(
-                "vibepod-codex-1", {"vibepod.agent": "codex", "vibepod.profile": "default"}
+                "vibepod-codex-1",
+                {"vibepod.agent": "codex", "vibepod.profile": "default"},
             ),
         ]
 
