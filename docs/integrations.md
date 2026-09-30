@@ -369,8 +369,14 @@ compact output — up to 90 % less bash output for the agent to read.
 # .vibepod/overlay/Dockerfile — no FROM line
 ADD https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-x86_64-unknown-linux-musl.tar.gz /tmp/rtk-x86_64.tar.gz
 ADD https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-aarch64-unknown-linux-gnu.tar.gz /tmp/rtk-aarch64.tar.gz
+# SHA-256 values from the release's checksums.txt; update them with the version.
 RUN arch="$(uname -m)" \
-    && case "$arch" in x86_64|aarch64) ;; *) echo "no RTK build for $arch" >&2; exit 1 ;; esac \
+    && case "$arch" in \
+         x86_64)  sum=e4e650fa1677c0de2f6839a6040d7b17f312d32f163c402b75af70e9e5af1a91 ;; \
+         aarch64) sum=5ed65486a96077bd6bba7c87fdc9d0e4a1918d19619be3c87380888389a30c7c ;; \
+         *) echo "no RTK build for $arch" >&2; exit 1 ;; \
+       esac \
+    && echo "$sum  /tmp/rtk-$arch.tar.gz" | sha256sum -c - \
     && tar -xzf "/tmp/rtk-$arch.tar.gz" -C /usr/local/bin rtk \
     && chmod 755 /usr/local/bin/rtk \
     && rm /tmp/rtk-*.tar.gz
@@ -382,8 +388,11 @@ RUN arch="$(uname -m)" \
   with the classic builder, so `TARGETARCH` is not available; `ADD` cannot be
   conditional, hence both downloads. Note the different libc suffix of the
   two builds (`musl` vs. `gnu`).
-- Pin the release: with a moving URL the overlay cache would keep whatever it
-  downloaded first.
+- **Pinned and verified** — with a moving URL the overlay cache would keep
+  whatever it downloaded first, and the checksum check fails the build if the
+  archive is not the one you reviewed. The hashes are written into the
+  fragment rather than fetched from the same release, so a tampered release
+  cannot vouch for itself.
 - Some RTK filters shell out to ripgrep; the `vibepod/claude` image ships it.
 
 **2. Register the hook once**
@@ -417,10 +426,30 @@ queries instead of grepping: `/graphify .` builds it; `graphify query`,
 
 ```dockerfile
 # .vibepod/overlay/claude/Dockerfile — no FROM line
+ARG GRAPHIFY_VERSION=0.9.73
 RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/graphify \
-    && /opt/graphify/bin/pip install --no-cache-dir graphifyy \
+    && /opt/graphify/bin/pip install --no-cache-dir "graphifyy==${GRAPHIFY_VERSION}" \
+    && ln -s /opt/graphify/bin/graphify /usr/local/bin/graphify
+```
+
+The version is pinned, but its dependencies (tree-sitter grammars, numpy,
+networkx, …) still resolve at build time. To lock the whole set, compile a
+hashed requirements file once from a one-line `graphifyy==0.9.73` input —
+e.g. `uv pip compile --generate-hashes --python-version <X.Y> -o requirements.txt`,
+with `<X.Y>` the image's `python3 --version` — commit it as
+`.vibepod/overlay/claude/requirements.txt` (the fragment's directory is its
+build context) and install with `--require-hashes`:
+
+```dockerfile
+# .vibepod/overlay/claude/Dockerfile — no FROM line
+COPY requirements.txt /tmp/graphify-requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/graphify \
+    && /opt/graphify/bin/pip install --no-cache-dir --require-hashes \
+         -r /tmp/graphify-requirements.txt \
     && ln -s /opt/graphify/bin/graphify /usr/local/bin/graphify
 ```
 
