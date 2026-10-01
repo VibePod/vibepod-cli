@@ -1,16 +1,34 @@
-// Managed by VibePod — reports OpenCode events to herdr via the socket API.
+// Managed by VibePod — reports OpenCode events to herdr via the socket API,
+// or, without a mounted socket, as JSON lines in HERDR_EVENTS_FILE that the
+// host-side `vp run` relays to herdr.
+import fs from "node:fs";
 import net from "node:net";
 
 const sockPath = process.env.HERDR_SOCKET_PATH;
+const eventsFile = process.env.HERDR_EVENTS_FILE;
 const pane = process.env.HERDR_PANE_ID;
+
+const appendEvent = (params) => {
+  try {
+    // one small write on an O_APPEND fd: concurrent reporters never interleave
+    fs.appendFileSync(eventsFile, JSON.stringify(params) + "\n");
+  } catch {
+    // events file unwritable — never disturb the agent
+  }
+};
 
 const report = (state) =>
   new Promise((resolve) => {
-    if (!sockPath || !pane) return resolve();
+    if (!pane) return resolve();
+    const params = { pane_id: pane, source: "vibepod", agent: "opencode", display_agent: "vp:opencode", state };
+    if (!sockPath) {
+      if (eventsFile) appendEvent(params);
+      return resolve();
+    }
     const request = {
       id: `vibepod:${process.pid}:${Date.now()}`,
       method: "pane.report_agent",
-      params: { pane_id: pane, source: "vibepod", agent: "opencode", display_agent: "vp:opencode", state },
+      params,
     };
     const sock = net.connect(sockPath);
     const done = () => {
@@ -25,7 +43,7 @@ const report = (state) =>
   });
 
 export const HerdrAgentState = async () => {
-  if (!sockPath || !pane) return {};
+  if ((!sockPath && !eventsFile) || !pane) return {};
   return {
     event: async ({ event }) => {
       const type = event?.type ?? "";
