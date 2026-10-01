@@ -1110,7 +1110,7 @@ def test_run_rejects_invalid_configured_volume(monkeypatch, _tmp_config_root) ->
 
 
 class _NoSocketMountManager(_PortCapturingManager):
-    """Engine that cannot bind-mount a host unix socket (Podman in a VM)."""
+    """Engine that cannot bind-mount a host unix socket (any engine off Linux)."""
 
     def supports_host_socket_mounts(self) -> bool:
         return False
@@ -1213,12 +1213,14 @@ def test_run_agent_is_rootless_podman_requires_rootless_podman_evidence(
 @pytest.mark.parametrize(
     ("platform", "version", "expected"),
     [
-        # Podman off Linux is VM-backed: host paths arrive over virtiofs, which
-        # cannot carry the herdr socket (issue #170).
+        # Every engine off Linux is VM-backed: host paths arrive over a file
+        # share that cannot carry the herdr socket (issues #170 and #203).
         ("darwin", {"Components": [{"Name": "Podman Engine"}]}, False),
         ("win32", {"Components": [{"Name": "Podman Engine"}]}, False),
+        ("darwin", {"Components": [{"Name": "Docker Engine"}]}, False),
+        ("win32", {"Components": [{"Name": "Docker Engine"}]}, False),
         ("linux", {"Components": [{"Name": "Podman Engine"}]}, True),
-        ("darwin", {"Components": [{"Name": "Docker Engine"}]}, True),
+        ("linux", {"Components": [{"Name": "Docker Engine"}]}, True),
     ],
 )
 def test_supports_host_socket_mounts(
@@ -1232,17 +1234,6 @@ def test_supports_host_socket_mounts(
     manager.client = _EngineClient({}, version)  # type: ignore[assignment]
 
     assert manager.supports_host_socket_mounts() is expected
-
-
-def test_supports_host_socket_mounts_assumes_docker_when_engine_is_silent(monkeypatch) -> None:
-    class _NoVersionClient:
-        pass
-
-    monkeypatch.setattr(sys, "platform", "darwin")
-    manager = object.__new__(DockerManager)
-    manager.client = _NoVersionClient()  # type: ignore[assignment]
-
-    assert manager.supports_host_socket_mounts() is True
 
 
 def test_run_agent_is_rootless_podman_treats_sdk_failures_as_false() -> None:

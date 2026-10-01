@@ -108,7 +108,7 @@ class _CapturingDockerManager:
 
 
 class _NoSocketMountManager(_CapturingDockerManager):
-    """Engine that cannot bind-mount a host unix socket (Podman in a VM)."""
+    """Engine that cannot bind-mount a host unix socket (any engine off Linux)."""
 
     def supports_host_socket_mounts(self) -> bool:
         return False
@@ -217,7 +217,7 @@ def test_task_create_skips_herdr_socket_mount_on_vm_backed_engine(
     tmp_path,
     tmp_task_store,
 ) -> None:
-    """VM-backed Podman can't bind-mount the herdr socket, but the run must not
+    """A VM-backed engine can't bind-mount the herdr socket, but the run must not
     die and must still report the pane identity from the host."""
     stub = _NoSocketMountManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)

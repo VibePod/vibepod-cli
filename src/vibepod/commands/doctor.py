@@ -507,7 +507,7 @@ def herdr_doctor(
     console.print()
     console.print(f"[bold]Injected files ({agent})[/bold]")
     cfg_dir = agent_config_dir(agent, active_profile)
-    # On VM-backed engines (Podman off Linux) vp run intentionally never injects
+    # On VM-backed engines (any engine off Linux) vp run intentionally never injects
     # these hooks, so a missing file is not a failure there. Compute once and
     # reuse for the container probe below (never raises; a dead engine reads as
     # "supported" so the real connection error is reported instead).
@@ -590,8 +590,8 @@ def herdr_doctor(
     elif not socket_supported:
         warning(
             "  skipped: this container engine cannot bind-mount the herdr socket "
-            "(Podman runs the engine in a VM on macOS and Windows); vp run reports "
-            "pane identity from the host instead, without live agent state",
+            "(off Linux the engine runs in a VM that cannot share host sockets); "
+            "vp run reports pane identity from the host instead, without live agent state",
         )
     else:
         manager = None
