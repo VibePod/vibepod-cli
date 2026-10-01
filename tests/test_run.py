@@ -1116,30 +1116,68 @@ class _NoSocketMountManager(_PortCapturingManager):
         return False
 
 
-def _run_in_herdr_pane(monkeypatch, workspace: Path, stub) -> dict:
+def _run_in_herdr_pane(
+    monkeypatch,
+    workspace: Path,
+    stub,
+    *,
+    detach: bool = True,
+    relay_root: Path | None = None,
+) -> dict:
     """Invoke `vp run` as if inside a herdr pane, returning the wiring calls."""
-    calls: dict = {}
+    from vibepod.core.herdr_relay import HerdrEventRelay
 
-    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+    calls: dict = {"forwarded": [], "relays": []}
+
+    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True, event_relay=None):
         calls["mount_socket"] = mount_socket
-        # what apply_herdr_if_enabled returns when the socket cannot be mounted
-        return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
+        calls["event_relay"] = event_relay
+        # what apply_herdr_if_enabled returns per transport
+        if mount_socket:
+            return [("/s.sock", "/herdr/herdr.sock", "rw")], {"HERDR_SOCKET_PATH": "/x"}
+        if event_relay is not None:
+            return [event_relay.volume()], event_relay.container_env()
+        return [], {}
+
+    def _fake_create_relay(config, *, no_herdr):
+        relay = HerdrEventRelay(
+            "pane-1",
+            lambda event: calls["forwarded"].append(event) or True,
+            root=relay_root,
+            interval=0.01,
+        )
+        calls["relays"].append(relay)
+        return relay
 
     monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
     monkeypatch.setattr(run_cmd, "_reexec_with_herdr_hint", lambda *a, **kw: None)
     monkeypatch.setattr(run_cmd, "_herdr_pane_reporting_enabled", lambda *a, **kw: True)
     monkeypatch.setattr(run_cmd, "_apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(run_cmd, "_create_herdr_event_relay", _fake_create_relay)
     monkeypatch.setattr(
         run_cmd,
         "_report_herdr_metadata",
         lambda agent: calls.setdefault("reported", agent),
     )
+    monkeypatch.setattr(
+        run_cmd,
+        "_release_herdr_agent",
+        lambda agent: calls.setdefault("released_with_relay_dir", _relay_dir_exists(calls)),
+    )
+    monkeypatch.setattr(run_cmd, "_clear_herdr_metadata", lambda agent: None)
     monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
     monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
 
-    result = CliRunner().invoke(app, ["run", "claude", "-w", str(workspace), "--detach"])
+    args = ["run", "claude", "-w", str(workspace)]
+    if detach:
+        args.append("--detach")
+    result = CliRunner().invoke(app, args)
     assert result.exit_code == 0, result.output
     return calls
+
+
+def _relay_dir_exists(calls: dict) -> bool:
+    return any(relay.host_dir.exists() for relay in calls["relays"])
 
 
 def test_run_skips_herdr_socket_mount_on_vm_backed_engine(
@@ -1153,11 +1191,77 @@ def test_run_skips_herdr_socket_mount_on_vm_backed_engine(
     calls = _run_in_herdr_pane(monkeypatch, workspace, stub)
 
     assert calls["mount_socket"] is False
+    # detached: nobody stays behind to relay, so no events file either
+    assert calls["event_relay"] is None
+    assert calls["relays"] == []
     assert stub.run_kwargs is not None
     assert all(dest != "/herdr/herdr.sock" for _, dest, _ in stub.run_kwargs["extra_volumes"])
+    assert "HERDR_EVENTS_FILE" not in stub.run_kwargs["env"]
     # host-side pane identity survives: it never goes through the container
     assert calls["reported"] == "claude"
     assert stub.run_kwargs["extra_labels"]["vibepod.herdr.pane"] == "pane-1"
+
+
+class _RelayAttachManager(_NoSocketMountManager):
+    """VM-backed engine whose attached agent writes herdr events to the mount."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: dict = {}
+
+    def attach_interactive(self, container, logger=None):  # type: ignore[no-untyped-def]
+        assert self.run_kwargs is not None
+        host_dir = next(
+            Path(host)
+            for host, dest, _ in self.run_kwargs["extra_volumes"]
+            if dest == "/herdr-events"
+        )
+        events = host_dir / "herdr-events.jsonl"
+        self.seen["file_existed"] = events.is_file()
+        with events.open("a") as handle:
+            for state in ("working", "blocked"):
+                event = {"pane_id": "pane-1", "source": "vibepod", "agent": "claude"}
+                handle.write(json.dumps({**event, "state": state}) + "\n")
+            handle.write(
+                json.dumps({"pane_id": "other", "source": "x", "agent": "claude", "state": "idle"})
+                + "\n"
+            )
+        # the agent exits right away; close() must still drain these lines
+        return b""
+
+
+def test_run_relays_herdr_events_through_file_on_vm_backed_engine(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _RelayAttachManager()
+    relay_root = _tmp_config_root / "relay"
+
+    calls = _run_in_herdr_pane(
+        monkeypatch,
+        workspace,
+        stub,
+        detach=False,
+        relay_root=relay_root,
+    )
+
+    assert calls["mount_socket"] is False
+    assert calls["event_relay"] is calls["relays"][0]
+    assert stub.run_kwargs is not None
+    env = stub.run_kwargs["env"]
+    assert env["HERDR_EVENTS_FILE"] == "/herdr-events/herdr-events.jsonl"
+    assert "HERDR_SOCKET_PATH" not in env
+    dests = [dest for _, dest, _ in stub.run_kwargs["extra_volumes"]]
+    assert "/herdr-events" in dests
+    assert "/herdr/herdr.sock" not in dests
+    assert stub.seen["file_existed"] is True
+    # forwarded in order; the foreign-pane line is dropped
+    assert [event["state"] for event in calls["forwarded"]] == ["working", "blocked"]
+    # the relay stops (and its dir goes) before the agent is released
+    assert calls["released_with_relay_dir"] is False
+    assert list(relay_root.iterdir()) == []
 
 
 def test_run_mounts_herdr_socket_on_native_engine(monkeypatch, _tmp_config_root) -> None:
@@ -1165,11 +1269,13 @@ def test_run_mounts_herdr_socket_on_native_engine(monkeypatch, _tmp_config_root)
     workspace.mkdir()
     stub = _PortCapturingManager()
 
-    calls = _run_in_herdr_pane(monkeypatch, workspace, stub)
+    calls = _run_in_herdr_pane(monkeypatch, workspace, stub, detach=False)
 
     assert calls["mount_socket"] is True
+    assert calls["relays"] == []
     assert stub.run_kwargs is not None
     assert any(dest == "/herdr/herdr.sock" for _, dest, _ in stub.run_kwargs["extra_volumes"])
+    assert "HERDR_EVENTS_FILE" not in stub.run_kwargs["env"]
 
 
 def test_run_agent_is_rootless_podman_detects_podman_engine() -> None:
