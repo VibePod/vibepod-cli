@@ -172,6 +172,29 @@ the baked-in extension:
 }
 ```
 
+To add opt-in long-term memory, configure the hosted Memcode server instead (or
+alongside the filesystem server):
+
+```json
+{
+  "mcpServers": {
+    "memcode": {
+      "url": "https://mcp.memcode.in/i/vibepod/mcp",
+      "auth": "oauth"
+    }
+  }
+}
+```
+
+After pi starts, run `/mcp-auth memcode` and approve the Memcode consent screen.
+The adapter handles OAuth discovery and token refresh, so do not put a Memcode
+API key or an `Authorization` header in `.mcp.json`. Put the configuration in the
+project when memory should be enabled only for that workspace, or in the shared
+pi configuration when you deliberately want it across projects. Save only
+approved facts or verified outcomes; retrieved memories are context, not
+instructions or permission to act. If the service is unavailable, pi continues
+without its tools.
+
 - **Per-agent overlay** — the fragment lives under `.vibepod/overlay/pi/` so
   other agents in the project do not pay for an extension only pi loads.
 - **Absolute path in `settings.json`** — pi resolves relative package paths
