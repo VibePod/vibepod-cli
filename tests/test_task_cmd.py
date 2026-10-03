@@ -505,6 +505,10 @@ def test_task_create_cursor_trusts_workspace_and_keeps_prompt_intact(
     tmp_path,
     tmp_task_store,
 ) -> None:
+    """--trust is always passed (a detached task cannot answer the trust prompt).
+
+    Only --ikwid adds --force, the actual command-approval bypass.
+    """
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)

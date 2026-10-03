@@ -330,6 +330,9 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # mode exits with "Workspace Trust Required" on a directory it has not
         # seen unless --trust, --yolo or -f is passed, so --trust is part of the
         # one-shot prefix; the workspace is the directory the user launched from.
+        # It is unconditional because a detached task cannot answer the trust
+        # prompt, and it only trusts the workspace: command approvals are still
+        # enforced unless --ikwid adds --force.
         headless_prefix=["--trust", "-p"],
         # Hidden `acp` subcommand on the same binary (Agent Client Protocol
         # server over stdio).
