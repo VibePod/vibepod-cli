@@ -207,7 +207,9 @@ def test_dry_run_warns_when_nothing_would_be_imported(config_root: Path, tmp_pat
 
 
 def test_vibe_home_is_honoured_for_the_default_home(
-    config_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -226,7 +228,9 @@ def test_vibe_home_is_honoured_for_the_default_home(
 
 
 def test_explicit_home_ignores_vibe_home(
-    config_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    config_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     home = tmp_path / "home"
     (home / ".vibe").mkdir(parents=True)
