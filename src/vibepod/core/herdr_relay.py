@@ -33,6 +33,8 @@ CONTAINER_EVENTS_FILE = f"{CONTAINER_EVENTS_DIR}/{EVENTS_FILENAME}"
 #: Reporters keep each line under this size so O_APPEND writes stay atomic.
 MAX_LINE_BYTES = 4096
 MAX_FIELD_CHARS = 512
+#: Bytes read per poll, so a container growing the file cannot exhaust host memory.
+MAX_READ_BYTES = 1024 * 1024
 ALLOWED_STATES = frozenset({"working", "blocked", "idle"})
 REQUIRED_FIELDS = ("pane_id", "source", "agent", "state")
 OPTIONAL_FIELDS = ("display_agent", "agent_session_id")
@@ -273,8 +275,10 @@ class HerdrEventRelay:
                 self._reset(identity)  # truncated
             os.lseek(fd, self._offset, os.SEEK_SET)
             chunks: list[bytes] = []
-            while chunk := os.read(fd, 65536):
+            remaining = MAX_READ_BYTES
+            while remaining > 0 and (chunk := os.read(fd, min(remaining, 65536))):
                 chunks.append(chunk)
+                remaining -= len(chunk)
             data = b"".join(chunks)
         finally:
             os.close(fd)
