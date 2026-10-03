@@ -241,6 +241,8 @@ class TaskResult:
     commits: list[dict[str, str]] = field(default_factory=list)
     branch_commits: list[dict[str, str]] = field(default_factory=list)
     branch: str | None = None
+    # The commit the branch ends at once the work is done: what the reviews judge.
+    head: str | None = None
     verify: VerifyResult | None = None
 
 
@@ -1027,6 +1029,7 @@ class BoardWorker:
                 )
                 result.commits = worktrees.commits_since(worktree.path, worktree.start)
                 result.branch_commits = worktrees.commits_since(worktree.path, worktree.base)
+        result.head = worktrees.git(worktree.path, "rev-parse", "HEAD")
         result.outcome, result.reason, result.release = "done", None, None
 
     def _did_work(self, worktree: worktrees.Worktree) -> bool:
@@ -1168,12 +1171,12 @@ class BoardWorker:
             # runs out, so that no other worker starts on the task meanwhile.
             result.release = None
         card_ref = str(card["id"])
-        branch, note = result.branch, self._handover_note(result)
+        branch, note, head = result.branch, self._handover_note(result), result.head
         if result.outcome == "done":
             stopped = "The worker was stopped from the board"
             delivered = self._deliver(
                 f"Handing {key} over",
-                lambda: self.client.hand_over(card_ref, self.options.name, branch, note),
+                lambda: self.client.hand_over(card_ref, self.options.name, branch, note, head),
                 instead=(
                     f"Giving {key} back",
                     lambda: self.client.release(card_ref, self.options.name, "released", stopped),
