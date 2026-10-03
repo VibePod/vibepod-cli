@@ -29,6 +29,7 @@ from vibepod.core.board_worker import (
     WorkOptions,
     branch_name,
     build_prompt,
+    build_review_prompt,
     parse_result,
     usage_limit_in,
     usage_limit_reset,
@@ -88,7 +89,7 @@ class Clock:
 Behaviour = Callable[[Path, str], tuple[int, str]]
 
 
-def result_block(status: str = "done", **fields: str) -> str:
+def result_block(status: str = "done", **fields: Any) -> str:
     """The structured result an agent ends its run with."""
     import json
 
@@ -1736,6 +1737,531 @@ def test_reads_the_last_well_formed_result() -> None:
         summary="Real one",
     )
     assert parse_result(mentioned) == AgentResult("done", summary="Real one")
+
+
+# --- review mode ---------------------------------------------------------------------
+
+REVIEWER = "claude-review@laptop"
+
+
+def handed_over(board: FakeBoard, repo: Path, title: str = "Add the feature", **fields: Any) -> str:
+    """A task in Review: its branch holds the work, and the card names the commit handed
+    over. Returns that commit."""
+    task = board.add_task(title, **fields)
+    branch = f"issue-{task['taskNumber'] + 6}"
+    git(repo, "checkout", "--quiet", "-b", branch)
+    (repo / f"feature-{task['taskNumber']}.txt").write_text("implemented\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "--quiet", "-m", f"Implement {title}")
+    git(repo, "checkout", "--quiet", "main")
+    sha = git(repo, "rev-parse", branch)
+    board.put_in_review(task["key"], branch, sha)
+    return sha
+
+
+def says(status: str, **fields: Any) -> Behaviour:
+    """A reviewing agent that only looks, then gives its verdict."""
+
+    def behaviour(path: Path, prompt: str) -> tuple[int, str]:
+        git(path, "log", "--oneline")
+        return 0, "Reviewing...\n" + result_block(status, **fields)
+
+    return behaviour
+
+
+def review(
+    server: FakeBoardServer,
+    runner: FakeRunner,
+    repo: Path | None,
+    name: str = REVIEWER,
+    **options: Any,
+) -> tuple[BoardWorker, list[tuple[str, str]]]:
+    messages: list[tuple[str, str]] = []
+    clock = options.pop("clock", None) or Clock()
+    worker = BoardWorker(
+        BoardClient(server.url, TOKEN),
+        runner,
+        WorkOptions(
+            project="VP",
+            agent="claude",
+            name=name,
+            machine="laptop",
+            repo=repo,
+            mode="review",
+            **options,
+        ),
+        say=lambda level, message: messages.append((level, message)),
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    worker.run()
+    return worker, messages
+
+
+def review_path(repo: Path, task: str = "vp-1", name: str = REVIEWER) -> Path:
+    return repo.parent / "app-worktrees" / worktrees.worktree_folder(f"review-{task}-{name}")
+
+
+def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    sha = handed_over(
+        board,
+        repo,
+        details="Build the feature described here.",
+        acceptanceCriteria=["feature.txt exists"],
+    )
+    branches = worktrees.branch_refs(repo)
+    seen: dict[str, Any] = {}
+
+    def looks(path: Path, prompt: str) -> tuple[int, str]:
+        seen["head"] = git(path, "rev-parse", "HEAD")
+        seen["branch"] = subprocess.run(
+            ["git", "symbolic-ref", "--quiet", "HEAD"], cwd=path, capture_output=True
+        ).returncode
+        return 0, result_block("approve", summary="Meets the criteria.")
+
+    runner = FakeRunner(looks)
+
+    worker, _ = review(server, runner, repo)
+
+    claim = board.requests("POST", "/api/board/claim")[0]
+    assert (claim["mode"], claim["assignee"]) == ("review", REVIEWER)
+    [registration] = [body for _, path, body in board.calls if path == "/api/workers"]
+    assert registration is not None and registration["mode"] == "review"
+    # The commit under review, detached, in a worktree of the reviewer's own.
+    start = runner.starts[0]
+    assert start["workspace"] == review_path(repo)
+    assert (seen["head"], seen["branch"]) == (sha, 1)
+    # The agent gets all of the git directory read-only: it has nothing to commit.
+    git_dir = (repo / ".git").resolve()
+    assert (str(git_dir), str(git_dir), "ro") in start["mounts"]
+    prompt = start["prompt"]
+    assert "Review the work on task VP-1" in prompt
+    assert "Build the feature described here." in prompt
+    assert "- feature.txt exists" in prompt
+    main = git(repo, "rev-parse", "main")
+    assert f"git diff {main}...HEAD" in prompt
+    assert f"`{sha}` of the branch `issue-7`" in prompt
+    assert '"status": "<approve | rework | needs_input | failed>"' in prompt
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict == {
+        "assignee": REVIEWER,
+        "verdict": "approve",
+        "headSha": sha,
+        "note": "Meets the criteria.",
+    }
+    assert board.card("VP-1")["column"] == "pr_ready"
+    assert board.approvers("VP-1") == [REVIEWER]
+    [report] = board.runs
+    assert report["kind"] == "review"
+    assert report["outcome"] == "done"
+    assert report["summary"] == (
+        f"Review of issue-7 at {sha[:12]}: approved\n\nMeets the criteria."
+    )
+    assert report["branchName"] == "issue-7"
+    assert report["commits"] == []
+    assert "failureReason" not in report
+    # The worktree is gone, and no branch was made or moved.
+    assert not review_path(repo).exists()
+    assert worktrees.branch_refs(repo) == branches
+    assert worker.summary.approved == ["VP-1"]
+    assert worker.summary.ended_because == "No task in review left to claim"
+
+
+def test_a_rework_verdict_sends_the_feedback_and_the_task_back(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    sha = handed_over(board, repo)
+    runner = FakeRunner(
+        says(
+            "rework",
+            summary="The tests are missing.",
+            feedback=["Add a test for the empty input.", "- Handle a missing file."],
+        )
+    )
+
+    worker, _ = review(server, runner, repo)
+
+    feedback = "- Add a test for the empty input.\n- Handle a missing file."
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert (verdict["verdict"], verdict["headSha"], verdict["note"]) == ("rework", sha, feedback)
+    card = board.card("VP-1")
+    assert (card["column"], card["branchName"], card["reviewRounds"]) == ("planned", "issue-7", 1)
+    assert board.history["idea-1"][0] == {
+        "kind": "feedback",
+        "message": feedback,
+        "actor": REVIEWER,
+    }
+    assert board.runs[0]["summary"].endswith(f"The tests are missing.\n\nFeedback:\n{feedback}")
+    assert worker.summary.reworked == ["VP-1"]
+
+
+def test_reviewers_with_different_names_each_approve_in_their_own_worktree(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.required_approvals = 2
+    sha = handed_over(board, repo)
+
+    first, _ = review(
+        server, FakeRunner(says("approve", summary="Good.")), repo, keep_worktree=True
+    )
+    assert board.card("VP-1")["column"] == "review"
+    # The same reviewer does not get the same commit again.
+    again, _ = review(server, FakeRunner(), repo)
+    assert again.summary.approved == []
+    second, _ = review(
+        server,
+        FakeRunner(says("approve", summary="Fine by me.")),
+        repo,
+        name="codex-review-2",
+        keep_worktree=True,
+    )
+
+    assert first.summary.approved == second.summary.approved == ["VP-1"]
+    assert board.card("VP-1")["column"] == "pr_ready"
+    state = BoardClient(server.url, TOKEN).review_state("card-1")
+    assert (state["approvals"], state["requiredApprovals"]) == (2, 2)
+    assert state["approvedBy"] == [REVIEWER, "codex-review-2"]
+    for name in (REVIEWER, "codex-review-2"):
+        assert git(review_path(repo, name=name), "rev-parse", "HEAD") == sha
+
+
+def test_a_failing_verify_is_always_a_rework_with_its_output(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    handed_over(board, repo)
+    failing = python("print('2 tests failed'); raise SystemExit(1)")
+
+    review(server, FakeRunner(says("approve", summary="Looks fine.")), repo, verify=failing)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "rework"
+    assert f"The verify command `{failing}` failed with exit code 1." in verdict["note"]
+    assert verdict["note"].endswith("2 tests failed")
+    assert board.card("VP-1")["column"] == "planned"
+    report = board.runs[0]
+    assert (report["verifyCommand"], report["verifyExitCode"]) == (failing, 1)
+    assert "2 tests failed" in report["verifyOutput"]
+
+
+def test_a_passing_verify_leaves_the_verdict_to_the_agent(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    handed_over(board, repo)
+
+    review(server, FakeRunner(says("approve", summary="Good.")), repo, verify=PASSES)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "approve"
+    assert board.runs[0]["verifyExitCode"] == 0
+
+
+@pytest.mark.parametrize(
+    ("doing", "said"),
+    [
+        ("commits", "committed"),
+        ("writes", "left uncommitted changes"),
+        ("switches", "switched to the branch issue-7 and committed"),
+    ],
+)
+def test_a_review_that_changes_the_repository_is_thrown_away_and_fails(
+    board: FakeBoard, server: FakeBoardServer, repo: Path, doing: str, said: str
+) -> None:
+    sha = handed_over(board, repo)
+
+    def meddles(path: Path, prompt: str) -> tuple[int, str]:
+        if doing == "switches":
+            git(path, "checkout", "--quiet", "issue-7")
+        (path / "fix.txt").write_text("fixed\n")
+        if doing != "writes":
+            git(path, "add", "fix.txt")
+            git(path, "commit", "--quiet", "-m", "Fix it myself")
+        return 0, result_block("approve", summary="Fixed and approved.")
+
+    review(server, FakeRunner(meddles), repo, keep_worktree=True)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "failed"
+    assert verdict["note"].startswith(f"The agent {said} in the review worktree")
+    assert board.card("VP-1")["column"] == "review"
+    assert git(repo, "rev-parse", "issue-7") == sha
+    # Kept on request, but back at the reviewed commit without the changes.
+    path = review_path(repo)
+    assert git(path, "rev-parse", "HEAD") == sha
+    assert git(path, "status", "--porcelain") == ""
+    assert board.runs[0]["outcome"] == "failed"
+
+
+def test_a_review_that_moves_other_refs_has_them_restored_and_fails(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    sha = handed_over(board, repo)
+    main = git(repo, "rev-parse", "main")
+
+    def moves_refs(path: Path, prompt: str) -> tuple[int, str]:
+        git(path, "update-ref", "refs/heads/issue-7", main)
+        return 0, result_block("approve", summary="Approved.")
+
+    review(server, FakeRunner(moves_refs), repo)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "failed"
+    assert verdict["note"] == "The agent moved issue-7; restored them"
+    assert git(repo, "rev-parse", "issue-7") == sha
+
+
+def test_needs_input_blocks_the_task_in_review_with_the_question(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    handed_over(board, repo)
+    question = "Should an empty file count as implemented?"
+
+    review(server, FakeRunner(says("needs_input", question=question)), repo)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert (verdict["verdict"], verdict["note"]) == ("needs_input", question)
+    card = board.card("VP-1")
+    assert (card["column"], card["question"]) == ("review", question)
+    report = board.runs[0]
+    assert (report["outcome"], report["failureReason"]) == (
+        "needs_input",
+        f"Needs input: {question}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("output", "reason"),
+    [
+        ("Looks fine to me.", "The run ended without a readable result"),
+        (result_block("rework", summary="Needs work."), "The run ended without a readable result"),
+        (result_block("done", summary="Done."), "The run ended without a readable result"),
+        (
+            result_block("failed", reason="Cannot build it."),
+            "The agent could not review: Cannot build it.",
+        ),
+    ],
+)
+def test_a_review_without_a_verdict_fails(
+    board: FakeBoard, server: FakeBoardServer, repo: Path, output: str, reason: str
+) -> None:
+    sha = handed_over(board, repo)
+
+    review(server, FakeRunner(lambda path, prompt: (0, output)), repo)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict == {"assignee": REVIEWER, "verdict": "failed", "headSha": sha, "note": reason}
+    assert board.card("VP-1")["column"] == "review"
+    assert board.runs[0]["failureReason"] == reason
+
+
+@pytest.mark.parametrize("missing", ["branch", "commit"])
+def test_a_review_of_a_missing_branch_or_commit_is_blocked(
+    board: FakeBoard, server: FakeBoardServer, repo: Path, missing: str
+) -> None:
+    handed_over(board, repo)
+    if missing == "branch":
+        board.card("VP-1")["branchName"] = "issue-99"
+        expected = f"The branch issue-99 to review is not in {repo.resolve()}"
+    else:
+        board.card("VP-1")["headSha"] = "0123456789abcdef0123456789abcdef01234567"
+        expected = f"The commit 0123456789ab of issue-7 to review is not in {repo.resolve()}"
+    runner = FakeRunner()
+
+    review(server, runner, repo)
+
+    assert runner.starts == []
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert (verdict["verdict"], verdict["note"]) == (
+        "needs_input",
+        f"The review cannot run: {expected}",
+    )
+    assert board.card("VP-1")["blockedReason"] == f"Needs input: The review cannot run: {expected}"
+    assert board.runs[0]["failureReason"] == expected
+
+
+def test_a_review_whose_task_was_handed_over_again_ends_quietly(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    handed_over(board, repo)
+
+    def handed_over_meanwhile(path: Path, prompt: str) -> tuple[int, str]:
+        board.card("VP-1")["headSha"] = "f" * 40
+        return 0, result_block("approve", summary="Good.")
+
+    worker, messages = review(server, FakeRunner(handed_over_meanwhile), repo)
+
+    assert len(board.requests("POST", "/api/board/card-1/review")) == 1
+    assert board.approvers("VP-1") == []
+    report = board.runs[0]
+    assert report["outcome"] == "cancelled"
+    assert "was handed over again" in report["failureReason"]
+    assert worker.summary.approved == []
+    assert not [message for level, message in messages if level == "error"]
+
+
+def test_another_reviewers_rework_cancels_the_review_without_a_verdict(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.required_approvals = 2
+    sha = handed_over(board, repo)
+
+    def other_reviewer_sends_it_back(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") == "agent_running" and board.card("VP-1")["column"] == "review":
+            board._claim_review({"assignee": "codex-review", "mode": "review"})
+            board._submit_review(
+                "card-1",
+                {"assignee": "codex-review", "verdict": "rework", "headSha": sha, "note": "No."},
+            )
+        return []
+
+    board.on_heartbeat = other_reviewer_sends_it_back
+    runner = FakeRunner(polls=None)
+
+    worker, _ = review(server, runner, repo)
+
+    assert runner.runs[0].stopped is True
+    assert board.requests("POST", "/api/board/card-1/review") == []
+    assert [(r["reviewer"], r.get("verdict")) for r in board.reviews] == [
+        (REVIEWER, None),
+        ("codex-review", "rework"),
+    ]
+    report = board.runs[0]
+    assert (report["outcome"], report["failureReason"]) == ("cancelled", "No.")
+    assert board.card("VP-1")["column"] == "planned"
+    assert worker.passed_over[-1] == "idea-1"
+    assert not review_path(repo).exists()
+
+
+def test_a_review_cancelled_from_the_board_ends_without_a_verdict(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    handed_over(board, repo)
+
+    def cancel(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") == "agent_running" and board.reviews[0]["open"]:
+            board._cancel_review("card-1", "review-1", {"reason": "Not now"})
+        return []
+
+    board.on_heartbeat = cancel
+    runner = FakeRunner(polls=None)
+
+    review(server, runner, repo)
+
+    assert runner.runs[0].stopped is True
+    assert board.requests("POST", "/api/board/card-1/review") == []
+    assert board.runs[0]["outcome"] == "cancelled"
+    assert board.card("VP-1")["column"] == "review"
+
+
+def test_a_stop_gives_the_review_up_and_ends_the_worker(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    handed_over(board, repo)
+    board.on_heartbeat = lambda beat: (
+        [{"type": "stop"}] if beat.get("step") == "agent_running" else []
+    )
+
+    worker, _ = review(server, FakeRunner(polls=None), repo, poll_seconds=30)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "released"
+    assert board.runs[0]["outcome"] == "cancelled"
+    assert worker.summary.ended_because == "Stopped from the board"
+
+
+def test_a_timed_out_review_fails(board: FakeBoard, server: FakeBoardServer, repo: Path) -> None:
+    handed_over(board, repo)
+    runner = FakeRunner(polls=None)
+
+    review(server, runner, repo, timeout_seconds=60)
+
+    assert runner.runs[0].stopped is True
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert (verdict["verdict"], verdict["note"]) == ("failed", "Timed out after 1m")
+    assert board.runs[0]["outcome"] == "timed_out"
+
+
+def test_a_usage_limit_gives_the_review_up_and_pauses(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    handed_over(board, repo)
+
+    def limited(path: Path, prompt: str) -> tuple[int, str]:
+        return 1, "Claude AI usage limit reached|1759140000"
+
+    worker, _ = review(server, FakeRunner(limited), repo)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "released"
+    assert board.runs[0]["outcome"] == "usage_limit"
+    assert worker.usage_pause_until is not None
+    assert board.card("VP-1")["column"] == "review"
+
+
+def test_the_review_prompt_carries_the_task_history(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    handed_over(board, repo)
+    board.history["idea-1"] = [
+        {"kind": "review_started", "message": "Review by claude-review@laptop started"},
+        {"kind": "handed_over", "message": "Handed over on issue-7"},
+        {"kind": "feedback", "actor": "codex-review", "message": "Handle a missing file."},
+        {
+            "kind": "rework_requested",
+            "actor": "codex-review",
+            "message": "Rework requested by codex-review",
+        },
+        {"kind": "answer", "actor": "admin", "message": "Plain text."},
+        {"kind": "question", "actor": "claude@laptop", "message": "Which format?"},
+    ]
+    runner = FakeRunner(says("approve", summary="Good."))
+
+    review(server, runner, repo)
+
+    prompt = runner.starts[0]["prompt"]
+    lines = [
+        "- Question from claude@laptop: Which format?",
+        "- Answer from admin: Plain text.",
+        "- Review: Rework requested by codex-review",
+        "- Review feedback from codex-review: Handle a missing file.",
+    ]
+    assert "## Task history" in prompt
+    assert [prompt.index(line) for line in lines] == sorted(prompt.index(line) for line in lines)
+    assert "Handed over on" not in prompt
+
+
+def test_a_board_without_reviews_gets_its_implementation_claim_back(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.reviews_supported = False
+    board.add_task("Planned")
+    runner = FakeRunner()
+
+    with pytest.raises(WorkerError, match="does not support review workers"):
+        review(server, runner, repo)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "released"
+    assert board.card("VP-1")["column"] == "planned"
+
+
+def test_reads_a_reviewers_verdict() -> None:
+    reviews = ("approve", "rework", "needs_input", "failed")
+    prompt = build_review_prompt(
+        {"key": "VP-1", "title": "Echoed"}, "issue-7", "abc", "main", "def"
+    )
+    assert parse_result(prompt, reviews) is None
+    assert parse_result(result_block("approve"), reviews) == AgentResult("approve")
+    assert parse_result(result_block("approve")) is None
+    assert parse_result(result_block("rework", summary="Bad."), reviews) is None
+    assert parse_result(result_block("rework", feedback="Fix X."), reviews) == AgentResult(
+        "rework", feedback="Fix X."
+    )
+    assert parse_result(result_block("rework", feedback=["A", "", "B"]), reviews) == AgentResult(
+        "rework", feedback="- A\n- B"
+    )
 
 
 # --- branch names, prompt, lock ------------------------------------------------------
