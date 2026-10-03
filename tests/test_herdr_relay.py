@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from vibepod.core import herdr
+from vibepod.core import herdr, herdr_relay
 from vibepod.core.herdr_relay import (
     CONTAINER_EVENTS_DIR,
     CONTAINER_EVENTS_FILE,
@@ -186,6 +186,48 @@ def test_oversized_line_is_dropped_without_losing_the_next(relay) -> None:
     relay_obj.poll()
     assert recorder.states == ["idle"]
     assert relay_obj.dropped == 1
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create symlinks here: {exc}")
+
+
+@pytest.mark.parametrize("nofollow", [True, False], ids=["o_nofollow", "lstat"])
+def test_symlinked_events_file_is_refused(monkeypatch, relay, tmp_path: Path, nofollow) -> None:
+    if not nofollow:  # the Windows path, which has no O_NOFOLLOW
+        monkeypatch.setattr(herdr_relay, "_O_NOFOLLOW", 0)
+    elif not herdr_relay._O_NOFOLLOW:
+        pytest.skip("O_NOFOLLOW unavailable on this platform")
+    relay_obj, recorder = relay
+    outside = tmp_path / "outside.jsonl"
+    outside.write_bytes(_line(_event("working")))
+    relay_obj.host_file.unlink()
+    _symlink_or_skip(relay_obj.host_file, outside)
+
+    assert relay_obj.poll() == 0
+    assert recorder.events == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")
+def test_fifo_events_file_is_refused_without_blocking(relay) -> None:
+    relay_obj, recorder = relay
+    relay_obj.host_file.unlink()
+    os.mkfifo(relay_obj.host_file)
+
+    assert relay_obj.poll() == 0
+    assert recorder.events == []
+
+
+def test_directory_events_file_is_refused(relay) -> None:
+    relay_obj, recorder = relay
+    relay_obj.host_file.unlink()
+    relay_obj.host_file.mkdir()
+
+    assert relay_obj.poll() == 0
+    assert recorder.events == []
 
 
 def test_rejected_send_is_not_counted(tmp_path: Path) -> None:

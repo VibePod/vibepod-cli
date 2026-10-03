@@ -15,6 +15,7 @@ import logging
 import os
 import secrets
 import shutil
+import stat
 import sys
 import threading
 from collections.abc import Callable
@@ -36,6 +37,18 @@ ALLOWED_STATES = frozenset({"working", "blocked", "idle"})
 REQUIRED_FIELDS = ("pane_id", "source", "agent", "state")
 OPTIONAL_FIELDS = ("display_agent", "agent_session_id")
 POLL_INTERVAL = 0.25
+
+# The container can replace the events file, so it is opened without following
+# a symlink (Windows lacks O_NOFOLLOW: see _open_events_file) and without
+# blocking on a FIFO.
+_O_NOFOLLOW: int = getattr(os, "O_NOFOLLOW", 0)
+_OPEN_FLAGS = (
+    os.O_RDONLY
+    | _O_NOFOLLOW
+    | getattr(os, "O_NONBLOCK", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_BINARY", 0)
+)
 
 Sender = Callable[[dict[str, Any]], bool]
 
@@ -100,6 +113,33 @@ def _windows_pid_alive(pid: int) -> bool:
         return code.value == still_active
     finally:
         kernel32.CloseHandle(handle)
+
+
+def _open_events_file(path: Path) -> tuple[int, os.stat_result] | None:
+    """Open *path* for reading; None unless it is a regular file.
+
+    Raises OSError when the file is missing or a symlink (ELOOP).
+    """
+    expected: tuple[int, int] | None = None
+    if not _O_NOFOLLOW:
+        # no O_NOFOLLOW: refuse a link up front, then require the opened file
+        # to be the one inspected so a swap in between is refused too
+        before = os.lstat(path)
+        if not stat.S_ISREG(before.st_mode):
+            return None
+        expected = (before.st_dev, before.st_ino)
+    fd = os.open(path, _OPEN_FLAGS)
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        os.close(fd)
+        raise
+    if not stat.S_ISREG(st.st_mode) or (
+        expected is not None and (st.st_dev, st.st_ino) != expected
+    ):
+        os.close(fd)
+        return None
+    return fd, st
 
 
 def prune_stale_dirs(root: Path) -> None:
@@ -214,18 +254,30 @@ class HerdrEventRelay:
 
     def _read_lines(self) -> list[bytes]:
         try:
-            with self.host_file.open("rb") as handle:
-                st = os.fstat(handle.fileno())
-                identity = (st.st_dev, st.st_ino)
-                if identity != self._identity:
-                    self._reset(identity)  # first read or the file was replaced
-                elif st.st_size < self._offset:
-                    self._reset(identity)  # truncated
-                handle.seek(self._offset)
-                data = handle.read()
+            opened = _open_events_file(self.host_file)
         except FileNotFoundError:
             self._reset(None)
             return []
+        except OSError:  # ELOOP: replaced with a symlink
+            opened = None
+        if opened is None:
+            logger.debug("herdr relay: refused an events file that is not a regular file")
+            self._reset(None)
+            return []
+        fd, st = opened
+        try:
+            identity = (st.st_dev, st.st_ino)
+            if identity != self._identity:
+                self._reset(identity)  # first read or the file was replaced
+            elif st.st_size < self._offset:
+                self._reset(identity)  # truncated
+            os.lseek(fd, self._offset, os.SEEK_SET)
+            chunks: list[bytes] = []
+            while chunk := os.read(fd, 65536):
+                chunks.append(chunk)
+            data = b"".join(chunks)
+        finally:
+            os.close(fd)
         self._offset += len(data)
         self._buffer += data
         *complete, self._buffer = self._buffer.split(b"\n")
