@@ -188,6 +188,22 @@ def test_oversized_line_is_dropped_without_losing_the_next(relay) -> None:
     assert relay_obj.dropped == 1
 
 
+def test_reads_are_bounded_per_poll(monkeypatch, relay) -> None:
+    monkeypatch.setattr(herdr_relay, "MAX_READ_BYTES", 2 * MAX_LINE_BYTES)
+    relay_obj, recorder = relay
+    _append(relay_obj, b"x" * (10 * MAX_LINE_BYTES) + b"\n" + _line(_event("idle")))
+    offset = 0
+    for _ in range(10):
+        relay_obj.poll()
+        assert relay_obj._offset - offset <= 2 * MAX_LINE_BYTES
+        assert len(relay_obj._buffer) <= MAX_LINE_BYTES
+        offset = relay_obj._offset
+        if recorder.events:
+            break
+    assert recorder.states == ["idle"]
+    assert relay_obj.dropped == 1
+
+
 def _symlink_or_skip(link: Path, target: Path) -> None:
     try:
         link.symlink_to(target)
