@@ -737,6 +737,27 @@ def test_a_stop_that_comes_as_the_agent_finishes_still_gives_the_task_back(
     assert worker.summary.ended_because == "Stopped from the board"
 
 
+def test_a_refused_hand_over_blocks_the_task_instead_of_leaving_it_claimed(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Refused")
+    board.refused_branch = "vp-1"
+
+    worker, _ = work(server, FakeRunner(), repo, once=True)
+
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"] == "The board refused the hand-over: Invalid request body"
+    assert board.card("VP-1")["column"] == "planned"
+    assert board.card("VP-1")["blockedReason"] == release["note"]
+    assert board.runs[0]["outcome"] == "failed"
+    assert worker.summary.returned == ["VP-1"]
+    # The work stays on its branch, in the worktree, for the look.
+    assert git(repo, "show", "vp-1:feature.txt") == "implemented"
+
+
 def test_a_paused_project_takes_no_new_task_until_resumed(
     board: FakeBoard,
     server: FakeBoardServer,

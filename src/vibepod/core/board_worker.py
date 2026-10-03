@@ -939,14 +939,24 @@ class BoardWorker:
             if delivered is True:
                 self.summary.handed_over.append(key)
                 self.say("success", f"Handed {key} over to Review on branch {result.branch}")
-            elif isinstance(delivered, BoardApiError):
+            elif isinstance(delivered, BoardApiError) and (
+                delivered.is_conflict or delivered.is_not_found
+            ):
                 # The claim was taken back meanwhile, such as by a cancel from the board.
                 result.outcome, result.reason, result.release = (
                     "cancelled",
                     delivered.message,
                     None,
                 )
-        elif result.release is not None:
+            elif isinstance(delivered, BoardApiError):
+                # Refused for another reason, such as a branch name the board does not take:
+                # the task is still held, and is blocked for a look rather than left claimed.
+                result.outcome, result.reason, result.release = (
+                    "failed",
+                    f"The board refused the hand-over: {delivered.message}",
+                    "blocked",
+                )
+        if result.outcome != "done" and result.release is not None:
             outcome = result.release
             reason = result.reason
             max_attempts = self.options.max_attempts if outcome == "failed" else None
@@ -962,7 +972,7 @@ class BoardWorker:
             )
             self.summary.returned.append(key)
             self.say("warning", f"{key}: {result.reason} ({outcome})")
-        else:
+        elif result.outcome != "done":
             self.summary.returned.append(key)
             self.say("warning", f"{key}: {result.reason}")
         if result.outcome != "done" and result.release is None:

@@ -32,6 +32,8 @@ class FakeBoard:
     on_heartbeat: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
     # "METHOD /path/prefix" -> how many requests to fail with 503 before answering.
     failures: dict[str, int] = field(default_factory=dict)
+    # A branch name the hand-over refuses as invalid.
+    refused_branch: str | None = None
     # Answers every request with a redirect to this URL.
     redirect: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -151,6 +153,8 @@ class FakeBoard:
         card = self._held(ref, body)
         if card is None:
             return 409, {"error": f"Task {ref} is not claimed by {body.get('assignee')}"}
+        if self.refused_branch and body.get("branchName") == self.refused_branch:
+            return 400, {"error": "Invalid request body"}
         card.update(column="review", assignee=None, claimedAt=None, attempts=0)
         card["branchName"] = body.get("branchName")
         return 200, {"item": dict(card)}
