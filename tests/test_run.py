@@ -1224,7 +1224,7 @@ class _RelayAttachManager(_NoSocketMountManager):
                 handle.write(json.dumps({**event, "state": state}) + "\n")
             handle.write(
                 json.dumps({"pane_id": "other", "source": "x", "agent": "claude", "state": "idle"})
-                + "\n"
+                + "\n",
             )
         # the agent exits right away; close() must still drain these lines
         return b""
