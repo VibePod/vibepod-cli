@@ -90,6 +90,12 @@ _SELINUX_PROTECTED_DIRS = frozenset(
     "/ /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv "
     "/sys /tmp /usr /var".split(),
 )
+# System trees whose descendants are host-owned too (say `/etc/ssl/certs` as a
+# proxy CA dir): relabeling anything under them could break host services.
+# `/home`, `/tmp`, `/opt`, `/srv`, `/var`, `/mnt` and friends hold user projects.
+_SELINUX_PROTECTED_TREES = tuple(
+    Path(root) for root in "/bin /boot /dev /etc /lib /lib64 /proc /sbin /sys /usr".split()
+)
 
 
 def _selinux_enforcing() -> bool:
@@ -114,7 +120,8 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
 
     Only call this for mounts VibePod owns: relabeling a user's own volume
     (say `~/.ssh`) would break the host services that read it. Named volumes,
-    an explicit `z`/`Z`, and the home or system dirs are left as they are.
+    an explicit `z`/`Z`, the home or system dirs, and anything under system
+    trees such as `/etc` or `/usr` are left as they are.
     """
     if "/" not in str(host_path) or {"z", "Z"} & set(mode.split(",")):
         return mode
@@ -127,6 +134,9 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
     home = Path.home().resolve()
     if {str(given), str(path)} & _SELINUX_PROTECTED_DIRS or path == home or path in home.parents:
         return mode
+    for candidate in (given, path):
+        if any(root in candidate.parents for root in _SELINUX_PROTECTED_TREES):
+            return mode
     return f"{mode},z"
 
 
