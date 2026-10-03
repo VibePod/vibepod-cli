@@ -9,7 +9,9 @@ VibePod can connect agents to external LLM servers that expose OpenAI- or Anthro
 | claude | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `--model <model>` |
 | codex | `CODEX_OSS_BASE_URL` | `--oss -m <model>` |
 
-Other agents do not yet have LLM mapping and will not receive any LLM configuration.
+Other agents do not yet have legacy LLM mapping and will not receive any LLM
+configuration. Qwen, Tau, Jcode, and OpenCode accept per-launch model routing
+via `--provider`; see [model providers](providers.md).
 
 Some agents configure local models through their own native mechanism instead:
 

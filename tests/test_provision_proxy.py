@@ -33,6 +33,9 @@ class _FakeManager:
     def find_proxy(self) -> object:
         return self.running
 
+    def remove_proxy(self, existing: object, timeout: float = 15.0) -> None:
+        existing.remove(force=True)  # type: ignore[attr-defined]
+
     def ensure_proxy(self, **kwargs: object) -> str:
         self.ensured = True
         return "proxy-container"

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Annotated, Any
 
 import typer
@@ -15,12 +16,17 @@ from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.core.acp import AcpClientChannel
 from vibepod.core.agents import (
+    AGENT_SPECS,
+    AgentSpec,
     agent_config_dir,
     effective_agent_image,
     get_agent_shortcut,
     get_agent_spec,
     resolve_agent_name,
+    validate_llm_support,
+    validate_rootless_runtime,
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
@@ -50,6 +56,9 @@ from vibepod.core.herdr import (
     clear_pane_metadata as _clear_herdr_metadata,
 )
 from vibepod.core.herdr import (
+    pane_reporting_enabled as _herdr_pane_reporting_enabled,
+)
+from vibepod.core.herdr import (
     reexec_with_agent_hint as _reexec_with_herdr_hint,
 )
 from vibepod.core.herdr import (
@@ -57,6 +66,12 @@ from vibepod.core.herdr import (
 )
 from vibepod.core.herdr import (
     report_pane_metadata as _report_herdr_metadata,
+)
+from vibepod.core.launch import (
+    PROXY_CA_MOUNT_PATH as _PROXY_CA_MOUNT_PATH,
+)
+from vibepod.core.launch import (
+    agent_custom_volumes as _agent_custom_volumes,
 )
 from vibepod.core.launch import (
     agent_extra_volumes as _agent_extra_volumes,
@@ -72,6 +87,9 @@ from vibepod.core.launch import (
 )
 from vibepod.core.launch import (
     apply_proxy_env as _apply_proxy_env,
+)
+from vibepod.core.launch import (
+    check_custom_volume_targets as _check_custom_volume_targets,
 )
 from vibepod.core.launch import (
     get_container_ip as _get_container_ip,
@@ -90,6 +108,9 @@ from vibepod.core.launch import (
 )
 from vibepod.core.launch import (
     parse_env_pairs as _parse_env_pairs,
+)
+from vibepod.core.launch import (
+    parse_volume_specs as _parse_volume_specs,
 )
 from vibepod.core.launch import (
     prepare_x11_auth as _prepare_x11_auth,
@@ -116,12 +137,123 @@ from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.provider_launch import ProviderLaunch, prepare_launch
+from vibepod.core.provider_runtime import (
+    WRAPPED_AGENTS as _PROVIDER_WRAPPED_AGENTS,
+)
+from vibepod.core.provider_runtime import (
+    bootstrap_volume as _provider_bootstrap_volume,
+)
+from vibepod.core.provider_runtime import (
+    wrap_provider_command as _wrap_provider_command,
+)
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
-from vibepod.utils.console import error, info, success, warning
+from vibepod.utils.console import error, info, last_error, route_to_stderr, success, warning
 
 _SAFE_SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+# Container paths that must never be shadowed by the ACP path-parity mount of
+# the workspace onto its own host path.
+_ACP_RESERVED_CONTAINER_PATHS = (
+    "/workspace",
+    "/config",
+    "/claude",
+    "/qwen",
+    # Hermes's install root on the hermes agent image: binding a workspace
+    # over it hides the entrypoint, virtualenv and hermes-acp binary.
+    "/opt/hermes",
+    "/etc",
+    "/usr",
+    "/tmp/.X11-unix",
+)
+
+
+def _resolve_acp_command(spec: AgentSpec, agent_cfg: dict[str, Any]) -> list[str] | None:
+    """Resolve the ACP adapter command: config override wins over the spec.
+
+    A string override is parsed with shell quoting rules, so a quoted argument
+    containing spaces stays one argv element. An empty override means "no
+    adapter", the same as an agent without a default.
+    """
+    override = agent_cfg.get("acp_command")
+    if override is None:
+        default = spec.acp_command
+        return list(default) if default is not None else None
+    if isinstance(override, str):
+        parts = shlex.split(override)
+    else:
+        parts = [str(part) for part in override]
+    return parts or None
+
+
+def _remove_container_quietly(container: Any) -> None:
+    """Force-remove *container*, tolerating one that is already gone."""
+    try:
+        container.remove(force=True)
+    except Exception:
+        pass
+
+
+def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
+    """Return the host path the workspace is bound to for ACP path parity.
+
+    ACP clients (editors like Zed) send absolute host paths (session cwd,
+    @-mentions) and expect absolute host paths back in diffs. Binding the
+    workspace onto its own host path (in addition to /workspace) makes both
+    sides agree. Aborts when the host path would shadow a container-reserved
+    path, or is not a POSIX path: a Linux container's bind target cannot be a
+    Windows path, so native Windows hosts run ACP mode from WSL2 instead.
+    """
+    host_path = str(workspace_path)
+    if not host_path.startswith("/"):
+        error(
+            f"--acp requires a POSIX workspace path; '{host_path}' cannot be a "
+            "container path. On Windows, run the editor and vp inside WSL2 "
+            "(see the ACP docs).",
+        )
+        raise typer.Exit(1)
+
+    reserved = {*_ACP_RESERVED_CONTAINER_PATHS, spec.config_mount_path}
+    for reserved_path in sorted(reserved):
+        shadows_reserved = host_path == reserved_path or host_path.startswith(
+            reserved_path + "/",
+        )
+        # Also guard the reverse: binding /tmp over the container /tmp would
+        # shadow the /tmp/.X11-unix mount target inside it.
+        shadowed_by_mount = reserved_path.startswith(host_path + "/")
+        if shadows_reserved or shadowed_by_mount:
+            error(
+                f"--acp cannot mount the workspace at '{host_path}': it collides "
+                f"with the container-reserved path '{reserved_path}'. "
+                "Move the project to a non-reserved host path.",
+            )
+            raise typer.Exit(1)
+    return host_path
+
+
+# Separator for write-root lists. The variable is parsed by the agent INSIDE
+# the Linux container (hermes splits on its own os.pathsep, which is ":"), so
+# the host's os.pathsep must never leak in here: on a Windows host it is ";",
+# and a ";"-joined value would reach the container as one nonexistent path.
+_WRITE_ROOTS_SEP = ":"
+
+
+def _extend_write_roots(env: dict[str, str], var: str, paths: list[str | None]) -> None:
+    """Append *paths* to the ``:``-joined write-root list in ``env[var]``.
+
+    Extends rather than replaces, so a value the user set through
+    ``agents.<agent>.env`` or ``-e`` keeps its entries, and skips duplicates so
+    repeated calls stay idempotent. Used for ``--acp``, where the editor sends
+    absolute host paths that the agent's file sandbox must also allow.
+    """
+    existing = [root for root in env.get(var, "").split(_WRITE_ROOTS_SEP) if root]
+    for path in paths:
+        if path and path not in existing:
+            existing.append(path)
+    if existing:
+        env[var] = _WRITE_ROOTS_SEP.join(existing)
 
 
 def _is_safe_skill_id(skill_id: str) -> bool:
@@ -173,6 +305,10 @@ def _agent_skill_paths(agent: str) -> list[str]:
       - jcode    reads ~/.agents/skills/ (also ~/.jcode/skills/)
       - freebuff reads ~/.agents/skills/ (also ~/.freebuff/skills/)
       - dsh      reads ~/.agents/skills/            → /config/.agents/skills/
+      - hermes   reads ~/.agents/skills/ once the image seeds it into
+        skills.external_dirs in $HERMES_HOME/config.yaml (Hermes has no
+        env-var override for that key). Its state volume is the official
+        image's /opt/data, not /config  → /opt/data/.agents/skills/
       - qwen     reads ~/.qwen/skills/, which the image symlinks to /qwen/skills
         (also <project>/.qwen/skills/ in the workspace)
 
@@ -186,6 +322,8 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/config/.pi/agent/skills"]
     if agent == "qwen":
         return ["/qwen/skills"]
+    if agent == "hermes":
+        return ["/opt/data/.agents/skills"]
     if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh"):
         return ["/config/.agents/skills"]
     return []
@@ -295,14 +433,103 @@ def _compose_file_present(workspace: Path) -> bool:
     return (workspace / "docker-compose.yml").exists() or (workspace / "compose.yml").exists()
 
 
+def _open_acp_channel() -> AcpClientChannel | None:
+    """Bind the ACP client channel to our stdin/stdout; None without a real stdin fd."""
+    try:
+        read_fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        return None
+
+    def _write(data: bytes) -> None:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+
+    return AcpClientChannel(read_fd, _write)
+
+
+def _acp_abort_message() -> str:
+    """Text for the JSON-RPC error the editor gets when run() aborts before launch."""
+    return (
+        last_error()
+        or "vp run --acp aborted before the agent started; see the editor's ACP logs (stderr)."
+    )
+
+
+def _acp_choice_schema(
+    title: str,
+    options: list[tuple[str, str]],
+    default: str | None = None,
+) -> dict[str, Any]:
+    """Single-select form field: ``enum`` for plain clients, ``oneOf`` for labelled ones."""
+    schema: dict[str, Any] = {
+        "type": "string",
+        "title": title,
+        "enum": [value for value, _ in options],
+        "oneOf": [{"const": value, "title": label} for value, label in options],
+    }
+    if default is not None:
+        schema["default"] = default
+    return schema
+
+
+_ACP_ALLOW_DIR_OPTIONS = [
+    ("allow_always", "Allow and remember"),
+    ("allow_once", "Allow this run only"),
+    ("reject", "Do not allow"),
+]
+
+
+def _acp_ask_allow_dir(channel: AcpClientChannel, workspace: Path, agent: str) -> str | None:
+    """Ask the editor whether *workspace* may be mounted.
+
+    Returns ``allow_always``, ``allow_once`` or ``reject``; None when the
+    editor cannot show the question, which callers treat like a missing TTY.
+    """
+    outcome = channel.elicit(
+        f"VibePod: '{workspace}' is not in the allowed directories for `vp run`. "
+        f"Mount it into the {agent} container?",
+        {
+            "decision": _acp_choice_schema(
+                "Workspace access",
+                _ACP_ALLOW_DIR_OPTIONS,
+                default="allow_always",
+            ),
+        },
+        ["decision"],
+    )
+    if outcome.status == "unavailable":
+        return None
+    if outcome.status != "accepted":
+        return "reject"
+    decision = outcome.content.get("decision")
+    return decision if decision in {"allow_always", "allow_once"} else "reject"
+
+
+def _acp_select_network(channel: AcpClientChannel, candidates: list[str]) -> str | None:
+    """Editor-side variant of the compose network picker."""
+    options = [("none", "Do not connect"), *[(name, name) for name in candidates]]
+    outcome = channel.elicit(
+        "VibePod: a compose file was found in the workspace. Connect the agent container "
+        "to a network with running containers?",
+        {"network": _acp_choice_schema("Network", options, default="none")},
+        ["network"],
+    )
+    if outcome.status == "unavailable":
+        warning("Compose file detected but the editor cannot show forms; skipping network prompt.")
+        return None
+    choice = outcome.content.get("network") if outcome.status == "accepted" else None
+    return choice if isinstance(choice, str) and choice in candidates else None
+
+
 def _maybe_select_network(
     workspace: Path,
     manager: DockerManager,
     primary_network: str,
+    acp_channel: AcpClientChannel | None = None,
 ) -> str | None:
     if not _compose_file_present(workspace):
         return None
-    if not sys.stdin.isatty():
+    if acp_channel is None and not sys.stdin.isatty():
         warning("Compose file detected but stdin is not interactive; skipping network prompt.")
         return None
 
@@ -311,6 +538,9 @@ def _maybe_select_network(
     candidates = [name for name in networks if name not in excluded]
     if not candidates:
         return None
+
+    if acp_channel is not None:
+        return _acp_select_network(acp_channel, candidates)
 
     if not Confirm.ask(
         "Compose file detected. Connect this container to a network with running containers?",
@@ -371,6 +601,16 @@ def run(
             show_default=False,
         ),
     ] = None,
+    volume: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-v",
+            "--volume",
+            help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+            "added to configured agents.<agent>.volumes (same TARGET replaces)",
+            show_default=False,
+        ),
+    ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
     network: Annotated[
         str | None,
@@ -390,11 +630,19 @@ def run(
             help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
         ),
     ] = False,
+    acp: Annotated[
+        bool,
+        typer.Option(
+            "--acp",
+            help="Run as an Agent Client Protocol (ACP) adapter for ACP-capable editors",
+        ),
+    ] = False,
     profile: Annotated[
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
     passthrough_args: list[str] | None = None,
+    provider_names: list[str] | None = None,
 ) -> None:
     """Start an agent container.
 
@@ -403,6 +651,14 @@ def run(
     be parsed as VibePod flags.
     """
     passthrough_args = passthrough_args or []
+    if acp:
+        # Must happen before any output, including the --detach conflict
+        # below: stdout carries only the ACP JSON-RPC stream, so all console
+        # output is rerouted to stderr.
+        route_to_stderr()
+    if acp and detach:
+        error("--acp cannot be combined with --detach: the ACP client owns the process lifetime.")
+        raise typer.Exit(1)
     config = get_config()
     try:
         active_profile = resolve_profile(profile, config)
@@ -421,10 +677,57 @@ def run(
         error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
 
-    _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr)
+    provider_env: dict[str, str] = {}
+    provider_launch: ProviderLaunch | None = None
+    if provider_names:
+        if acp and selected_agent in _PROVIDER_WRAPPED_AGENTS:
+            error(
+                "Temporary provider injection is not yet supported in ACP mode for "
+                f"{selected_agent}.",
+            )
+            raise typer.Exit(1)
+        configured_env = {
+            **{
+                str(k): str(v)
+                for k, v in config.get("agents", {}).get(selected_agent, {}).get("env", {}).items()
+            },
+            **_parse_env_pairs(env or []),
+        }
+        try:
+            provider_launch = prepare_launch(selected_agent, provider_names, configured_env)
+            provider_env = provider_launch.env
+        except (ValueError, OSError) as exc:
+            error(str(exc) if isinstance(exc, ValueError) else "Cannot access provider credentials")
+            raise typer.Exit(1) from exc
+
+    _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
+
+    # Reject unsupported wiring before any herdr hint or workspace processing:
+    # the allow-dir prompt below persists a workspace to the allow list, which
+    # must never happen for an agent/config this launch is about to refuse.
+    try:
+        if not provider_names:
+            validate_llm_support(selected_agent, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+    acp_channel: AcpClientChannel | None = None
+    if acp:
+        acp_channel = _open_acp_channel()
+    if acp_channel is not None:
+        # Hold the editor's initialize: the questions and aborts below reach
+        # the editor through it, and the container answers it once it runs.
+        if not acp_channel.wait_for_initialize():
+            error("ACP client closed the connection before sending initialize.")
+            raise typer.Exit(1)
+        acp_channel.install_exit_guard(_acp_abort_message)
 
     workspace_path = workspace.expanduser().resolve()
     if not workspace_path.exists() or not workspace_path.is_dir():
+        if acp_channel is not None:
+            error(f"Workspace not found: {workspace_path}")
+            raise typer.Exit(1)
         raise typer.BadParameter(f"Workspace not found: {workspace_path}")
 
     if is_protected_dir(workspace_path):
@@ -435,26 +738,65 @@ def run(
         raise typer.Exit(1)
 
     if not is_dir_allowed(workspace_path):
-        if not sys.stdin.isatty():
-            error(
-                f"'{workspace_path}' is not in the allowed directories list. "
-                "Run `vp config allow-dir` to add it.",
-            )
+        allow_hint = (
+            f"'{workspace_path}' is not in the allowed directories list. "
+            f"Run `vp config allow-dir {workspace_path}` to add it."
+        )
+        decision = "allow_always"
+        if acp_channel is not None:
+            # Editor stdin is the protocol pipe, so the question goes out as
+            # an ACP form instead of a TTY prompt.
+            answer = _acp_ask_allow_dir(acp_channel, workspace_path, selected_agent)
+            if answer is None:
+                error(allow_hint)
+                raise typer.Exit(1)
+            if answer == "reject":
+                error(f"'{workspace_path}' was not allowed for `vp run`. Aborting.")
+                raise typer.Exit(1)
+            decision = answer
+        elif not sys.stdin.isatty():
+            error(allow_hint)
             raise typer.Exit(1)
-        if not Confirm.ask(
+        elif not Confirm.ask(
             f"'{workspace_path}' is not allowed for `vp run`. Would you like to allow it?",
             default=True,
         ):
             error("Directory not allowed. Aborting.")
             raise typer.Exit(1)
-        try:
-            add_allowed_dir(workspace_path)
-        except OSError as exc:
-            error(f"Could not update allow list for '{workspace_path}': {exc}")
-            raise typer.Exit(1) from exc
+        if decision == "allow_always":
+            try:
+                add_allowed_dir(workspace_path)
+            except OSError as exc:
+                error(f"Could not update allow list for '{workspace_path}': {exc}")
+                raise typer.Exit(1) from exc
+        else:
+            warning(f"'{workspace_path}' allowed for this run only; not added to the allow list.")
 
     agent_cfg = config.get("agents", {}).get(selected_agent, {})
     spec = get_agent_spec(selected_agent)
+
+    acp_workspace_mount: str | None = None
+    acp_workspace_alias: str | None = None
+    acp_command: list[str] | None = None
+    if acp:
+        acp_command = _resolve_acp_command(spec, agent_cfg)
+        if acp_command is None:
+            acp_capable = [
+                name for name, agent_spec in AGENT_SPECS.items() if agent_spec.acp_command
+            ]
+            error(
+                f"Agent '{selected_agent}' has no ACP adapter. "
+                f"Supported: {', '.join(sorted(acp_capable))}. "
+                "Set agents.<agent>.acp_command in the config to provide one.",
+            )
+            raise typer.Exit(1)
+        acp_workspace_mount = _acp_workspace_mount_path(workspace_path, spec)
+        # resolve() above followed symlinks, but the editor keeps sending the
+        # path as it was opened (macOS /tmp -> /private/tmp, ~/code -> another
+        # volume). Bind that spelling too so either form works in the container.
+        logical_workspace = Path(os.path.normpath(workspace.expanduser().absolute()))
+        if str(logical_workspace) != str(workspace_path):
+            acp_workspace_alias = _acp_workspace_mount_path(logical_workspace, spec)
     if spec.preview:
         warning(
             f"{selected_agent} is a developer preview; upstream warns of "
@@ -469,6 +811,7 @@ def run(
         **spec.extra_env,
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
+        **provider_env,
     }
     # The flag replaces the resolved config list, mirroring the config chain's
     # list-replace semantics (defaults -> global -> project -> CLI), so the
@@ -478,6 +821,29 @@ def run(
         agent_ports = _publish_port_bindings(publish, source="--publish") or None
     else:
         agent_ports = _agent_port_bindings(selected_agent, agent_cfg) or None
+    # Unlike --publish, -v adds to the configured list: a flag entry only
+    # replaces the configured entry mounted at the same container path.
+    # Config paths are relative to the workspace, flag paths to the shell cwd.
+    flag_volumes = _parse_volume_specs(volume or [], source="--volume", base_dir=Path.cwd())
+    custom_volumes = [
+        *_agent_custom_volumes(
+            selected_agent,
+            agent_cfg,
+            base_dir=workspace_path,
+            replaced_targets=[target for _, target, _ in flag_volumes],
+        ),
+        *flag_volumes,
+    ]
+    if spec.write_roots_env and acp_workspace_mount is not None:
+        # In ACP mode the workspace is also bound at its own host path, and the
+        # editor sends that spelling, so the agent's file sandbox has to allow
+        # it alongside /workspace. Merged after the user's env so an override
+        # is extended, not discarded.
+        _extend_write_roots(
+            merged_env,
+            spec.write_roots_env,
+            [acp_workspace_mount, acp_workspace_alias],
+        )
     if codex_oauth_login:
         # Tell the codex image to start the loopback forwarder, and publish it to
         # the host on the port Codex's redirect URI expects.
@@ -509,8 +875,10 @@ def run(
             info("Using stored Claude OAuth token (from `vp run claude setup-token`)")
 
     llm_cfg = config.get("llm", {})
-    llm_command_extra: list[str] = []
-    if llm_cfg.get("enabled") and spec.llm_env_map:
+    llm_command_extra: list[str] = (
+        provider_launch.arguments(passthrough_args) if provider_launch is not None else []
+    )
+    if not provider_names and llm_cfg.get("enabled") and spec.llm_env_map:
         llm_values = {
             "base_url": str(llm_cfg.get("base_url", "")).strip(),
             "api_key": str(llm_cfg.get("api_key", "")).strip(),
@@ -536,14 +904,27 @@ def run(
 
     podman_probe = getattr(manager, "is_rootless_podman", None)
     rootless_podman = bool(podman_probe()) if callable(podman_probe) else False
+    try:
+        validate_rootless_runtime(selected_agent, rootless_podman)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     agent_userns_mode = "keep-id" if rootless_podman else None
     if rootless_podman:
         merged_env["USER_UID"] = "0"
         merged_env["USER_GID"] = "0"
 
+    socket_mount_probe = getattr(manager, "supports_host_socket_mounts", None)
+    herdr_socket_mounts = bool(socket_mount_probe()) if callable(socket_mount_probe) else True
+
     network_name = str(config.get("network", "vibepod-network"))
     manager.ensure_network(network_name)
-    extra_network = network or _maybe_select_network(workspace_path, manager, network_name)
+    extra_network = network or _maybe_select_network(
+        workspace_path,
+        manager,
+        network_name,
+        acp_channel=acp_channel,
+    )
 
     agent_auto_pull = agent_cfg.get("auto_pull")
     auto_pull_enabled = (
@@ -573,18 +954,37 @@ def run(
     )
 
     command = spec.command
+    if acp:
+        command = list(acp_command or [])
     entrypoint: list[str] | None = None
+    provider_wrapped = bool(provider_names) and selected_agent in _PROVIDER_WRAPPED_AGENTS
+    # Length of the resolved native entrypoint prefix in ``command``; the
+    # provider wrapper below must sit after it, so UID mapping still runs first.
+    native_prefix_len = 0
     if init_commands:
         info(f"Applying {len(init_commands)} init command(s) before startup")
+        init_command = acp_command if acp else spec.command
         try:
-            command = manager.resolve_launch_command(image=image, command=spec.command)
+            # The init wrapper replaces the image entrypoint, so the launch
+            # argv has to be made explicit. In ACP mode that argv is the
+            # adapter command, not the interactive one.
+            command = manager.resolve_launch_command(
+                image=image,
+                command=init_command,
+            )
         except DockerClientError as exc:
             error(str(exc))
             raise typer.Exit(1) from exc
+        native_prefix_len = len(command) - len(init_command or [])
         entrypoint = _init_entrypoint(init_commands)
 
     if ikwid:
-        if spec.ikwid_args:
+        if acp:
+            warning(
+                "--ikwid ignored in ACP mode: permissions are negotiated by "
+                "the ACP client (i.e. the editor).",
+            )
+        elif spec.ikwid_args:
             if command is None:
                 try:
                     command = manager.resolve_launch_command(image=image, command=spec.command)
@@ -596,7 +996,7 @@ def run(
         else:
             warning(f"IKWID mode not supported for agent '{selected_agent}', ignoring")
 
-    if llm_command_extra:
+    if llm_command_extra and not acp:
         command = list(command or []) + llm_command_extra
 
     if passthrough_args:
@@ -607,6 +1007,17 @@ def run(
                 error(str(exc))
                 raise typer.Exit(1) from exc
         command = list(command or []) + passthrough_args
+
+    if provider_wrapped:
+        # Wrap last, after every argument is appended: the real agent argv
+        # travels in the environment, so anything added later would be lost.
+        full_command = list(command or [])
+        wrapped, wrapper_env = _wrap_provider_command(
+            selected_agent,
+            full_command[native_prefix_len:],
+        )
+        command = full_command[:native_prefix_len] + wrapped
+        merged_env.update(wrapper_env)
 
     config_dir = agent_config_dir(selected_agent, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -627,21 +1038,30 @@ def run(
         Path(host_path).mkdir(parents=True, exist_ok=True)
 
     extra_volumes.extend(_skills_mounts_for_agent(selected_agent, workspace_path))
+    if acp_workspace_alias is not None:
+        extra_volumes.append((str(workspace_path), acp_workspace_alias, "rw"))
 
     herdr_volumes, herdr_env = _apply_herdr_if_enabled(
         selected_agent,
         config_dir,
         config,
-        no_herdr=no_herdr,
+        no_herdr=no_herdr or acp,
+        mount_socket=herdr_socket_mounts,
     )
+    # Host-side reporting works even when the socket cannot be mounted, so it
+    # is gated on the pane, not on the container wiring.
+    herdr_pane = _herdr_pane_reporting_enabled(config, no_herdr=no_herdr or acp)
     herdr_labels = (
         {_HERDR_PANE_LABEL: os.environ["HERDR_PANE_ID"]}
-        if herdr_volumes and os.environ.get("HERDR_PANE_ID")
+        if herdr_pane and os.environ.get("HERDR_PANE_ID")
         else {}
     )
-    if herdr_volumes:
+    if herdr_pane:
         _report_herdr_metadata(selected_agent)
     extra_volumes.extend(herdr_volumes)
+    if provider_wrapped:
+        # Mounted, not inlined: keeps the launch argv shell-safe for every image.
+        extra_volumes.append(_provider_bootstrap_volume(selected_agent))
     # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
     for key, value in herdr_env.items():
         merged_env.setdefault(key, value)
@@ -674,6 +1094,20 @@ def run(
             x11_vols, x11_env = _x11_volumes_and_env(display, x11_auth)
             extra_volumes.extend(x11_vols)
             merged_env.update(x11_env)
+
+    # Checked before the proxy is provisioned so a bad target leaves nothing
+    # to roll back; the proxy CA target is reserved up front for the same reason.
+    _check_custom_volume_targets(
+        custom_volumes,
+        [
+            "/workspace",
+            spec.config_mount_path,
+            _PROXY_CA_MOUNT_PATH,
+            *(path for path in (acp_workspace_mount, acp_workspace_alias) if path),
+            *(target for _, target, _ in extra_volumes),
+        ],
+    )
+    extra_volumes.extend(custom_volumes)
 
     if proxy_enabled:
         proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
@@ -716,7 +1150,7 @@ def run(
         _apply_proxy_env(merged_env, proxy_policy_id)
 
         if proxy_ca_dir:
-            extra_volumes.append((str(proxy_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
+            extra_volumes.append((str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, "ro"))
 
     info(f"Starting {selected_agent} with image {image}")
     container_user = None
@@ -728,8 +1162,11 @@ def run(
         # `vp stop` reads these back to mark the agent finished on the board.
         launch_labels[_DASH_AGENT_LABEL] = dash_target.agent
         launch_labels[_DASH_ID_LABEL] = dash_target.agent_id
+    if provider_names:
+        launch_labels["vibepod.provider"] = ",".join(provider_names)
     if proxy_policy_id is not None:
         launch_labels["vibepod.proxy-policy"] = proxy_policy_id
+    auto_remove = bool(config.get("auto_remove", True))
     try:
         container = manager.run_agent(
             agent=selected_agent,
@@ -739,7 +1176,7 @@ def run(
             config_mount_path=spec.config_mount_path,
             env=merged_env,
             command=command,
-            auto_remove=bool(config.get("auto_remove", True)),
+            auto_remove=auto_remove,
             name=name,
             version=__version__,
             network=network_name,
@@ -750,19 +1187,30 @@ def run(
             entrypoint=entrypoint,
             userns_mode=agent_userns_mode,
             extra_labels=launch_labels,
+            workspace_mount_path=acp_workspace_mount,
+            start=not acp,
+            tty=not acp,
         )
     except Exception:
         if proxy_policy_id is not None:
             remove_container_policy(config, proxy_policy_id)
+        if herdr_pane:
+            _release_herdr_agent(selected_agent)
+            _clear_herdr_metadata(selected_agent)
         raise
 
     container.reload()
-    if container.status != "running":
+    if container.status != "running" and not (acp and container.status == "created"):
         recent = container.logs(tail=50).decode("utf-8", errors="replace")
         error("Container exited immediately after start.")
         if recent.strip():
-            print(recent)
-        if herdr_volumes:
+            if acp:
+                # stdout is the ACP JSON-RPC stream; keep diagnostics on stderr.
+                sys.stderr.write(recent)
+                sys.stderr.flush()
+            else:
+                print(recent)
+        if herdr_pane:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
         if dash_target is not None:
@@ -796,40 +1244,63 @@ def run(
             data=dash_details,
         )
 
-    # Prefer the inspected bindings (they resolve ephemeral 0-port publishes to
-    # the daemon-assigned port); fall back to the requested bindings when the
-    # inspect payload has no Ports section.
-    inspected_ports = (container.attrs.get("NetworkSettings") or {}).get("Ports") or None
-    web_url = _web_ui_url(spec.web_container_port, inspected_ports or agent_ports)
-    if web_url:
-        success(f"{selected_agent} Web UI → {web_url}")
-        info("Sessions persist in the agent config dir.")
+    def _wire_started_container() -> None:
+        """Connect the extra network and record proxy attribution.
 
-    if extra_network and extra_network != network_name:
-        try:
-            manager.connect_network(container, extra_network)
-            info(f"Connected to additional network: {extra_network}")
-        except DockerClientError as exc:
-            warning(str(exc))
-
-    if proxy_db_path is not None:
-        container_ip = _get_container_ip(container, network_name)
-        if container_ip:
-            mapping_path = proxy_db_path.parent / "containers.json"
-            mapping_updated = _update_container_mapping(
-                mapping_path,
-                container_ip,
-                container.id,
-                container.name,
-                selected_agent,
-                policy_id=proxy_policy_id,
-                profile=active_profile,
-            )
-            if not mapping_updated:
-                warning(
-                    f"Could not write proxy container mapping at {mapping_path}. "
-                    "Fix proxy directory permissions to restore container attribution.",
+        Needs a running container: the IP is only known after start.
+        """
+        if extra_network and extra_network != network_name:
+            try:
+                manager.connect_network(container, extra_network)
+                info(f"Connected to additional network: {extra_network}")
+            except DockerClientError as exc:
+                warning(str(exc))
+        if proxy_db_path is not None:
+            container_ip = _get_container_ip(container, network_name)
+            if container_ip:
+                mapping_path = proxy_db_path.parent / "containers.json"
+                mapping_updated = _update_container_mapping(
+                    mapping_path,
+                    container_ip,
+                    container.id,
+                    container.name,
+                    selected_agent,
+                    policy_id=proxy_policy_id,
+                    profile=active_profile,
                 )
+                if not mapping_updated:
+                    warning(
+                        f"Could not write proxy container mapping at {mapping_path}. "
+                        "Fix proxy directory permissions to restore container attribution.",
+                    )
+
+    acp_started = False
+
+    def _finish_acp_launch() -> None:
+        """Start the container once the attach socket is open, then wire it up.
+
+        Called from attach_stdio before the first byte flows.
+        """
+        nonlocal acp_started
+        container.start()
+        acp_started = True
+        if acp_channel is not None:
+            acp_channel.mark_handed_over()
+            info("ACP: container started; the adapter now answers the editor's initialize")
+        # The pre-start inspect carries no network settings yet.
+        container.reload()
+        _wire_started_container()
+
+    if not acp:
+        # Prefer the inspected bindings (they resolve ephemeral 0-port publishes to
+        # the daemon-assigned port); fall back to the requested bindings when the
+        # inspect payload has no Ports section.
+        inspected_ports = (container.attrs.get("NetworkSettings") or {}).get("Ports") or None
+        web_url = _web_ui_url(spec.web_container_port, inspected_ports or agent_ports)
+        if web_url:
+            success(f"{selected_agent} Web UI → {web_url}")
+            info("Sessions persist in the agent config dir.")
+        _wire_started_container()
 
     if detach:
         if selected_agent == "claude" and "setup-token" in passthrough_args:
@@ -838,7 +1309,7 @@ def run(
                 "the setup-token flow requires an interactive session.",
             )
             container.stop(timeout=5)
-            if herdr_volumes:
+            if herdr_pane:
                 _release_herdr_agent(selected_agent)
                 _clear_herdr_metadata(selected_agent)
             if dash_target is not None:
@@ -866,9 +1337,21 @@ def run(
 
     exit_reason = "normal"
     output_tail = b""
-    warning("Attached to container. Use Ctrl+C to stop.")
+    exit_code = 0
+    if not acp:
+        warning("Attached to container. Use Ctrl+C to stop.")
     try:
-        output_tail = manager.attach_interactive(container, logger=logger)
+        if acp:
+            # No SessionLogger frames here: JSON-RPC payloads embed whole file
+            # contents, and the ACP client owns the transcript.
+            exit_code = manager.attach_stdio(
+                container,
+                on_attached=_finish_acp_launch,
+                auto_remove=auto_remove,
+                initial_stdin=acp_channel.take_replay() if acp_channel is not None else b"",
+            )
+        else:
+            output_tail = manager.attach_interactive(container, logger=logger)
     except KeyboardInterrupt:
         exit_reason = "keyboard_interrupt"
         info("Stopping container...")
@@ -876,10 +1359,18 @@ def run(
         success("Stopped")
     except Exception:
         exit_reason = "error"
+        if acp:
+            # AutoRemove only fires on exit, so a container that never started
+            # (the attach failed) would otherwise linger in `created`; a
+            # started one has just lost its only client. Drop it either way,
+            # plus the launch policy of a container that never ran.
+            _remove_container_quietly(container)
+            if proxy_policy_id is not None and not acp_started:
+                remove_container_policy(config, proxy_policy_id)
         raise
     finally:
         logger.close_session(exit_reason)
-        if herdr_volumes:
+        if herdr_pane:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
         if dash_target is not None:
@@ -895,8 +1386,12 @@ def run(
     if selected_agent == "claude" and "setup-token" in passthrough_args and exit_reason == "normal":
         _capture_claude_setup_token(config_dir)
 
-    if exit_reason == "normal":
+    if exit_reason == "normal" and not acp:
         show_resume_hint(selected_agent, output_tail)
+
+    if acp and exit_code != 0:
+        # Surface adapter failures to the ACP client instead of exiting 0.
+        raise typer.Exit(exit_code)
 
 
 def _read_masked_line(prompt: str) -> str:

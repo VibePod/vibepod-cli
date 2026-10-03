@@ -308,6 +308,25 @@ def test_alias_forwards_extra_option_args_after_delimiter(monkeypatch) -> None:
     assert called["passthrough"] == ["--model", "sonnet", "hello"]
 
 
+def test_run_command_forwards_acp_flag(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["acp"] = kwargs.get("acp")
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["run", "claude", "--acp"])
+    assert result.exit_code == 0
+    assert called["acp"] is True
+
+    result = runner.invoke(app, ["claude", "--acp"])
+    assert result.exit_code == 0
+    assert called["agent"] == "claude"
+    assert called["acp"] is True
+
+
 def test_run_command_forwards_overlay_flags(monkeypatch) -> None:
     called: dict[str, object] = {}
 
@@ -348,6 +367,28 @@ def test_run_and_alias_forward_publish_flag(monkeypatch) -> None:
     assert called["passthrough"] == []
 
 
+def test_run_and_alias_forward_volume_flag(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["volume"] = kwargs.get("volume")
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["run", "claude", "-v", "~/data:/data:ro"])
+    assert result.exit_code == 0
+    assert called["volume"] == ["~/data:/data:ro"]
+    assert called["passthrough"] == []
+
+    result = runner.invoke(app, ["claude", "-v", "cache:/cache", "--volume", "/srv:/srv"])
+    assert result.exit_code == 0
+    assert called["agent"] == "claude"
+    assert called["volume"] == ["cache:/cache", "/srv:/srv"]
+    assert called["passthrough"] == []
+
+
 def test_alias_forwards_overlay_flags(monkeypatch) -> None:
     called: dict[str, object] = {}
 
@@ -364,4 +405,19 @@ def test_alias_forwards_overlay_flags(monkeypatch) -> None:
     assert called["agent"] == "claude"
     assert called["no_overlay"] is True
     assert called["rebuild_overlay"] is True
+    assert called["passthrough"] == []
+
+
+def test_hermes_shortcut_runs_hermes(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["h"])
+    assert result.exit_code == 0
+    assert called["agent"] == "hermes"
     assert called["passthrough"] == []

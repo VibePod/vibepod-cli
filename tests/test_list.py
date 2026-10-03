@@ -44,12 +44,15 @@ def _write_overlay(workspace: Path, *parts: str) -> Path:
     return dockerfile
 
 
-def test_list_json_includes_short_and_full_agent_names(monkeypatch) -> None:
+def test_list_json_includes_short_and_full_agent_names(monkeypatch, tmp_path: Path) -> None:
     class _FakeDockerManager:
         def list_managed(self, all_containers: bool = True):  # noqa: ARG002
             return []
 
     monkeypatch.setattr(list_cmd, "DockerManager", _FakeDockerManager)
+    # cwd-hermetic: a stray .vibepod/overlay in the invoking project would
+    # otherwise pull overlay resolution (and image_id) into this test
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["list", "--json"])
     assert result.exit_code == 0
@@ -83,6 +86,7 @@ def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
                         "vibepod.agent": "claude",
                         "vibepod.workspace": "/workspace/a",
                         "vibepod.profile": "work",
+                        "vibepod.provider": "llmapi,hosted",
                         "vibepod.proxy-policy": "1" * 32,
                     },
                 ),
@@ -115,11 +119,14 @@ def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
     assert [row["container"] for row in rows] == ["vibepod-claude-1", "vibepod-claude-2"]
     assert {row["context"] for row in rows} == {"/workspace/a", "/workspace/b"}
     assert rows[0]["profile"] == "work"
+    assert rows[0]["provider"] == "llmapi,hosted"
     assert rows[0]["proxy_mode"] == "allow"
     assert rows[1]["profile"] == "-"
+    assert rows[1]["provider"] == "-"
     assert rows[1]["proxy_mode"] == "-"
     assert all(
-        set(row) == {"agent", "container", "profile", "proxy_mode", "context"} for row in rows
+        set(row) == {"agent", "container", "profile", "provider", "proxy_mode", "context"}
+        for row in rows
     )
 
 
@@ -131,6 +138,7 @@ def test_list_running_table_includes_profile_and_proxy_mode(monkeypatch) -> None
             "vibepod.agent": "claude",
             "vibepod.workspace": "/workspace/a",
             "vibepod.profile": "work",
+            "vibepod.provider": "llmapi",
             "vibepod.proxy-policy": "1" * 32,
         }
 
@@ -149,8 +157,10 @@ def test_list_running_table_includes_profile_and_proxy_mode(monkeypatch) -> None
 
     assert result.exit_code == 0
     assert "PROFILE" in result.stdout
+    assert "PROVIDER" in result.stdout
     assert "PROXY MODE" in result.stdout
     assert "work" in result.stdout
+    assert "llmapi" in result.stdout
     assert "deny" in result.stdout
 
 

@@ -13,22 +13,23 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 
 ## Supported Agents
 
-| Agent | Provider | Shortcut |
-|-------|----------|----------|
-| `claude` | Anthropic | `vp c` |
-| `gemini` | Google | `vp g` |
-| `opencode` | OpenAI | `vp o` |
-| `devstral` (alias: `vibe`) | Mistral | `vp d` |
-| `auggie` | Augment Code | `vp a` |
-| `copilot` | GitHub | `vp p` |
-| `codex` | OpenAI | `vp x` |
-| `pi` | Earendil | `vp pi` |
-| `agy` (Antigravity) | Google | `vp n` |
-| `tau` | Hugging Face | `vp t` |
-| `jcode` | 1jehuang | `vp j` |
-| `freebuff` | CodebuffAI | `vp fb` |
-| `qwen` | Qwen (Alibaba) | `vp q` |
-| `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` |
+| Agent                      | Provider       | Shortcut |
+| -------------------------- | -------------- | -------- |
+| `claude`                   | Anthropic      | `vp c`   |
+| `gemini`                   | Google         | `vp g`   |
+| `opencode`                 | OpenAI         | `vp o`   |
+| `devstral` (alias: `vibe`) | Mistral        | `vp d`   |
+| `auggie`                   | Augment Code   | `vp a`   |
+| `copilot`                  | GitHub         | `vp p`   |
+| `codex`                    | OpenAI         | `vp x`   |
+| `pi`                       | Earendil       | `vp pi`  |
+| `agy` (Antigravity)        | Google         | `vp n`   |
+| `tau`                      | Hugging Face   | `vp t`   |
+| `jcode`                    | 1jehuang       | `vp j`   |
+| `freebuff`                 | CodebuffAI     | `vp fb`  |
+| `qwen`                     | Qwen (Alibaba) | `vp q`   |
+| `dsh` (DeepSeek Harness)   | DeepSeek       | `vp ds`  |
+| `hermes`   | Nous Research  | `vp h`   |
 
 ## Next Steps
 
@@ -36,4 +37,6 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 - [**Development**](development.md) — local setup, tests, and docs workflow.
 - [**Agents**](agents/index.md) — per-agent setup and credential instructions.
 - [**Configuration**](configuration.md) — full reference for global and project-level config.
+- [**Model providers**](providers.md) — register a compatible hosted endpoint or local model server and route agents to it.
+- [**Editor integration (ACP)**](acp.md) — run VibePod agents in ACP-capable editors (Zed & co.).
 - [**CLI Reference**](cli-reference.md) — every command and flag.

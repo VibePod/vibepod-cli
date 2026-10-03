@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +107,13 @@ class _CapturingDockerManager:
         )()
 
 
+class _NoSocketMountManager(_CapturingDockerManager):
+    """Engine that cannot bind-mount a host unix socket (any engine off Linux)."""
+
+    def supports_host_socket_mounts(self) -> bool:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # AgentSpec.headless_prefix wiring
 # ---------------------------------------------------------------------------
@@ -118,6 +126,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["tau"].headless_prefix == ["-p"]
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
     assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
+    assert AGENT_SPECS["hermes"].headless_prefix == ["-z"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -157,6 +166,26 @@ def test_task_create_rejects_agent_without_headless_prefix(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("agent", ["hermes"])
+def test_hermes_rejects_global_llm_before_task_creation(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    capsys,
+    agent,
+):
+    cfg = _make_config()
+    cfg["llm"] = {"enabled": True, "model": "proxy-only-model"}
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: pytest.fail("must reject before Docker"))
+    with pytest.raises(typer.Exit) as exc:
+        task_cmd.task_create(agent=agent, prompt="hello", workspace=tmp_path)
+    assert exc.value.exit_code == 1
+    output = capsys.readouterr()
+    assert "Hermes does not support VibePod's global LLM wiring" in output.out + output.err
+    assert tmp_task_store.list() == []
+
+
 def test_task_create_claude_builds_headless_command(monkeypatch, tmp_path, tmp_task_store) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
@@ -183,6 +212,179 @@ def test_task_create_publishes_configured_ports(monkeypatch, tmp_path, tmp_task_
     assert stub.run_kwargs["ports"] == {"8000": ["8000"], "6000/udp": ["6000"]}
 
 
+def test_task_create_skips_herdr_socket_mount_on_vm_backed_engine(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """A VM-backed engine can't bind-mount the herdr socket, but the run must not
+    die and must still report the pane identity from the host."""
+    stub = _NoSocketMountManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    calls: dict = {}
+
+    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+        calls["mount_socket"] = mount_socket
+        return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
+
+    monkeypatch.setattr(task_cmd, "apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(task_cmd, "pane_reporting_enabled", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        task_cmd,
+        "report_pane_metadata",
+        lambda agent: calls.setdefault("reported", agent),
+    )
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert calls["mount_socket"] is False
+    assert stub.run_kwargs is not None
+    assert all(dest != "/herdr/herdr.sock" for _, dest, _ in stub.run_kwargs["extra_volumes"])
+    # host-side pane identity survives: it never goes through the container
+    assert calls["reported"] == "claude"
+    assert stub.run_kwargs["extra_labels"]["vibepod.herdr.pane"] == "pane-1"
+
+
+def test_task_create_mounts_herdr_socket_on_native_engine(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    calls: dict = {}
+
+    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+        calls["mount_socket"] = mount_socket
+        return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
+
+    monkeypatch.setattr(task_cmd, "apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(task_cmd, "pane_reporting_enabled", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        task_cmd,
+        "report_pane_metadata",
+        lambda agent: calls.setdefault("reported", agent),
+    )
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert calls["mount_socket"] is True
+    assert stub.run_kwargs is not None
+    assert any(dest == "/herdr/herdr.sock" for _, dest, _ in stub.run_kwargs["extra_volumes"])
+    assert calls["reported"] == "claude"
+    assert stub.run_kwargs["extra_labels"]["vibepod.herdr.pane"] == "pane-1"
+
+
+def test_task_create_lacks_herdr_report_when_disabled(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """When herdr is disabled, no pane identity is reported and no label set."""
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    calls: dict = {}
+
+    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+        calls["mount_socket"] = mount_socket
+        return ([], {})
+
+    monkeypatch.setattr(task_cmd, "apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(task_cmd, "pane_reporting_enabled", lambda *a, **kw: False)
+    monkeypatch.setattr(
+        task_cmd,
+        "report_pane_metadata",
+        lambda agent: calls.setdefault("reported", agent),
+    )
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    assert "reported" not in calls
+    assert "vibepod.herdr.pane" not in stub.run_kwargs["extra_labels"]
+
+
+@pytest.mark.parametrize("herdr_enabled", [True, False])
+@pytest.mark.parametrize(
+    "failure",
+    ["proxy", "launch", "reload", "exited", "store", "interrupt", None],
+)
+def test_task_create_cleans_up_herdr_only_on_failure(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    herdr_enabled,
+    failure,
+) -> None:
+    from unittest.mock import Mock
+
+    stub = _NoSocketMountManager()
+    container = stub.run_agent()
+    container.stop = Mock()
+    container.remove = Mock()
+    stub.stop_container = Mock()
+    stub.run_agent = Mock(return_value=container)
+    config = _make_config()
+    expected_error = typer.Exit
+    if failure == "proxy":
+        config["proxy"] = {"enabled": True, "db_path": str(tmp_path / "proxy.db")}
+        monkeypatch.setattr(
+            task_cmd,
+            "provision_proxy",
+            Mock(side_effect=ValueError("proxy failed")),
+        )
+    elif failure == "launch":
+        stub.run_agent.side_effect = RuntimeError("launch failed")
+        expected_error = RuntimeError
+    elif failure == "reload":
+        container.reload = Mock(side_effect=RuntimeError("reload failed"))
+        expected_error = RuntimeError
+    elif failure == "exited":
+        container.status = "exited"
+    elif failure == "store":
+        monkeypatch.setattr(
+            tmp_task_store,
+            "create",
+            Mock(side_effect=RuntimeError("store failed")),
+        )
+        monkeypatch.setattr(task_cmd, "_task_store", lambda: tmp_task_store)
+    elif failure == "interrupt":
+        stub.run_agent.side_effect = KeyboardInterrupt
+        expected_error = KeyboardInterrupt
+
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(task_cmd, "apply_herdr_if_enabled", lambda *a, **kw: ([], {}))
+    monkeypatch.setattr(task_cmd, "pane_reporting_enabled", lambda *a, **kw: herdr_enabled)
+    monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+    report = Mock()
+    release = Mock()
+    clear = Mock()
+    monkeypatch.setattr(task_cmd, "report_pane_metadata", report)
+    monkeypatch.setattr(task_cmd, "release_agent", release)
+    monkeypatch.setattr(task_cmd, "clear_pane_metadata", clear)
+
+    if failure is None:
+        task_cmd.task_create(agent="claude", prompt="test", workspace=tmp_path)
+    else:
+        with pytest.raises(expected_error):
+            task_cmd.task_create(agent="claude", prompt="test", workspace=tmp_path)
+
+    assert report.call_count == int(herdr_enabled)
+    if herdr_enabled and failure is not None:
+        release.assert_called_once_with("claude")
+        clear.assert_called_once_with("claude")
+    else:
+        release.assert_not_called()
+        clear.assert_not_called()
+
+
 def test_task_create_rejects_invalid_ports_before_docker(
     monkeypatch,
     tmp_path,
@@ -195,6 +397,40 @@ def test_task_create_rejects_invalid_ports_before_docker(
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
 
     with pytest.raises(typer.BadParameter, match=r"agents\.claude\.ports\[1\]"):
+        task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+
+
+def test_task_create_mounts_configured_volumes(monkeypatch, tmp_path, tmp_task_store) -> None:
+    (tmp_path / "fixtures").mkdir()
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["claude"]["volumes"] = ["./fixtures:/fixtures:ro", "cache:/cache"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    extra_volumes = stub.run_kwargs["extra_volumes"]
+    assert (str(tmp_path / "fixtures"), "/fixtures", "ro") in extra_volumes
+    assert ("cache", "/cache", "rw") in extra_volumes
+
+
+def test_task_create_rejects_volume_over_managed_mount(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    stub = _CapturingDockerManager()
+    cfg = _make_config()
+    cfg["agents"]["claude"]["volumes"] = ["cache:/workspace"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: cfg)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    with pytest.raises(typer.BadParameter, match=r"already mounted by VibePod"):
         task_cmd.task_create(agent="claude", prompt="do the thing", workspace=tmp_path)
 
     assert stub.run_kwargs is None
@@ -1082,6 +1318,32 @@ def test_task_create_uses_keep_id_on_rootless_podman(monkeypatch, tmp_path, tmp_
     assert stub.run_kwargs["env"]["USER_GID"] == "0"
 
 
+@pytest.mark.parametrize("agent", ["hermes"])
+def test_task_hermes_rejects_rootless_podman_before_provisioning(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    capsys,
+    agent,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(stub, "is_rootless_podman", lambda: True, raising=False)
+    monkeypatch.setattr(
+        stub,
+        "ensure_network",
+        lambda name: pytest.fail("must reject before provisioning"),
+    )
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    with pytest.raises(typer.Exit) as exc:
+        task_cmd.task_create(agent=agent, prompt="hello", workspace=tmp_path)
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+    output = capsys.readouterr()
+    assert "Hermes does not support rootless Podman" in output.out + output.err
+
+
 def test_task_create_preserves_host_user_for_non_podman(
     monkeypatch,
     tmp_path,
@@ -1240,3 +1502,231 @@ def test_task_create_materializes_source_policy_and_wires_identity(
         (tmp_path / "proxy" / "policies" / "containers" / f"{'2' * 32}.json").read_text(),
     )
     assert record["profile"] == "default"
+
+
+def test_hermes_headless_command_is_not_overridden() -> None:
+    # -z/--oneshot takes the prompt as its value, so the generic
+    # base_command + ikwid + headless_prefix + [prompt] path is correct and no
+    # headless_command override is needed.
+    assert AGENT_SPECS["hermes"].headless_command is None
+
+
+def test_task_create_hermes_places_yolo_before_oneshot(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """`-z` consumes the next token as its value, so --yolo must come first."""
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="hermes",
+        prompt="summarize this repository",
+        workspace=tmp_path,
+        ikwid=True,
+    )
+
+    assert stub.run_kwargs["command"] == [
+        "hermes",
+        "--yolo",
+        "-z",
+        "summarize this repository",
+    ]
+
+
+@pytest.fixture
+def provider_registry(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("provider store is POSIX-only")
+    from vibepod.core.providers import Provider, save_provider
+
+    monkeypatch.setenv("VP_PROVIDERS_DIR", str(tmp_path / "providers"))
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
+    save_provider(
+        Provider(
+            "hosted",
+            "openai-chat",
+            "https://example.com/v1",
+            auth="key",
+            models=("m",),
+            default_model="m",
+        ),
+        key="secret",
+    )
+    return tmp_path
+
+
+def _task_config_with(agent: str) -> dict:
+    config = _make_config()
+    config["agents"][agent] = {"env": {}, "init": []}
+    return config
+
+
+def test_task_create_qwen_provider_injects_env_and_label(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", lambda: _task_config_with("qwen"))
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="qwen",
+        prompt="run tests",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    assert kwargs["env"]["OPENAI_API_KEY"] == "secret"
+    assert kwargs["env"]["OPENAI_MODEL"] == "m"
+    assert kwargs["extra_labels"]["vibepod.provider"] == "hosted"
+    assert kwargs["command"] == ["qwen", "-p", "run tests"]
+
+
+def test_task_create_tau_provider_wraps_command_and_mounts_bootstrap(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", lambda: _task_config_with("tau"))
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="tau",
+        prompt="run tests",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    assert kwargs["env"]["VIBEPOD_PROVIDER_KEY_0"] == "secret"
+    assert kwargs["extra_labels"]["vibepod.provider"] == "hosted"
+    assert kwargs["command"][0:2] == ["python3", "/opt/vibepod/provider-bootstrap.py"]
+    wrapped = json.loads(kwargs["env"]["VIBEPOD_PROVIDER_COMMAND"])
+    assert wrapped == ["tau", "-p", "--provider", "hosted", "--model", "m", "run tests"]
+    mounts = [v for v in kwargs["extra_volumes"] if "/provider-bootstrap." in v[1]]
+    assert len(mounts) == 1 and mounts[0][2] == "ro"
+
+
+def test_task_create_provider_supersedes_legacy_llm(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    stub = _CapturingDockerManager()
+    config = _task_config_with("qwen")
+    config["llm"] = {
+        "enabled": True,
+        "base_url": "https://old",
+        "api_key": "old",
+        "model": "old",
+    }
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="qwen",
+        prompt="go",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    assert kwargs["env"]["OPENAI_BASE_URL"] == "https://example.com/v1"
+    assert "old" not in kwargs["env"].values()
+
+
+def test_task_create_provider_conflict_fails_before_docker(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: (_ for _ in ()).throw(AssertionError()))
+
+    with pytest.raises(typer.Exit):
+        task_cmd.task_create(
+            agent="qwen",
+            prompt="go",
+            workspace=tmp_path,
+            provider_names=["hosted"],
+            env=["OPENAI_BASE_URL=https://conflict"],
+        )
+
+
+@pytest.mark.parametrize("agent", ["opencode", "pi"])
+def test_task_create_provider_rejected_without_headless_mode(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+    agent,
+) -> None:
+    with pytest.raises(typer.Exit):
+        task_cmd.task_create(
+            agent=agent,
+            prompt="go",
+            workspace=tmp_path,
+            provider_names=["hosted"],
+        )
+
+
+def test_task_create_opencode_provider_rejected_no_headless(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    with pytest.raises(typer.Exit):
+        task_cmd.task_create(
+            agent="opencode",
+            prompt="go",
+            workspace=tmp_path,
+            provider_names=["hosted"],
+        )
+
+
+def test_task_create_provider_wrapper_follows_native_entrypoint_with_init(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    stub = _CapturingDockerManager()
+    stub.resolve_launch_command = lambda image, command: ["native-entrypoint", *(command or [])]
+    config = _task_config_with("tau")
+    config["agents"]["tau"]["init"] = ["echo initialization"]
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="tau",
+        prompt="run tests",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+        passthrough_args=["--model", "other"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    # UID mapping (native entrypoint) runs first, the bootstrap after it.
+    assert kwargs["command"] == [
+        "native-entrypoint",
+        "python3",
+        "/opt/vibepod/provider-bootstrap.py",
+    ]
+    assert kwargs["entrypoint"] is not None
+    wrapped = json.loads(kwargs["env"]["VIBEPOD_PROVIDER_COMMAND"])
+    # Explicit passthrough model wins; the routing flag survives.
+    assert wrapped == ["tau", "-p", "--provider", "hosted", "run tests", "--model", "other"]

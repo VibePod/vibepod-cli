@@ -10,13 +10,25 @@ To add a new agent, mirror the `qwen` (or `freebuff`) entry end-to-end:
 `SUPPORTED_AGENTS`/`AGENT_SHORTCUTS`/`AGENT_ALIASES`/`IMAGE_OVERRIDE_ENV_KEYS`
 and `get_default_images()` in `src/vibepod/constants.py`, the `AGENT_SPECS`
 entry in `src/vibepod/core/agents.py` (mount contract must match the
-vibepod-agents image entrypoint), the per-agent defaults in
+vibepod-agents image entrypoint; set `acp_command` when the agent ships an
+ACP adapter, see `docs/acp.md`), the per-agent defaults in
 `src/vibepod/core/config.py`, skills paths in
 `src/vibepod/commands/run.py::_agent_skill_paths`, and the docs + tests
 (`docs/agents/index.md`, `README.md`, `docs/quickstart.md`, `docs/index.md`,
 `docs/configuration.md`, `tests/test_{agents,cli,constants,run,task_cmd}.py`).
 The local-image fallback (`VP_IMAGE_<AGENT>` override + pull-failure fallback
 in `run.py`/`task.py`) is how an unreleased image is exercised locally.
+
+Hermes is the exception to the `~/.agents/skills` convention: it reads that
+directory only via the `skills.external_dirs` key in its own `config.yaml` and
+has no env-var override, so the `vibepod-agents` image entrypoint seeds the key
+rather than the CLI mounting a symlink.
+
+Hermes also has two launch constraints enforced by `validate_rootless_runtime`
+and the ACP reserved-path check: it is rejected on rootless Podman (the pinned
+image needs its own runtime user and rejects the UID rootless keep-id maps the
+container to, including 0), and `/opt/hermes` (its install root) is reserved so
+an `--acp` workspace bind cannot shadow the entrypoint/venv/`hermes-acp`.
 
 ## State-reporting integrations (herdr, dash)
 

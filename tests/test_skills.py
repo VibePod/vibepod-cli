@@ -31,7 +31,7 @@ def _fake_result(
 def test_skills_help_lists_subcommands() -> None:
     result = runner.invoke(app, ["skills", "--help"])
     assert result.exit_code == 0
-    for sub in ("add", "delete", "list", "sync", "update"):
+    for sub in ("add", "delete", "list", "sync", "update", "cache"):
         assert sub in result.stdout
 
 
@@ -163,6 +163,29 @@ def test_skills_sync_invokes_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(app, ["skills", "sync", "--scope", "user"])
     assert result.exit_code == 0, result.stdout
     assert called["scope"] == "user"
+
+
+def test_skills_cache_clear_invokes_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[bool] = []
+
+    def fake_cache_clear() -> skills_engine.EngineResult:
+        called.append(True)
+        return _fake_result(data=[{"command": "cache clear", "cleared": [], "entries": 2}])
+
+    monkeypatch.setattr(skills_engine, "cache_clear", fake_cache_clear)
+    result = runner.invoke(app, ["skills", "cache", "clear"])
+    assert result.exit_code == 0, result.stdout
+    assert called == [True]
+    assert "Cleared 2 cached source(s)" in result.stdout
+
+
+def test_skills_cache_clear_propagates_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_cache_clear() -> skills_engine.EngineResult:
+        return _fake_result(exit_code=1, stderr="error: unknown command 'cache'")
+
+    monkeypatch.setattr(skills_engine, "cache_clear", fake_cache_clear)
+    result = runner.invoke(app, ["skills", "cache", "clear"])
+    assert result.exit_code == 1
 
 
 def test_detect_scope_default_outside_project(tmp_path: Path) -> None:

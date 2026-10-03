@@ -15,7 +15,7 @@ import typer
 from vibepod.core.agents import agent_config_dir
 from vibepod.core.config import get_config
 from vibepod.core.profiles import resolve_profile
-from vibepod.utils.console import console, error, success, warning
+from vibepod.utils.console import console, error, info, success, warning
 
 app = typer.Typer(help="Inspect agent auth and config state")
 
@@ -275,6 +275,20 @@ def _elf_linkage(path: Path) -> str:
     return "static"
 
 
+def _engine_mounts_host_sockets() -> bool:
+    """True when the container engine can bind-mount a host unix socket.
+
+    Never raises: an unreachable engine returns True so the probe below reports
+    the real error instead of a misleading capability skip.
+    """
+    try:
+        from vibepod.core.docker import DockerManager
+
+        return DockerManager().supports_host_socket_mounts()
+    except Exception:  # noqa: BLE001 - diagnostics must not abort on a dead engine
+        return True
+
+
 def _herdr_log_relpath(agent: str) -> str | None:
     """Config-dir-relative path of the hook trace log for sh-hook agents."""
     return {
@@ -505,14 +519,25 @@ def herdr_doctor(
     console.print()
     console.print(f"[bold]Injected files ({agent})[/bold]")
     cfg_dir = agent_config_dir(agent, active_profile)
+    # On VM-backed engines (any engine off Linux) vp run intentionally never injects
+    # these hooks, so a missing file is not a failure there. Compute once and
+    # reuse for the container probe below (never raises; a dead engine reads as
+    # "supported" so the real connection error is reported instead).
+    socket_supported = _engine_mounts_host_sockets()
     entries = herdr_core.BUILTIN_INTEGRATIONS.get(agent, [])
     if not entries:
         console.print("  (no built-in integration for this agent)")
     for _resource, dest in entries:
         target = cfg_dir / dest
         if not target.is_file():
-            warning(f"  missing: {target} — run `vp run {agent}` inside a pane to inject")
-            failures += 1
+            if socket_supported:
+                warning(f"  missing: {target} — run `vp run {agent}` inside a pane to inject")
+                failures += 1
+            else:
+                info(
+                    f"  {target} absent (expected: this engine can't mount the herdr "
+                    "socket, so hooks are never injected)",
+                )
         else:
             exec_ok = os.access(target, os.X_OK) if dest.endswith(".sh") else True
             console.print(f"  {target} ({'executable' if exec_ok else 'NOT EXECUTABLE'})")
@@ -524,19 +549,25 @@ def herdr_doctor(
             encoding="utf-8",
             errors="replace",
         )
-        (console.print if registered else warning)(
-            f"  settings.json hooks: {'registered' if registered else 'NOT REGISTERED'}",
-        )
-        if not registered:
+        if registered:
+            console.print("  settings.json hooks: registered")
+        elif socket_supported:
+            warning("  settings.json hooks: NOT REGISTERED")
             failures += 1
+        else:
+            info("  settings.json hooks: not registered (engine can't mount the herdr socket)")
     if agent == "codex":
         registration = _herdr_registration(agent, cfg_dir)
         registered = registration == "hooks.json"
-        (console.print if registered else warning)(
-            f"  lifecycle registration: {registration}",
-        )
-        if not registered:
+        if registered:
+            console.print(f"  lifecycle registration: {registration}")
+        elif socket_supported:
+            warning(f"  lifecycle registration: {registration}")
             failures += 1
+        else:
+            info(
+                f"  lifecycle registration: {registration} (engine can't mount the herdr socket)",
+            )
 
     log_dirs = {"claude": "", "codex": ".codex", "copilot": ".copilot"}
     if agent in log_dirs:
@@ -567,6 +598,12 @@ def herdr_doctor(
     probe_reported = False
     if not volumes or not pane or agent not in probe_payloads:
         warning("  skipped (needs socket + pane env; sh-hook agents only)")
+    elif not socket_supported:
+        warning(
+            "  skipped: this container engine cannot bind-mount the herdr socket "
+            "(off Linux the engine runs in a VM that cannot share host sockets); "
+            "vp run reports pane identity from the host instead, without live agent state",
+        )
     else:
         manager = None
         image = None

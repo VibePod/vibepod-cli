@@ -33,6 +33,9 @@ class _FakeManager:
     def find_proxy(self):
         return self._container
 
+    def remove_proxy(self, existing, timeout: float = 15.0) -> None:
+        existing.remove(force=True)
+
     def clean_untagged_images(self) -> int:
         self._events.append("clean_untagged_images")
         return 0

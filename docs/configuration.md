@@ -48,12 +48,18 @@ agents:
   claude:
     enabled: true
     image: vibepod/claude:latest
-    auto_pull: null  # Per-agent override: true/false, or null to use global auto_pull
-    env: {}       # Extra environment variables passed to the container
-    volumes: []   # Reserved for future use
-    ports: []     # Ports to publish on the host, `docker run -p` syntax
-    init: []      # Optional shell commands run before agent startup
+    auto_pull: null # Per-agent override: true/false, or null to use global auto_pull
+    env: {} # Extra environment variables passed to the container
+    volumes: [] # Extra mounts, `docker run -v` syntax (see Mounting volumes)
+    ports: [] # Ports to publish on the host, `docker run -p` syntax
+    init: [] # Optional shell commands run before agent startup
     overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
+    # acp_command: ACP adapter command for `vp run <agent> --acp` (editor
+    # integration via the Agent Client Protocol). Defaults exist for claude,
+    # gemini, qwen, codex, opencode, copilot, auggie, jcode and devstral;
+    # override with a list, or a string parsed with shell quoting rules. Not
+    # present by default — just add the key to override.
+    # acp_command: ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
 
   gemini:
     enabled: true
@@ -156,21 +162,29 @@ agents:
     env: {}
     volumes: []
     ports:
-      - "127.0.0.1:3080:3081"   # Web UI; container side must stay 3081
+      - "127.0.0.1:3080:3081" # Web UI; container side must stay 3081
+    init: []
+
+  hermes:
+    enabled: true
+    image: vibepod/hermes:latest
+    env: {}
+    volumes: []
+    ports: []
     init: []
 
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
   enabled: false
-  base_url: ""       # Server endpoint URL
-  api_key: ""        # Auth token (set to "ollama" for Ollama)
-  model: ""          # Model name passed to the agent
+  base_url: "" # Server endpoint URL
+  api_key: "" # Auth token (set to "ollama" for Ollama)
+  model: "" # Model name passed to the agent
 
 logging:
   enabled: true
   image: vibepod/datasette:latest
   db_path: ~/.config/vibepod/logs.db
-  ui_port: 8001         # Port for the Datasette UI
+  ui_port: 8001 # Port for the Datasette UI
 
 # Report agent state to a VibePod Dash board (see the Dash integration page)
 dash:
@@ -188,7 +202,7 @@ proxy:
   ca_dir: ~/.config/vibepod/proxy/mitmproxy
   ca_path: ~/.config/vibepod/proxy/mitmproxy/mitmproxy-ca-cert.pem
   filter:
-    mode: open        # open | allow | deny
+    mode: open # open | allow | deny
     allow: []
     deny: []
 ```
@@ -197,25 +211,25 @@ proxy:
 
 These variables override the corresponding config keys without editing any file:
 
-| Variable | Config key | Example |
-|---|---|---|
-| `VP_DEFAULT_AGENT` | `default_agent` | `VP_DEFAULT_AGENT=vibe` |
-| `VP_AUTO_PULL` | `auto_pull` | `VP_AUTO_PULL=true` |
-| `VP_AUTO_CLEAN` | `auto_clean` | `VP_AUTO_CLEAN=false` |
-| `VP_LOG_LEVEL` | `log_level` | `VP_LOG_LEVEL=debug` |
-| `VP_NO_COLOR` | `no_color` | `VP_NO_COLOR=true` |
-| `VP_DATASETTE_PORT` | `logging.ui_port` | `VP_DATASETTE_PORT=9001` |
-| `VP_PROXY_ENABLED` | `proxy.enabled` | `VP_PROXY_ENABLED=false` |
-| `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow` |
-| `VP_LLM_ENABLED` | `llm.enabled` | `VP_LLM_ENABLED=true` |
-| `VP_LLM_BASE_URL` | `llm.base_url` | `VP_LLM_BASE_URL=http://localhost:11434` |
-| `VP_LLM_API_KEY` | `llm.api_key` | `VP_LLM_API_KEY=ollama` |
-| `VP_LLM_MODEL` | `llm.model` | `VP_LLM_MODEL=qwen3:14b` |
-| `VPDASH_URL` | `dash.url` | `VPDASH_URL=http://localhost:8765` |
-| `VPDASH_TOKEN` | `dash.token` | `VPDASH_TOKEN=s3cret` |
+| Variable               | Config key           | Example                                         |
+| ---------------------- | -------------------- | ----------------------------------------------- |
+| `VP_DEFAULT_AGENT`     | `default_agent`      | `VP_DEFAULT_AGENT=vibe`                         |
+| `VP_AUTO_PULL`         | `auto_pull`          | `VP_AUTO_PULL=true`                             |
+| `VP_AUTO_CLEAN`        | `auto_clean`         | `VP_AUTO_CLEAN=false`                           |
+| `VP_LOG_LEVEL`         | `log_level`          | `VP_LOG_LEVEL=debug`                            |
+| `VP_NO_COLOR`          | `no_color`           | `VP_NO_COLOR=true`                              |
+| `VP_DATASETTE_PORT`    | `logging.ui_port`    | `VP_DATASETTE_PORT=9001`                        |
+| `VP_PROXY_ENABLED`     | `proxy.enabled`      | `VP_PROXY_ENABLED=false`                        |
+| `VP_PROXY_FILTER_MODE` | `proxy.filter.mode`  | `VP_PROXY_FILTER_MODE=allow`                    |
+| `VP_LLM_ENABLED`       | `llm.enabled`        | `VP_LLM_ENABLED=true`                           |
+| `VP_LLM_BASE_URL`      | `llm.base_url`       | `VP_LLM_BASE_URL=http://localhost:11434`        |
+| `VP_LLM_API_KEY`       | `llm.api_key`        | `VP_LLM_API_KEY=ollama`                         |
+| `VP_LLM_MODEL`         | `llm.model`          | `VP_LLM_MODEL=qwen3:14b`                        |
+| `VPDASH_URL`           | `dash.url`           | `VPDASH_URL=http://localhost:8765`              |
+| `VPDASH_TOKEN`         | `dash.token`         | `VPDASH_TOKEN=s3cret`                           |
 | `VPDASH_CONTAINER_URL` | `dash.container_url` | `VPDASH_CONTAINER_URL=http://vibepod-dash:8765` |
-| `VP_CONFIG_DIR` | *(config root)* | `VP_CONFIG_DIR=/custom/path` |
-| `VP_PROFILE` | `profile` | `VP_PROFILE=work` |
+| `VP_CONFIG_DIR`        | _(config root)_      | `VP_CONFIG_DIR=/custom/path`                    |
+| `VP_PROFILE`           | `profile`            | `VP_PROFILE=work`                               |
 
 The `profile` key selects the active [credential profile](profiles.md); the
 `--profile` flag on `vp run`, `vp task create`, and `vp doctor claude` takes
@@ -225,24 +239,25 @@ precedence over both the variable and the config key.
 
 Each agent image can be overridden individually:
 
-| Variable | Agent |
-|---|---|
-| `VP_IMAGE_CLAUDE` | claude |
-| `VP_IMAGE_GEMINI` | gemini |
-| `VP_IMAGE_OPENCODE` | opencode |
-| `VP_IMAGE_DEVSTRAL` | devstral |
-| `VP_IMAGE_AUGGIE` | auggie |
-| `VP_IMAGE_COPILOT` | copilot |
-| `VP_IMAGE_CODEX` | codex |
-| `VP_IMAGE_PI` | pi |
-| `VP_IMAGE_AGY` | agy |
-| `VP_IMAGE_TAU` | tau |
-| `VP_IMAGE_JCODE` | jcode |
-| `VP_IMAGE_FREEBUFF` | freebuff |
-| `VP_IMAGE_QWEN` | qwen |
-| `VP_IMAGE_DSH` | dsh |
-| `VP_DATASETTE_IMAGE` | datasette (logs UI) |
-| `VP_PROXY_IMAGE` | proxy |
+| Variable                 | Agent                               |
+| ------------------------ | ----------------------------------- |
+| `VP_IMAGE_CLAUDE`        | claude                              |
+| `VP_IMAGE_GEMINI`        | gemini                              |
+| `VP_IMAGE_OPENCODE`      | opencode                            |
+| `VP_IMAGE_DEVSTRAL`      | devstral                            |
+| `VP_IMAGE_AUGGIE`        | auggie                              |
+| `VP_IMAGE_COPILOT`       | copilot                             |
+| `VP_IMAGE_CODEX`         | codex                               |
+| `VP_IMAGE_PI`            | pi                                  |
+| `VP_IMAGE_AGY`           | agy                                 |
+| `VP_IMAGE_TAU`           | tau                                 |
+| `VP_IMAGE_JCODE`         | jcode                               |
+| `VP_IMAGE_FREEBUFF`      | freebuff                            |
+| `VP_IMAGE_QWEN`          | qwen                                |
+| `VP_IMAGE_DSH`           | dsh                                 |
+| `VP_IMAGE_HERMES`        | hermes                              |
+| `VP_DATASETTE_IMAGE`     | datasette (logs UI)                 |
+| `VP_PROXY_IMAGE`         | proxy                               |
 | `VP_SKILLS_ENGINE_IMAGE` | skills-engine (used by `vp skills`) |
 
 Set `VP_IMAGE_NAMESPACE` to change the prefix for all default images at once:
@@ -305,10 +320,10 @@ By default no user-defined ports are published, so anything the agent starts ins
 agents:
   claude:
     ports:
-      - "8000:8000"            # host:container
-      - "127.0.0.1:9229:9229"  # bind to a specific host interface
-      - "6000:6000/udp"        # UDP
-      - "3000"                 # container port on a random host port
+      - "8000:8000" # host:container
+      - "127.0.0.1:9229:9229" # bind to a specific host interface
+      - "6000:6000/udp" # UDP
+      - "3000" # container port on a random host port
 ```
 
 !!! warning "Always quote port entries"
@@ -323,6 +338,37 @@ For a one-off override, `vp run` (and the agent alias commands) accept a repeata
 
 ```bash
 vp run claude -p 127.0.0.1:3090:3081 -p 6000:6000/udp
+```
+
+## Mounting volumes
+
+Only the workspace (at `/workspace`) and the agent's config directory are mounted by default. `agents.<agent>.volumes` adds more mounts using the same syntax as `docker run -v`, `SOURCE:TARGET[:MODE]`:
+
+```yaml
+# .vibepod/config.yaml
+agents:
+  claude:
+    volumes:
+      - "~/datasets:/datasets:ro" # host path, read-only
+      - "../shared-lib:/shared-lib" # relative to the workspace, read-write
+      - "pip-cache:/root/.cache/pip" # Docker named volume (created on first use)
+```
+
+- **SOURCE** is either a host path or a Docker named volume. Host paths may be absolute, start with `~`, or be relative. In config, relative paths resolve against the workspace. The host path must already exist: VibePod rejects a missing one rather than letting Docker create it as a root-owned directory. A source without a `/` (like `pip-cache`) is a named volume.
+- **TARGET** must be an absolute container path. It cannot be `/`, and it cannot be a path VibePod already mounts (`/workspace`, the agent config directory, `/etc/vibepod-proxy-ca`, and so on). A path nested inside one of those, such as `/workspace/data`, is allowed.
+- **MODE** is `rw` (default) or `ro`. It can be combined with the SELinux relabel options `z`/`Z`, e.g. `ro,z`.
+
+The list applies to both `vp run` and `vp task` containers. Like other agent keys, a project-level `volumes` list replaces the global one for that agent.
+
+!!! warning "Project configs can mount any host path"
+    A committed `.vibepod/config.yaml` can mount any path your user can read
+    (for example `~/.ssh`) into the agent container. Review the `volumes`
+    of a project you did not write before running an agent in it.
+
+`vp run` (and the agent alias commands) also accept a repeatable `-v/--volume` flag with the same syntax. Unlike `--publish`, the flag **adds** to the configured list. A flag entry replaces only the configured entry mounted at the same container path. Relative flag paths resolve against the current directory:
+
+```bash
+vp run claude -v ~/datasets:/datasets:ro -v pip-cache:/root/.cache/pip
 ```
 
 ## The built-in proxy

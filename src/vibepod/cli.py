@@ -14,6 +14,7 @@ from vibepod.commands import (
     list_cmd,
     logs,
     profile,
+    provider,
     proxy,
     run,
     skills,
@@ -81,6 +82,16 @@ def run_command(
             show_default=False,
         ),
     ] = None,
+    volume: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-v",
+            "--volume",
+            help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+            "added to configured agents.<agent>.volumes (same TARGET replaces)",
+            show_default=False,
+        ),
+    ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
     network: Annotated[
         str | None,
@@ -100,9 +111,20 @@ def run_command(
             help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
         ),
     ] = False,
+    acp: Annotated[
+        bool,
+        typer.Option(
+            "--acp",
+            help="Run as an Agent Client Protocol (ACP) adapter for ACP-capable editors",
+        ),
+    ] = False,
     profile: Annotated[
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+    ] = None,
+    provider_names: Annotated[
+        list[str] | None,
+        typer.Option("--provider", help="Temporarily use a global provider"),
     ] = None,
 ) -> None:
     """Start an agent container."""
@@ -117,11 +139,14 @@ def run_command(
         detach=detach,
         env=env,
         publish=publish,
+        volume=volume,
         name=name,
         network=network,
         paste_images=paste_images,
         ikwid=ikwid,
+        acp=acp,
         profile=profile,
+        provider_names=provider_names,
         passthrough_args=_context_args(ctx),
     )
 
@@ -138,6 +163,7 @@ app.command(name="version")(update.version)
 app.add_typer(logs.app, name="logs")
 app.add_typer(config.app, name="config")
 app.add_typer(profile.app, name="profile")
+app.add_typer(provider.app, name="provider")
 app.add_typer(proxy.app, name="proxy")
 app.add_typer(doctor.app, name="doctor")
 app.add_typer(skills.app, name="skills")
@@ -187,6 +213,16 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
                 show_default=False,
             ),
         ] = None,
+        volume: Annotated[
+            list[str] | None,
+            typer.Option(
+                "-v",
+                "--volume",
+                help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+                "added to configured agents.<agent>.volumes (same TARGET replaces)",
+                show_default=False,
+            ),
+        ] = None,
         name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
         network: Annotated[
             str | None,
@@ -209,9 +245,20 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
                 help="I Know What I'm Doing: enable auto-approval / skip permission prompts",
             ),
         ] = False,
+        acp: Annotated[
+            bool,
+            typer.Option(
+                "--acp",
+                help="Run as an Agent Client Protocol (ACP) adapter for ACP-capable editors",
+            ),
+        ] = False,
         profile: Annotated[
             str | None,
             typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+        ] = None,
+        provider_names: Annotated[
+            list[str] | None,
+            typer.Option("--provider", help="Temporarily use a global provider"),
         ] = None,
     ) -> None:
         run.run(
@@ -225,11 +272,14 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             detach=detach,
             env=env,
             publish=publish,
+            volume=volume,
             name=name,
             network=network,
             paste_images=paste_images,
             ikwid=ikwid,
+            acp=acp,
             profile=profile,
+            provider_names=provider_names,
             passthrough_args=_context_args(ctx),
         )
 

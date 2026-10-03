@@ -134,10 +134,42 @@ def test_dsh_spec_matches_container_contract() -> None:
     assert int(spec.extra_env["VIBEPOD_WEB_FORWARD_PORT"]) == spec.web_container_port
 
 
-def test_only_dsh_is_preview() -> None:
+def test_hermes_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("hermes")
+    assert spec.id == "hermes"
+    assert spec.provider == "nousresearch"
+    assert spec.image == DEFAULT_IMAGES["hermes"]
+    assert spec.config_subdir == "hermes"
+    assert spec.command == ["hermes"]
+    # The official image's state volume; HOME and HERMES_HOME are both baked
+    # to /opt/data by the base image, so VibePod sets neither.
+    assert spec.config_mount_path == "/opt/data"
+    assert "HOME" not in spec.extra_env
+    assert "HERMES_HOME" not in spec.extra_env
+    # The base image bakes HERMES_WRITE_SAFE_ROOT=/opt/data, which makes the
+    # project mount read-only to Hermes' write_file/patch tools. VibePod adds
+    # the workspace so the agent can actually edit the project.
+    assert spec.extra_env["HERMES_WRITE_SAFE_ROOT"] == "/opt/data:/workspace"
+    assert spec.write_roots_env == "HERMES_WRITE_SAFE_ROOT"
+    assert spec.ikwid_args == ["--yolo"]
+    assert spec.headless_prefix == ["-z"]
+    assert spec.headless_command is None
+    assert spec.acp_command == ["hermes-acp"]
+    assert spec.web_container_port is None
+    assert spec.preview is True
+
+
+def test_hermes_spec_does_not_advertise_unsupported_llm_wiring() -> None:
+    spec = get_agent_spec("hermes")
+    assert spec.llm_env_map is None
+    assert spec.llm_model_args is None
+
+
+def test_preview_agents_are_exactly_the_expected_set() -> None:
+    preview_agents = {"dsh", "hermes"}
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)
-        assert spec.preview is (agent == "dsh"), f"{agent} preview flag unexpected"
+        assert spec.preview is (agent in preview_agents), f"{agent} preview flag unexpected"
 
 
 def test_get_agent_spec_unknown() -> None:
@@ -255,6 +287,55 @@ def test_agents_without_llm_env_map() -> None:
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
 
 
+def test_acp_commands_match_contract() -> None:
+    expected = {
+        "claude": ["npx", "-y", "@agentclientprotocol/claude-agent-acp"],
+        "gemini": [
+            "env",
+            "HOME=/config",
+            "node",
+            "/usr/local/bin/gemini",
+            "--experimental-acp",
+        ],
+        "qwen": ["qwen", "--experimental-acp"],
+        "codex": ["npx", "-y", "@agentclientprotocol/codex-acp"],
+        "pi": ["npx", "-y", "pi-acp"],
+        "opencode": ["opencode", "acp"],
+        "copilot": ["copilot", "--acp", "--stdio"],
+        "auggie": ["auggie", "--acp"],
+        "jcode": ["jcode", "acp"],
+        "devstral": ["vibe-acp"],
+        "hermes": ["hermes-acp"],
+    }
+    for agent in SUPPORTED_AGENTS:
+        spec = get_agent_spec(agent)
+        if agent in expected:
+            assert spec.acp_command == expected[agent]
+        else:
+            assert spec.acp_command is None, f"{agent} should not have acp_command"
+
+
+def test_in_image_acp_commands_extend_the_launch_command() -> None:
+    """Agents whose ACP mode is their own binary must reuse their launch argv.
+
+    ``--acp`` replaces ``spec.command`` wholesale, so an ACP command that spells
+    the binary differently silently drops launcher workarounds (gemini's
+    ``env HOME=... node /usr/local/bin/gemini`` shebang bypass, for one).
+    Agents driven by an external adapter (npx packages, devstral's ``vibe-acp``
+    console script) are exempt.
+    """
+    external_adapters = {"claude", "codex", "devstral", "pi", "hermes"}
+    for agent in SUPPORTED_AGENTS:
+        spec = get_agent_spec(agent)
+        if spec.acp_command is None or agent in external_adapters:
+            continue
+        assert spec.command is not None, f"{agent} needs a command to extend"
+        prefix = spec.acp_command[: len(spec.command)]
+        assert prefix == spec.command, (
+            f"{agent} acp_command must start with {spec.command}, got {spec.acp_command}"
+        )
+
+
 def test_opencode_spec_matches_container_contract() -> None:
     spec = get_agent_spec("opencode")
     assert spec.id == "opencode"
@@ -267,3 +348,9 @@ def test_opencode_spec_matches_container_contract() -> None:
     assert spec.extra_env["OPENCODE_CONFIG_DIR"] == "/config"
     assert spec.extra_env["XDG_CONFIG_HOME"] == "/config/.config"
     assert spec.extra_env["XDG_DATA_HOME"] == "/config/.local/share"
+
+
+def test_acp_adapters_drive_the_image_binaries() -> None:
+    """claude/codex adapters bundle their own CLI; the images point them at theirs."""
+    assert get_agent_spec("codex").extra_env["CODEX_PATH"] == "/usr/local/bin/codex"
+    assert get_agent_spec("claude").extra_env["CLAUDE_CODE_EXECUTABLE"] == "/usr/local/bin/claude"

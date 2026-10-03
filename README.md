@@ -11,6 +11,7 @@
   <a href="https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/VibePod/vibepod-cli/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml"><img alt="Docs Build" src="https://github.com/VibePod/vibepod-cli/actions/workflows/docs.yml/badge.svg" /></a>
   <img alt="License" src="https://img.shields.io/github/license/VibePod/vibepod-cli" />
+  <a href="https://vibepod.dev"><img alt="Built with VibePod" src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/VibePod/vibepod-cli/main/.github/badges/vibepod.json" /></a>
 </p>
 
 VibePod is a unified CLI (`vp`) for running AI coding agents in isolated
@@ -22,7 +23,8 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes & more
+- 🔌 **Model providers** — register any OpenAI- or Anthropic-compatible endpoint or local model server once with `vp provider add`, then route agents to it with `vp run --provider` ([docs](https://vibepod.dev/docs/providers/))
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
@@ -76,22 +78,44 @@ vp run <agent> -- <agent-args>
 
 Use `--ikwid` to append each agent's auto-approval / permission-skip flag when supported.
 
-| Agent | `--ikwid` appended args |
-|---|---|
-| `claude` | `--dangerously-skip-permissions` |
-| `gemini` | `--approval-mode=yolo` |
-| `devstral` (`vibe`) | `--auto-approve` |
-| `copilot` | `--yolo` |
-| `codex` | `--dangerously-bypass-approvals-and-sandbox` |
-| `pi` | `--approve` |
-| `agy` | `--dangerously-skip-permissions` |
-| `opencode` | Not supported |
-| `auggie` | Not supported |
-| `tau` | Not supported |
-| `jcode` | Not supported |
-| `freebuff` | Not supported |
-| `qwen` | `--approval-mode=yolo` |
-| `dsh` | Not supported |
+| Agent               | `--ikwid` appended args                      |
+| ------------------- | -------------------------------------------- |
+| `claude`            | `--dangerously-skip-permissions`             |
+| `gemini`            | `--approval-mode=yolo`                       |
+| `devstral` (`vibe`) | `--auto-approve`                             |
+| `copilot`           | `--yolo`                                     |
+| `codex`             | `--dangerously-bypass-approvals-and-sandbox` |
+| `pi`                | `--approve`                                  |
+| `agy`               | `--dangerously-skip-permissions`             |
+| `opencode`          | Not supported                                |
+| `auggie`            | Not supported                                |
+| `tau`               | Not supported                                |
+| `jcode`             | Not supported                                |
+| `freebuff`          | Not supported                                |
+| `qwen`              | `--approval-mode=yolo`                       |
+| `dsh`               | Not supported                                |
+| `hermes`            | `--yolo`                                     |
+
+## Editor integration (`--acp`)
+
+`vp run <agent> --acp` turns VibePod into an [Agent Client Protocol](https://agentclientprotocol.com/) adapter, so the containerized agent appears directly in the AI panel of any editor with ACP support (e.g. [Zed](https://zed.dev/docs/ai/external-agents)) — with isolation, profiles, overlays and proxy metrics intact. Supported out of the box: `claude`, `gemini`, `qwen`, `codex`, `opencode`, `copilot`, `auggie`, `jcode`, `devstral`, `hermes` and `pi`.
+
+Register `vp` as a custom/external agent server in your editor. Zed example (`settings.json`):
+
+```json
+{
+  "agent_servers": {
+    "VibePod Claude": {
+      "type": "custom",
+      "command": "vp",
+      "args": ["run", "claude", "--acp"],
+      "env": {}
+    }
+  }
+}
+```
+
+Run `vp config allow-dir /path/to/project` once first (the editor's stdin is a pipe, so the interactive prompt cannot run). See the [ACP docs](docs/acp.md) for details and limitations.
 
 ![VibePod CLI preview](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/preview.png)
 
@@ -112,6 +136,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/freebuff.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/freebuff.png" alt="Freebuff" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/qwen.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/qwen.png" alt="Qwen Code" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/dsh.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/dsh.png" alt="DeepSeek Harness" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/hermes.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/hermes.png" alt="Hermes Agent" width="180" /></a>
 </p>
 
 ## Current Status
@@ -133,11 +158,11 @@ a built-in dashboard.
 
 ![VibePod Analytics Dashboard](https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/dashboard.png)
 
-| Command          | Description                                        |
-|------------------|----------------------------------------------------|
-| `vp logs start`  | Start or resume dashboard for collected metrics     |
-| `vp logs stop`   | Stop the dashboard container                       |
-| `vp logs status` | Show dashboard container status                    |
+| Command          | Description                                     |
+| ---------------- | ----------------------------------------------- |
+| `vp logs start`  | Start or resume dashboard for collected metrics |
+| `vp logs stop`   | Stop the dashboard container                    |
+| `vp logs status` | Show dashboard container status                 |
 
 The dashboard shows per-agent HTTP traffic, usage over time, and Claude token
 metrics. It also lets you compare agents side-by-side. All data stays on your
@@ -163,6 +188,7 @@ Current defaults:
 - `freebuff` -> `vibepod/freebuff:latest`
 - `qwen` -> `vibepod/qwen:latest`
 - `dsh` -> `vibepod/dsh:latest`
+- `hermes` -> `vibepod/hermes:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
@@ -186,6 +212,7 @@ VP_IMAGE_JCODE=vibepod/jcode:latest vp run jcode
 VP_IMAGE_FREEBUFF=vibepod/freebuff:latest vp run freebuff
 VP_IMAGE_QWEN=vibepod/qwen:latest vp run qwen
 VP_IMAGE_DSH=vibepod/dsh:latest vp run dsh
+VP_IMAGE_HERMES=vibepod/hermes:latest vp run hermes
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list
 ```

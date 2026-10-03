@@ -336,3 +336,19 @@ def test_list_allowed_dirs_empty(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(app, ["config", "list-allowed-dirs"])
     assert result.exit_code == 0
     assert "No directories" in result.stdout
+
+
+def test_default_config_includes_hermes_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+
+    hermes = config["agents"]["hermes"]
+
+    assert hermes["enabled"] is True
+    assert hermes["image"] == "vibepod/hermes:latest"
+    assert hermes["auto_pull"] is None
+    assert hermes["env"] == {}
+    assert hermes["volumes"] == []
+    # Unlike dsh, this integration publishes nothing.
+    assert hermes["ports"] == []
+    assert hermes["init"] == []

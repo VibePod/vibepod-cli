@@ -25,6 +25,8 @@ from vibepod.core.agents import (
     effective_agent_image,
     get_agent_spec,
     resolve_agent_name,
+    validate_llm_support,
+    validate_rootless_runtime,
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config, get_config_root
@@ -34,13 +36,23 @@ from vibepod.core.dash import apply_dash_if_enabled, target_from_labels
 from vibepod.core.dash import details as dash_details
 from vibepod.core.dash import report as dash_report
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
-from vibepod.core.herdr import PANE_LABEL, apply_herdr_if_enabled
+from vibepod.core.herdr import (
+    PANE_LABEL,
+    apply_herdr_if_enabled,
+    clear_pane_metadata,
+    pane_reporting_enabled,
+    release_agent,
+    report_pane_metadata,
+)
 from vibepod.core.launch import (
+    PROXY_CA_MOUNT_PATH,
+    agent_custom_volumes,
     agent_extra_volumes,
     agent_init_commands,
     agent_port_bindings,
     apply_overlay_if_enabled,
     apply_proxy_env,
+    check_custom_volume_targets,
     get_container_ip,
     host_identity_env,
     host_user,
@@ -53,6 +65,8 @@ from vibepod.core.launch import (
     update_container_mapping,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.provider_launch import prepare_launch
+from vibepod.core.provider_runtime import WRAPPED_AGENTS, bootstrap_volume, wrap_provider_command
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.tasks import (
     TASK_STATUS_CANCELLED,
@@ -367,6 +381,13 @@ def task_create_command(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    provider: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--provider",
+            help="Temporary model provider(s) for this launch (see `vp provider list`)",
+        ),
+    ] = None,
 ) -> None:
     """Start an agent task in the background and print its id."""
     task_create(
@@ -384,6 +405,7 @@ def task_create_command(
         no_dash=no_dash,
         ikwid=ikwid,
         profile=profile,
+        provider_names=provider,
         passthrough_args=_context_args(ctx),
     )
 
@@ -448,6 +470,13 @@ def task_run_command(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    provider: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--provider",
+            help="Temporary model provider(s) for this launch (see `vp provider list`)",
+        ),
+    ] = None,
 ) -> None:
     """Deprecated alias for `task create`."""
     task_create(
@@ -465,6 +494,7 @@ def task_run_command(
         no_dash=no_dash,
         ikwid=ikwid,
         profile=profile,
+        provider_names=provider,
         passthrough_args=_context_args(ctx),
         deprecated_alias=True,
     )
@@ -524,6 +554,7 @@ def task_create(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    provider_names: list[str] | None = None,
     passthrough_args: list[str] | None = None,
     deprecated_alias: bool = False,
 ) -> None:
@@ -549,6 +580,11 @@ def task_create(
         raise typer.Exit(1)
 
     spec = get_agent_spec(selected)
+    try:
+        validate_llm_support(selected, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     if not spec.headless_prefix and not spec.headless_command:
         supported = ", ".join(
             agent
@@ -570,6 +606,26 @@ def task_create(
     workspace_path = workspace.expanduser().resolve()
     if not workspace_path.exists() or not workspace_path.is_dir():
         raise typer.BadParameter(f"Workspace not found: {workspace_path}")
+
+    # Provider selection resolves before the allow-dir prompt: validation must
+    # fail before any interaction, and the prompt must never persist state for
+    # a launch that is about to be refused.
+    agent_cfg = config.get("agents", {}).get(selected, {})
+    provider_env: dict[str, str] = {}
+    provider_args: list[str] = []
+    if provider_names:
+        configured_env = {
+            **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
+            **parse_env_pairs(env or []),
+        }
+        try:
+            provider_launch = prepare_launch(selected, provider_names, configured_env)
+            provider_env = provider_launch.env
+            # Explicit passthrough model wins over the provider default (run-mode rule).
+            provider_args = provider_launch.arguments(passthrough_args)
+        except (ValueError, OSError) as exc:
+            error(str(exc) if isinstance(exc, ValueError) else "Cannot access provider credentials")
+            raise typer.Exit(1) from exc
 
     if is_protected_dir(workspace_path):
         error(
@@ -597,7 +653,6 @@ def task_create(
             error(f"Could not update allow list for '{workspace_path}': {exc}")
             raise typer.Exit(1) from exc
 
-    agent_cfg = config.get("agents", {}).get(selected, {})
     init_commands = agent_init_commands(selected, agent_cfg)
     agent_ports = agent_port_bindings(selected, agent_cfg) or None
     if agent_ports and spec.web_container_port is not None:
@@ -609,12 +664,14 @@ def task_create(
         agent_ports = {
             key: value for key, value in agent_ports.items() if key.split("/", 1)[0] != web_port
         } or None
+    custom_volumes = agent_custom_volumes(selected, agent_cfg, base_dir=workspace_path)
     merged_env = {
         **host_identity_env(),
         **terminal_env_defaults(),
         **spec.extra_env,
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **parse_env_pairs(env or []),
+        **provider_env,
     }
     if spec.headless_command:
         # No web UI in one-shot mode: without this the image entrypoint would
@@ -636,8 +693,9 @@ def task_create(
 
     # LLM env vars are applied; CLI model flag is NOT appended in task mode.
     # Users who need a specific model can pass it via passthrough args after `--`.
+    # An explicit --provider launch supersedes the legacy llm injection entirely.
     llm_cfg = config.get("llm", {})
-    if llm_cfg.get("enabled") and spec.llm_env_map:
+    if llm_cfg.get("enabled") and spec.llm_env_map and not provider_names:
         llm_values = {
             "base_url": str(llm_cfg.get("base_url", "")).strip(),
             "api_key": str(llm_cfg.get("api_key", "")).strip(),
@@ -660,6 +718,11 @@ def task_create(
 
     podman_probe = getattr(manager, "is_rootless_podman", None)
     rootless_podman = bool(podman_probe()) if callable(podman_probe) else False
+    try:
+        validate_rootless_runtime(selected, rootless_podman)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     agent_userns_mode = "keep-id" if rootless_podman else None
     if rootless_podman:
         merged_env["USER_UID"] = "0"
@@ -697,12 +760,16 @@ def task_create(
 
     base_command = spec.command
     entrypoint: list[str] | None = None
+    # Length of the resolved native entrypoint prefix in ``command``; the
+    # provider wrapper must sit after it so UID mapping still runs first.
+    native_prefix_len = 0
     if init_commands or (base_command is None):
         try:
             base_command = manager.resolve_launch_command(image=image, command=spec.command)
         except DockerClientError as exc:
             error(str(exc))
             raise typer.Exit(1) from exc
+        native_prefix_len = max(0, len(base_command) - len(spec.command or []))
         if init_commands:
             info(f"Applying {len(init_commands)} init command(s) before startup")
             entrypoint = init_entrypoint(init_commands)
@@ -717,15 +784,28 @@ def task_create(
     if spec.headless_command:
         # The one-shot invocation replaces the interactive command outright
         # (dsh runs `dsh web` interactively but `dsh --profile headless` one-shot).
-        command = list(spec.headless_command) + ikwid_prefix + [prompt] + passthrough_args
+        command = (
+            list(spec.headless_command) + ikwid_prefix + provider_args + [prompt] + passthrough_args
+        )
     else:
         command = (
             list(base_command or [])
             + ikwid_prefix
             + list(spec.headless_prefix or [])
+            + provider_args
             + [prompt]
             + passthrough_args
         )
+
+    provider_wrapped = bool(provider_names) and selected in WRAPPED_AGENTS
+    if provider_wrapped:
+        # Wrap last: the real agent argv travels in the environment, so image
+        # entrypoints that re-parse argv through `sh -c "$*"` cannot mangle
+        # quotes, braces, or prompt text.
+        prefix = 0 if spec.headless_command else native_prefix_len
+        wrapped, wrapper_env = wrap_provider_command(selected, command[prefix:])
+        command = command[:prefix] + wrapped
+        merged_env.update(wrapper_env)
 
     config_dir = agent_config_dir(selected, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -733,184 +813,220 @@ def task_create(
     extra_volumes = agent_extra_volumes(selected, config_dir)
     for host_path, _, _ in extra_volumes:
         Path(host_path).mkdir(parents=True, exist_ok=True)
+    if provider_wrapped:
+        # Mounted, not inlined: keeps the launch argv shell-safe for every image.
+        extra_volumes.append(bootstrap_volume(selected))
 
+    socket_mount_probe = getattr(manager, "supports_host_socket_mounts", None)
     herdr_volumes, herdr_env = apply_herdr_if_enabled(
         selected,
         config_dir,
         config,
         no_herdr=no_herdr,
+        mount_socket=bool(socket_mount_probe()) if callable(socket_mount_probe) else True,
     )
     extra_volumes.extend(herdr_volumes)
+    # Checked before the proxy is provisioned so a bad target leaves nothing
+    # to roll back; the proxy CA target is reserved up front for the same reason.
+    check_custom_volume_targets(
+        custom_volumes,
+        [
+            "/workspace",
+            spec.config_mount_path,
+            PROXY_CA_MOUNT_PATH,
+            *(target for _, target, _ in extra_volumes),
+        ],
+    )
+    extra_volumes.extend(custom_volumes)
+    # Host-side reporting works even when the socket cannot be mounted, so it
+    # is gated on the pane, not on the container wiring (matches `vp run`).
+    herdr_pane = pane_reporting_enabled(config, no_herdr=no_herdr)
     herdr_labels = (
         {PANE_LABEL: os.environ["HERDR_PANE_ID"]}
-        if herdr_volumes and os.environ.get("HERDR_PANE_ID")
+        if herdr_pane and os.environ.get("HERDR_PANE_ID")
         else {}
     )
-    # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
-    for key, value in herdr_env.items():
-        merged_env.setdefault(key, value)
-
-    dash_target, dash_env = apply_dash_if_enabled(
-        selected,
-        config_dir,
-        workspace_path,
-        config,
-        config_mount_path=spec.config_mount_path,
-        no_dash=no_dash,
-    )
-    for key, value in dash_env.items():
-        merged_env.setdefault(key, value)
-
-    proxy_cfg = config.get("proxy", {})
-    proxy_enabled = bool(proxy_cfg.get("enabled", True))
-    proxy_ca_dir_value = str(proxy_cfg.get("ca_dir", "")).strip()
-    proxy_ca_path_value = str(proxy_cfg.get("ca_path", "")).strip()
-    proxy_ca_dir = Path(proxy_ca_dir_value).expanduser().resolve() if proxy_ca_dir_value else None
-    proxy_ca_path = (
-        Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
-    )
-    proxy_db_path: Path | None = None
-    proxy_policy_id: str | None = None
-
-    if proxy_enabled:
-        proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
-        proxy_db_path = (
-            Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db")))
-            .expanduser()
-            .resolve()
-        )
-
-        actual_ca_dir = proxy_ca_dir or proxy_db_path.parent / "mitmproxy"
-        try:
-            provision_proxy(
-                manager,
-                image=proxy_image,
-                db_path=proxy_db_path,
-                ca_dir=actual_ca_dir,
-                network=network_name,
-                auto_clean=bool(config.get("auto_clean", True)),
-            )
-            proxy_policy_id = materialize_launch_policy(
-                manager,
-                config,
-                profile=active_profile,
-                workspace=workspace_path,
-            )
-        except (DockerClientError, ValueError) as exc:
-            error(str(exc))
-            raise typer.Exit(1) from exc
-
-        if proxy_ca_path:
-            deadline = time.time() + 10
-            while time.time() < deadline:
-                if proxy_ca_path.exists():
-                    break
-                time.sleep(0.25)
-
-        apply_proxy_env(merged_env, proxy_policy_id)
-
-        extra_volumes.append((str(actual_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
-
-    info(f"Starting task on {selected} with image {image}")
-    container_user = None
-    if not rootless_podman and spec.run_as_host_user:
-        container_user = host_user()
-    launch_labels = dict(herdr_labels)
-    launch_labels["vibepod.profile"] = active_profile
-    if proxy_policy_id is not None:
-        launch_labels["vibepod.proxy-policy"] = proxy_policy_id
-    if dash_target is not None:
-        launch_labels[DASH_AGENT_LABEL] = dash_target.agent
-        launch_labels[DASH_ID_LABEL] = dash_target.agent_id
     try:
-        container = manager.run_agent(
-            agent=selected,
-            image=image,
-            workspace=workspace_path,
-            config_dir=config_dir,
+        if herdr_pane:
+            report_pane_metadata(selected)
+        # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
+        for key, value in herdr_env.items():
+            merged_env.setdefault(key, value)
+
+        dash_target, dash_env = apply_dash_if_enabled(
+            selected,
+            config_dir,
+            workspace_path,
+            config,
             config_mount_path=spec.config_mount_path,
-            env=merged_env,
-            command=command,
-            auto_remove=False,  # tasks keep the container so logs/exit survive
-            name=name,
-            version=__version__,
-            network=network_name,
-            ports=agent_ports,
-            extra_volumes=extra_volumes,
-            platform=spec.platform,
-            user=container_user,
-            entrypoint=entrypoint,
-            userns_mode=agent_userns_mode,
-            extra_labels=launch_labels,
+            no_dash=no_dash,
         )
-    except Exception:
+        for key, value in dash_env.items():
+            merged_env.setdefault(key, value)
+
+        proxy_cfg = config.get("proxy", {})
+        proxy_enabled = bool(proxy_cfg.get("enabled", True))
+        proxy_ca_dir_value = str(proxy_cfg.get("ca_dir", "")).strip()
+        proxy_ca_path_value = str(proxy_cfg.get("ca_path", "")).strip()
+        proxy_ca_dir = (
+            Path(proxy_ca_dir_value).expanduser().resolve() if proxy_ca_dir_value else None
+        )
+        proxy_ca_path = (
+            Path(proxy_ca_path_value).expanduser().resolve() if proxy_ca_path_value else None
+        )
+        proxy_db_path: Path | None = None
+        proxy_policy_id: str | None = None
+
+        if proxy_enabled:
+            proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
+            proxy_db_path = (
+                Path(str(proxy_cfg.get("db_path", "~/.config/vibepod/proxy/proxy.db")))
+                .expanduser()
+                .resolve()
+            )
+
+            actual_ca_dir = proxy_ca_dir or proxy_db_path.parent / "mitmproxy"
+            try:
+                provision_proxy(
+                    manager,
+                    image=proxy_image,
+                    db_path=proxy_db_path,
+                    ca_dir=actual_ca_dir,
+                    network=network_name,
+                    auto_clean=bool(config.get("auto_clean", True)),
+                )
+                proxy_policy_id = materialize_launch_policy(
+                    manager,
+                    config,
+                    profile=active_profile,
+                    workspace=workspace_path,
+                )
+            except (DockerClientError, ValueError) as exc:
+                error(str(exc))
+                raise typer.Exit(1) from exc
+
+            if proxy_ca_path:
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    if proxy_ca_path.exists():
+                        break
+                    time.sleep(0.25)
+
+            apply_proxy_env(merged_env, proxy_policy_id)
+
+            extra_volumes.append((str(actual_ca_dir), PROXY_CA_MOUNT_PATH, "ro"))
+
+        info(f"Starting task on {selected} with image {image}")
+        container_user = None
+        if not rootless_podman and spec.run_as_host_user:
+            container_user = host_user()
+        launch_labels = dict(herdr_labels)
+        launch_labels["vibepod.profile"] = active_profile
+        if provider_names:
+            launch_labels["vibepod.provider"] = ",".join(provider_names)
         if proxy_policy_id is not None:
-            remove_container_policy(config, proxy_policy_id)
-        raise
-
-    container.reload()
-    if container.status not in {"running", "created"}:
-        recent = container.logs(tail=50).decode("utf-8", errors="replace")
-        error("Container exited immediately after start.")
-        if recent.strip():
-            print(recent)
+            launch_labels["vibepod.proxy-policy"] = proxy_policy_id
         if dash_target is not None:
-            dash_report(
-                dash_target,
-                "error",
-                event="task.start",
-                message="container exited immediately after start",
-                cwd=workspace_path,
-            )
-        raise typer.Exit(1)
-
-    if network and network != network_name:
+            launch_labels[DASH_AGENT_LABEL] = dash_target.agent
+            launch_labels[DASH_ID_LABEL] = dash_target.agent_id
         try:
-            manager.connect_network(container, network)
-            info(f"Connected to additional network: {network}")
-        except DockerClientError as exc:
-            warning(str(exc))
-
-    if proxy_db_path is not None:
-        container_ip = get_container_ip(container, network_name)
-        if container_ip:
-            mapping_path = proxy_db_path.parent / "containers.json"
-            update_container_mapping(
-                mapping_path,
-                container_ip,
-                container.id,
-                container.name,
-                selected,
-                policy_id=proxy_policy_id,
-                profile=active_profile,
+            container = manager.run_agent(
+                agent=selected,
+                image=image,
+                workspace=workspace_path,
+                config_dir=config_dir,
+                config_mount_path=spec.config_mount_path,
+                env=merged_env,
+                command=command,
+                auto_remove=False,  # tasks keep the container so logs/exit survive
+                name=name,
+                version=__version__,
+                network=network_name,
+                ports=agent_ports,
+                extra_volumes=extra_volumes,
+                platform=spec.platform,
+                user=container_user,
+                entrypoint=entrypoint,
+                userns_mode=agent_userns_mode,
+                extra_labels=launch_labels,
             )
+        except Exception:
+            if proxy_policy_id is not None:
+                remove_container_policy(config, proxy_policy_id)
+            raise
 
-    state = container.attrs.get("State", {}) or {}
-    if not isinstance(state, dict):
-        state = {}
-    initial_status = TASK_STATUS_RUNNING if container.status == "running" else TASK_STATUS_STARTING
+        container.reload()
+        if container.status not in {"running", "created"}:
+            recent = container.logs(tail=50).decode("utf-8", errors="replace")
+            error("Container exited immediately after start.")
+            if recent.strip():
+                print(recent)
+            if dash_target is not None:
+                dash_report(
+                    dash_target,
+                    "error",
+                    event="task.start",
+                    message="container exited immediately after start",
+                    cwd=workspace_path,
+                )
+            raise typer.Exit(1)
 
-    store = _task_store()
-    try:
-        record = store.create(
-            agent=selected,
-            prompt=prompt,
-            workspace=str(workspace_path),
-            container_id=container.id,
-            container_name=container.name,
-            image=image,
-            vibepod_version=__version__,
-            status=initial_status,
-            started_at=_state_timestamp(state, "StartedAt"),
+        if network and network != network_name:
+            try:
+                manager.connect_network(container, network)
+                info(f"Connected to additional network: {network}")
+            except DockerClientError as exc:
+                warning(str(exc))
+
+        if proxy_db_path is not None:
+            container_ip = get_container_ip(container, network_name)
+            if container_ip:
+                mapping_path = proxy_db_path.parent / "containers.json"
+                update_container_mapping(
+                    mapping_path,
+                    container_ip,
+                    container.id,
+                    container.name,
+                    selected,
+                    policy_id=proxy_policy_id,
+                    profile=active_profile,
+                )
+
+        state = container.attrs.get("State", {}) or {}
+        if not isinstance(state, dict):
+            state = {}
+        initial_status = (
+            TASK_STATUS_RUNNING if container.status == "running" else TASK_STATUS_STARTING
         )
-    except Exception as exc:
-        error(f"Failed to persist task record: {exc}. Stopping container {container.name}.")
+
+        store = _task_store()
         try:
-            manager.stop_container(container.id, force=True)
-            container.remove(force=True)
-        except Exception as cleanup_exc:
-            warning(f"Container {container.name} may be orphaned: {cleanup_exc}")
-        raise typer.Exit(1) from exc
+            record = store.create(
+                agent=selected,
+                prompt=prompt,
+                workspace=str(workspace_path),
+                container_id=container.id,
+                container_name=container.name,
+                image=image,
+                vibepod_version=__version__,
+                status=initial_status,
+                started_at=_state_timestamp(state, "StartedAt"),
+            )
+        except Exception as exc:
+            error(f"Failed to persist task record: {exc}. Stopping container {container.name}.")
+            try:
+                manager.stop_container(container.id, force=True)
+                container.remove(force=True)
+            except Exception as cleanup_exc:
+                warning(f"Container {container.name} may be orphaned: {cleanup_exc}")
+            raise typer.Exit(1) from exc
+    except BaseException:
+        # A failed launch has no task lifecycle to clear its host-side report.
+        # Include interruption and keep reports only once the task is persisted.
+        if herdr_pane:
+            release_agent(selected)
+            clear_pane_metadata(selected)
+        raise
     if dash_target is not None:
         # Reported here rather than right after start so the card carries the
         # task id — the handle for `vp task logs` / `vp task cancel`. A task is

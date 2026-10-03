@@ -40,6 +40,7 @@ def _running_rows(containers: list[Any], config: dict[str, Any]) -> list[dict[st
         if not agent or status != "running":
             continue
         profile = labels.get("vibepod.profile", "-")
+        provider = labels.get("vibepod.provider", "-")
         policy_id = labels.get("vibepod.proxy-policy")
         proxy_mode = "-"
         if policy_id:
@@ -54,6 +55,7 @@ def _running_rows(containers: list[Any], config: dict[str, Any]) -> list[dict[st
                 "agent": agent,
                 "container": getattr(container, "name", "-"),
                 "profile": profile,
+                "provider": provider,
                 "proxy_mode": proxy_mode,
                 "context": labels.get("vibepod.workspace", "-"),
             },
@@ -156,6 +158,7 @@ def list_agents(
     running_table.add_column("AGENT", style="cyan")
     running_table.add_column("CONTAINER", style="magenta")
     running_table.add_column("PROFILE")
+    running_table.add_column("PROVIDER")
     running_table.add_column("PROXY MODE")
     running_table.add_column("CONTEXT")
 
@@ -165,6 +168,7 @@ def list_agents(
                 row["agent"],
                 row["container"],
                 row["profile"],
+                row["provider"],
                 row["proxy_mode"],
                 row["context"],
             )
