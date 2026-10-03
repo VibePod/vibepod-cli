@@ -36,3 +36,8 @@ Build the static docs site:
 ```bash
 mkdocs build
 ```
+
+## Snap releases
+
+See [Snap distribution](snap.md#build-validate-and-release) for the recipe,
+installed-package validation, Store setup and release channels.
