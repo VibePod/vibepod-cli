@@ -229,7 +229,7 @@ def _reference_namespace(reference: str) -> str | None:
     return parts[0]
 
 
-def _parse_image_name(image: str) -> tuple[str, str | None]:
+def parse_image_name(image: str) -> tuple[str, str | None]:
     """Parse a full image string into repository and tag/digest."""
     if "@" in image:
         repository, tag = image.split("@", 1)
@@ -329,7 +329,7 @@ class DockerManager:
 
         from vibepod.utils.console import console
 
-        repository, tag = _parse_image_name(image)
+        repository, tag = parse_image_name(image)
         try:
             response = self.client.api.pull(repository, tag=tag, stream=True, decode=True)
         except APIError as exc:

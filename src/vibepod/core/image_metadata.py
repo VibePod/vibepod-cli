@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Final
 
-from vibepod.core.docker import _parse_image_name
+from vibepod.core.docker import parse_image_name
 
 AGENT_VERSION_LABELS: Final = (
     "vibepod.agent.version",
@@ -37,7 +37,7 @@ def collect_image_metadata(container: object, image: str) -> ImageMetadata:
     if _BARE_IMAGE_ID.fullmatch(image):
         image_tag = None
     else:
-        _, image_tag = _parse_image_name(image)
+        _, image_tag = parse_image_name(image)
 
     image_hash: str | None = None
     agent_version: str | None = None
