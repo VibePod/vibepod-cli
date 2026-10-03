@@ -2,6 +2,9 @@
 
 This page covers local setup and common commands for contributing to VibePod.
 
+The [VP-149 bubblewrap evaluation](bubblewrap.md) records the no-go decision for
+an additional process sandbox and the prerequisites for reconsidering it.
+
 ## Prerequisites
 
 - Python 3.10+

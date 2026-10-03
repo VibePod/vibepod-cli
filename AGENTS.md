@@ -34,6 +34,12 @@ Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
 
+## Process sandbox evaluation
+
+VP-149's bubblewrap no-go decision and reconsideration criteria are recorded in
+`docs/bubblewrap.md`. A nested sandbox must retain outer runtime confinement;
+enabling host user-namespace sysctls alone does not establish compatibility.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

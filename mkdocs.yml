@@ -65,6 +65,7 @@ nav:
   - Herdr integration: herdr.md
   - Editor integration (ACP): acp.md
   - Configuration: configuration.md
+  - Bubblewrap evaluation: bubblewrap.md
   - LLM Integration: llm.md
   - Badge: badge.md
   - External tools: integrations.md
