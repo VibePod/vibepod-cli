@@ -42,7 +42,7 @@ networks:
 
 - `external: true` makes compose join the network instead of creating its
   own. The network has to exist first: run any agent once (`vp run claude`)
-  or create it by hand with `docker network create vibepod-network`. If you
+  or create it by hand with `docker network create <network>`. If you
   changed the `network:` key in your VibePod config, tell the tool's compose
   file which one to join by setting `VIBEPOD_NETWORK` when you run
   `docker compose up` — it only drives the interpolation above; VibePod
@@ -503,8 +503,9 @@ Then, in the agent:
 ## Verifying the wiring
 
 ```bash
-# use your `network:` value if you changed it (see `vp config show`)
-docker network inspect vibepod-network --format '{{range .Containers}}{{.Name}} {{end}}'
+# VIBEPOD_NETWORK as for the compose files: your `network:` value (see `vp config show`)
+docker network inspect "${VIBEPOD_NETWORK:-vibepod-network}" \
+  --format '{{range .Containers}}{{.Name}} {{end}}'
 vp config show            # merged config: env, llm and init sections
 vp logs start             # requests to a sidecar alias appear like any other traffic
 ```
