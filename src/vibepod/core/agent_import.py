@@ -356,6 +356,28 @@ def _has_symlink_component(path: Path, root: Path) -> bool:
 _DEST_SYMLINK_REASON = "destination path contains a symlink, not written"
 
 
+def _anchor(relative: str, roots: tuple[AgentRoot, ...]) -> str:
+    """The agent root holding *relative*, or *relative* itself when no root does."""
+    for root in roots:
+        if not root.source or relative == root.source or relative.startswith(f"{root.source}/"):
+            return root.source
+    return relative
+
+
+def _source_dir(source_root: Path, relative: str) -> Path:
+    """*relative* under *source_root*, followed through symlinks on the way there.
+
+    Dotfile managers (stow, chezmoi, ...) commonly make an agent directory, or a
+    parent such as ``~/.config``, a symlink. That one hop is resolved here; the
+    per-file symlink rules then apply relative to the resolved directory, so
+    nothing inside it can point back out.
+    """
+    path = source_root / relative
+    if _has_symlink_component(path, source_root):
+        return path.resolve()
+    return path
+
+
 def plan_import(
     agent: str,
     source_root: Path,
@@ -391,8 +413,20 @@ def plan_import(
         if dest.exists():
             conflicts.append(planned)
 
+    roots = agent_roots(agent) if unclassified_roots is None else unclassified_roots
+    # Each agent root is resolved once; entries outside every root (the shared
+    # skills directory) are their own anchor.
+    anchor_dirs: dict[str, Path] = {}
+
+    def locate(relative: str) -> tuple[Path, Path]:
+        anchor = _anchor(relative, roots)
+        if anchor not in anchor_dirs:
+            anchor_dirs[anchor] = _source_dir(source_root, anchor)
+        rest = relative[len(anchor) :].lstrip("/") if anchor else relative
+        return anchor_dirs[anchor] / rest, anchor_dirs[anchor]
+
     for entry in resolved_entries:
-        entry_root = source_root / entry.source
+        entry_root, anchor_dir = locate(entry.source)
         entry_root_is_dir = entry_root.is_dir() and not entry_root.is_symlink()
         for path in _iter_files(entry_root):
             relative = path.relative_to(entry_root).as_posix() if entry_root_is_dir else path.name
@@ -401,7 +435,7 @@ def plan_import(
             if path in claimed:
                 continue
             claimed.add(path)
-            if path.is_symlink() or _has_symlink_component(path, source_root):
+            if path.is_symlink() or _has_symlink_component(path, anchor_dir):
                 skipped.append(SkippedPath(path, "symlink, not followed"))
                 continue
             category = entry.category
@@ -412,16 +446,15 @@ def plan_import(
             )
             add(path, dest, category)
 
-    roots = agent_roots(agent) if unclassified_roots is None else unclassified_roots
     unclassified: list[Path] = []
-    for path, root in _unclassified(source_root, roots, claimed):
+    located = [(root, locate(root.source)[0]) for root in roots]
+    for path, root, base in _unclassified(located, claimed):
         if "other" not in categories:
             unclassified.append(path)
             continue
         # A file no entry claims is still a credential when its name says so.
         category = "credentials" if _looks_like_credential(path.name) else "other"
-        root_relative = path.relative_to(source_root / root.source)
-        add(path, dest_root / root.dest / root_relative, category)
+        add(path, dest_root / root.dest / path.relative_to(base), category)
     return ImportPlan(agent, source_root, dest_root, files, skipped, conflicts, unclassified)
 
 
@@ -500,21 +533,21 @@ def _copy_file(planned: PlannedFile, dest_root: Path) -> None:
 
 
 def _unclassified(
-    source_root: Path,
-    roots: tuple[AgentRoot, ...],
+    roots: list[tuple[AgentRoot, Path]],
     claimed: set[Path],
-) -> list[tuple[Path, AgentRoot]]:
-    """Files under *roots* that no entry claimed, each with the root it was found in."""
-    found: dict[Path, AgentRoot] = {}
-    for root in roots:
-        base = source_root / root.source
+) -> list[tuple[Path, AgentRoot, Path]]:
+    """Files under *roots* that no entry claimed, with the root and directory they are in."""
+    found: dict[Path, tuple[AgentRoot, Path]] = {}
+    for root, base in roots:
         for path in _iter_files(base):
             if path in claimed or path in found or path.is_symlink():
                 continue
+            if _has_symlink_component(path, base):
+                continue
             if _is_excluded(path.relative_to(base).as_posix(), root.exclude):
                 continue
-            found[path] = root
-    return sorted(found.items())
+            found[path] = (root, base)
+    return [(path, root, base) for path, (root, base) in sorted(found.items())]
 
 
 #: Config files worth linting for host paths that will not resolve in a pod.
@@ -533,7 +566,7 @@ def scan_host(home: Path) -> dict[str, list[Path]]:
         roots: list[Path] = []
         for root in agent_roots(agent):
             candidate = home / root.source
-            if _iter_files(candidate):
+            if _iter_files(_source_dir(home, root.source)):
                 roots.append(candidate)
         if roots:
             found[agent] = roots

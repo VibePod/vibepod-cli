@@ -11,6 +11,7 @@ import pytest
 from vibepod.constants import SUPPORTED_AGENTS
 from vibepod.core.agent_import import (
     AGENT_ROOTS,
+    ALL_CATEGORIES,
     DEFAULT_CATEGORIES,
     IMPORT_SPECS,
     OPT_IN_CATEGORIES,
@@ -303,6 +304,65 @@ def test_plan_skips_symlinks(tmp_path: Path) -> None:
 
     assert not plan.files
     assert any("symlink" in s.reason for s in plan.skipped)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
+def test_symlinked_agent_directory_is_followed(tmp_path: Path) -> None:
+    """A dotfile manager's symlinked ~/.claude is imported, not skipped file by file."""
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    dotfiles = tmp_path / "dotfiles" / "claude"
+    _write(dotfiles / "settings.json", "{}")
+    _write(dotfiles / "commands" / "ship.md", "ship it")
+    _write(dotfiles / "ide" / "state.json", "{}")
+    home.mkdir()
+    (home / ".claude").symlink_to(dotfiles, target_is_directory=True)
+
+    plan = plan_import("claude", home, dest, DEFAULT_CATEGORIES | {"other"})
+
+    assert plan.skipped == []
+    assert sorted((f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files) == [
+        ("other", "ide/state.json"),
+        ("settings", "settings.json"),
+        ("skills", "commands/ship.md"),
+    ]
+    result = apply_import(plan, force=False)
+    assert result.copied == 3
+    assert (dest / "commands" / "ship.md").read_text() == "ship it"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
+def test_symlinked_parent_of_the_agent_directory_is_followed(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(tmp_path / "dotfiles" / "config" / "opencode" / "opencode.json", "{}")
+    home.mkdir()
+    (home / ".config").symlink_to(tmp_path / "dotfiles" / "config", target_is_directory=True)
+
+    plan = plan_import("opencode", home, dest, DEFAULT_CATEGORIES)
+
+    assert [f.dest.relative_to(dest).as_posix() for f in plan.files] == [
+        ".config/opencode/opencode.json",
+    ]
+    assert scan_host(home) == {"opencode": [home / ".config" / "opencode"]}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
+def test_symlinks_inside_a_followed_agent_directory_are_still_skipped(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    dotfiles = tmp_path / "dotfiles" / "claude"
+    _write(tmp_path / "outside" / "secret.json", "s")
+    _write(tmp_path / "outside" / "cmds" / "leak.md", "s")
+    dotfiles.mkdir(parents=True)
+    (dotfiles / "settings.json").symlink_to(tmp_path / "outside" / "secret.json")
+    (dotfiles / "commands").symlink_to(tmp_path / "outside" / "cmds", target_is_directory=True)
+    (dotfiles / "stray.json").symlink_to(tmp_path / "outside" / "secret.json")
+    home.mkdir()
+    (home / ".claude").symlink_to(dotfiles, target_is_directory=True)
+
+    plan = plan_import("claude", home, dest, ALL_CATEGORIES)
+
+    assert plan.files == []
+    assert len(plan.skipped) == 2
+    assert all("symlink" in s.reason for s in plan.skipped)
 
 
 def test_plan_reports_unclassified_files(tmp_path: Path) -> None:

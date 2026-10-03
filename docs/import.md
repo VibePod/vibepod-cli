@@ -96,10 +96,18 @@ Safety rules, in order:
 3. `--force` overwrites exactly those files and leaves everything else in place.
    It never wipes the directory.
 
-Symlinks in the source are never followed and never copied; each one is
-reported. Nothing is written through a symlink in the destination either: the
-agent directory is mounted read-write into its container, so such a file is
-reported and left alone.
+Symlinks inside the source are never followed and never copied; each one is
+reported. The one exception is the agent directory itself (or a parent such as
+`~/.config`): when a dotfile manager such as stow or chezmoi has made it a
+symlink, it is resolved once and imported from its target, with the same rule
+applied to everything inside it. Nothing is written through a symlink in the
+destination: the agent directory is mounted read-write into its container, so
+such a file is reported and left alone.
+
+If everything found was skipped (only credentials without `--with-credentials`,
+only symlinks, only unrecognized files without `--with-other`), the run says
+why and exits non-zero instead of reporting an import of zero files; a
+`--dry-run` only warns.
 
 Each file is written to a temporary file and renamed into place, so a single
 destination file is never left half-written. Execute bits are kept, so hook
