@@ -47,6 +47,10 @@ class FakeBoard:
     max_review_rounds: int = 3
     # Every review claim, open or ended, oldest first.
     reviews: list[dict[str, Any]] = field(default_factory=list)
+    # False plays a board from before review workers, which ignores the claim's mode.
+    reviews_supported: bool = True
+    # A verdict the board refuses as invalid.
+    refused_verdict: str | None = None
     # Answers every request with a redirect to this URL.
     redirect: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -160,7 +164,7 @@ class FakeBoard:
     def _claim(self, body: dict[str, Any]) -> tuple[int, Any]:
         if self.paused:
             return 200, {"claimed": False, "paused": True, "reason": self.paused}
-        if body.get("mode") == "review":
+        if body.get("mode") == "review" and self.reviews_supported:
             return self._claim_review(body)
         labels = body.get("labels") or []
         if body.get("task"):
@@ -336,7 +340,13 @@ class FakeBoard:
         verdict = body.get("verdict")
         note = (body.get("note") or "").strip()
         sha = (body.get("headSha") or "").strip().lower() or None
-        if verdict not in ("approve", "rework", "needs_input", "failed", "released"):
+        if verdict == self.refused_verdict or verdict not in (
+            "approve",
+            "rework",
+            "needs_input",
+            "failed",
+            "released",
+        ):
             return 400, {"error": "Invalid request body"}
         if verdict in ("rework", "needs_input") and not note:
             return 400, {"error": f"A note is required for {verdict}"}
@@ -441,6 +451,10 @@ class FakeBoard:
             for card in self.cards.values():
                 if card.get("claimedAt") and card.get("assignee") == worker.get("name"):
                     card.update(column="planned", assignee=None, claimedAt=None)
+            # And its open reviews end.
+            for review in self.reviews:
+                if review["open"] and review["reviewer"] == worker.get("name"):
+                    self._end_review(review, f"Worker {worker.get('name')} signed off")
         worker["status"] = "offline"
         return 200, {"item": worker}
 
