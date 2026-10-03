@@ -1262,6 +1262,27 @@ def test_refs_others_move_during_the_run_are_left_alone(
     assert git(repo, "log", "-1", "--format=%s", "vp-9") == "The other worker's agent"
 
 
+@pytest.mark.parametrize("verify", [PASSES, FAILS], ids=["passing", "failing"])
+def test_what_the_verify_command_moved_is_restored_too(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    verify: str,
+) -> None:
+    board.add_task("Verified by code that overreaches")
+    main_before = git(repo, "rev-parse", "main")
+    moves_main = "import subprocess; subprocess.run('git update-ref refs/heads/main HEAD'.split())"
+    command = f"{python(moves_main)} && {verify}"
+
+    work(server, FakeRunner(), repo, once=True, verify=command)
+
+    assert git(repo, "rev-parse", "main") == main_before
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith("The agent moved main; restored them")
+
+
 def test_a_moved_branch_that_cannot_be_told_from_the_users_work_is_left_and_blocks(
     board: FakeBoard,
     server: FakeBoardServer,

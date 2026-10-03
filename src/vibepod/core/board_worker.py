@@ -867,6 +867,10 @@ class BoardWorker:
         if self.options.verify:
             self._set("working", step=STEP_VERIFYING)
             result.verify = self._verify(worktree.path, deadline)
+            # The verify command ran code the agent wrote, which may have changed what the
+            # agent itself must not: checked again before git on the host goes on.
+            with self._keepalive():
+                self._check_after_run(repo, worktree, pointers, refs, checked_out)
             if self._ended_early(result.verify.ended, result):
                 return
             if result.verify.exit_code != 0:
