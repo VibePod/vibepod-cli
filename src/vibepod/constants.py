@@ -53,8 +53,15 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "h": "hermes",
 }
 
-AGENT_ALIASES: dict[str, str] = {
+#: Former canonical agent ids. Existing state (config keys, overlay dirs,
+#: container labels, task rows) may still carry them, so lookups by the
+#: canonical id must also match these.
+LEGACY_AGENT_IDS: dict[str, str] = {
     "devstral": "vibe",
+}
+
+AGENT_ALIASES: dict[str, str] = {
+    **LEGACY_AGENT_IDS,
     # The issue that added this agent calls it "qwen-cli"; the runtime
     # binary and image are `qwen` (Qwen Code, npm @qwen-code/qwen-code),
     # so `qwen` is the canonical id and `qwen-cli` is accepted as an alias.
@@ -62,6 +69,15 @@ AGENT_ALIASES: dict[str, str] = {
     "deepseek": "dsh",
     "deepseek-harness": "dsh",
 }
+
+
+def agent_ids(agent: str) -> tuple[str, ...]:
+    """Canonical *agent* id followed by any legacy ids it was stored under."""
+    return (
+        agent,
+        *(legacy for legacy, canonical in LEGACY_AGENT_IDS.items() if canonical == agent),
+    )
+
 
 IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_NAMESPACE",
