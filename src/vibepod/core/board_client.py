@@ -16,6 +16,17 @@ from dataclasses import dataclass
 from typing import Any
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses redirects: they would carry the token to another host, and turn a write into a
+    body-less GET that looks delivered. urllib then raises the 3xx as an `HTTPError`."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class BoardApiError(Exception):
     """A board request that failed; `status` is None when the board could not be reached."""
 
@@ -88,12 +99,12 @@ class BoardClient:
             url += "?" + urllib.parse.urlencode(params)
         data = json.dumps(body).encode() if body is not None else None
         request = urllib.request.Request(url, data=data, method=method)
-        request.add_header("Authorization", f"Bearer {self.token}")
+        request.add_unredirected_header("Authorization", f"Bearer {self.token}")
         request.add_header("Accept", "application/json")
         if data is not None:
             request.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with _OPENER.open(request, timeout=self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             raise BoardApiError(_error_message(exc), exc.code) from exc

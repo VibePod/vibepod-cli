@@ -32,6 +32,8 @@ class FakeBoard:
     on_heartbeat: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
     # "METHOD /path/prefix" -> how many requests to fail with 503 before answering.
     failures: dict[str, int] = field(default_factory=dict)
+    # Answers every request with a redirect to this URL.
+    redirect: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     # --- setup ----------------------------------------------------------------------
@@ -203,6 +205,12 @@ class _Handler(BaseHTTPRequestHandler):
     def _respond(self) -> None:
         if self.headers.get("Authorization") != f"Bearer {TOKEN}":
             self._send(401, {"error": "Authentication required"})
+            return
+        if self.board.redirect:
+            self.send_response(302)
+            self.send_header("Location", self.board.redirect)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length)) if length else None

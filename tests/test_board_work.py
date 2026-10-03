@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1193,6 +1194,40 @@ def test_the_client_names_the_board_error(board: FakeBoard, server: FakeBoardSer
     with pytest.raises(BoardApiError) as unauthorised:
         BoardClient(server.url, "wrong").claim("VP", "someone")
     assert unauthorised.value.status == 401
+
+
+def test_the_client_refuses_redirects_and_keeps_the_token(board: FakeBoard) -> None:
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    received: list[str | None] = []
+
+    class Elsewhere(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            received.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        do_POST = do_GET
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    elsewhere = ThreadingHTTPServer(("127.0.0.1", 0), Elsewhere)
+    host, port = elsewhere.server_address[:2]
+    board.redirect = f"http://{host}:{port}/steal"
+    thread = threading.Thread(target=elsewhere.serve_forever, kwargs={"poll_interval": 0.05})
+    thread.start()
+    try:
+        with FakeBoardServer(board) as server, pytest.raises(BoardApiError) as refused:
+            BoardClient(server.url, TOKEN).claim("VP", "someone")
+    finally:
+        elsewhere.shutdown()
+        elsewhere.server_close()
+        thread.join(timeout=5)
+    assert refused.value.status == 302
+    assert received == []
 
 
 def test_the_client_reports_an_unreachable_board() -> None:
