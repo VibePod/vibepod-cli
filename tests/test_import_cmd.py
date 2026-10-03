@@ -1,0 +1,455 @@
+"""Tests for `vp import`."""
+
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from vibepod.cli import app
+from vibepod.commands import import_cmd
+from vibepod.core.docker import DockerClientError
+
+runner = CliRunner()
+
+
+class _FakeContainer:
+    def __init__(self, name: str, labels: dict[str, str]) -> None:
+        self.name = name
+        self.labels = labels
+
+
+class _FakeDockerManager:
+    containers: list[_FakeContainer] = []
+
+    def list_managed(self, all_containers: bool = False) -> list[_FakeContainer]:  # noqa: ARG002
+        return self.containers
+
+
+@pytest.fixture(autouse=True)
+def no_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the running-container check hermetic: no engine by default."""
+
+    def _unavailable() -> None:
+        raise DockerClientError("Docker is not available")
+
+    monkeypatch.setattr(import_cmd, "DockerManager", _unavailable)
+
+
+@pytest.fixture()
+def config_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    root = tmp_path / "vibepod"
+    monkeypatch.setenv("VP_CONFIG_DIR", str(root))
+    monkeypatch.delenv("VP_PROFILE", raising=False)
+    return root
+
+
+@pytest.fixture()
+def host_home(tmp_path: Path) -> Path:
+    home = tmp_path / "home"
+    (home / ".claude" / "commands").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text('{"model": "opus"}')
+    (home / ".claude" / "commands" / "ship.md").write_text("ship it")
+    (home / ".claude" / ".credentials.json").write_text("{}")
+    return home
+
+
+def test_import_copies_into_the_default_profile(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home)])
+
+    assert result.exit_code == 0, result.output
+    agent_dir = config_root / "agents" / "claude"
+    assert (agent_dir / "settings.json").read_text() == '{"model": "opus"}'
+    assert (agent_dir / "commands" / "ship.md").exists()
+    assert not (agent_dir / ".credentials.json").exists()
+    assert "--with-credentials" in result.output
+
+
+def test_dry_run_writes_nothing(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home), "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert not (config_root / "agents" / "claude").exists()
+    assert "settings.json" in result.output
+
+
+def test_existing_destination_aborts_until_forced(config_root: Path, host_home: Path) -> None:
+    agent_dir = config_root / "agents" / "claude"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "settings.json").write_text("old")
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home)])
+    assert result.exit_code == 1
+    assert "--force" in result.output
+    assert (agent_dir / "settings.json").read_text() == "old"
+
+    forced = runner.invoke(app, ["import", "claude", "--home", str(host_home), "--force"])
+    assert forced.exit_code == 0, forced.output
+    assert (agent_dir / "settings.json").read_text() == '{"model": "opus"}'
+
+
+def test_missing_destination_profile_names_the_fix(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["import", "claude", "--home", str(host_home), "--to-profile", "work"],
+    )
+    assert result.exit_code == 1
+    assert "vp profile create work" in result.output
+
+
+def test_create_profile_flag_creates_it(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["import", "claude", "--home", str(host_home), "--to-profile", "work", "--create-profile"],
+    )
+    assert result.exit_code == 0, result.output
+    assert (config_root / "profiles" / "work" / "agents" / "claude" / "settings.json").exists()
+
+
+def test_dry_run_does_not_create_the_profile(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "import",
+            "claude",
+            "--home",
+            str(host_home),
+            "--to-profile",
+            "work",
+            "--create-profile",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "would be created" in result.output
+    assert "settings.json" in result.output
+    assert not (config_root / "profiles" / "work").exists()
+
+
+def test_only_narrows_the_selection(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home), "--only", "skills"])
+    assert result.exit_code == 0, result.output
+    agent_dir = config_root / "agents" / "claude"
+    assert (agent_dir / "commands" / "ship.md").exists()
+    assert not (agent_dir / "settings.json").exists()
+
+
+def test_unknown_category_is_rejected(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home), "--only", "bogus"])
+    assert result.exit_code == 1
+    assert "bogus" in result.output
+
+
+def test_unknown_agent_lists_supported_agents(config_root: Path) -> None:
+    result = runner.invoke(app, ["import", "nope"])
+    assert result.exit_code == 1
+    assert "claude" in result.output
+
+
+def test_no_installation_found_names_checked_paths(config_root: Path, tmp_path: Path) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = runner.invoke(app, ["import", "claude", "--home", str(empty)])
+    assert result.exit_code == 1
+    # Rich wraps long temp paths (Windows runners), so match across line breaks.
+    assert str(empty / ".claude") in result.output.replace("\n", "")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
+def test_symlinked_agent_directory_is_imported(config_root: Path, tmp_path: Path) -> None:
+    dotfiles = tmp_path / "dotfiles" / "claude"
+    (dotfiles / "commands").mkdir(parents=True)
+    (dotfiles / "settings.json").write_text('{"model": "opus"}')
+    (dotfiles / "commands" / "ship.md").write_text("ship it")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").symlink_to(dotfiles, target_is_directory=True)
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(home)])
+
+    assert result.exit_code == 0, result.output
+    agent_dir = config_root / "agents" / "claude"
+    assert (agent_dir / "settings.json").read_text() == '{"model": "opus"}'
+    assert (agent_dir / "commands" / "ship.md").read_text() == "ship it"
+    assert "Imported 2 file(s)" in result.output.replace("\n", "")
+
+
+def test_nothing_imported_because_of_skips_fails(config_root: Path, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text("{}")
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(home)])
+
+    assert result.exit_code == 1, result.output
+    output = result.output.replace("\n", "")
+    assert "Nothing was imported" in output
+    assert "--with-credentials" in output
+    assert "Imported 0" not in output
+    assert not (config_root / "agents" / "claude" / ".credentials.json").exists()
+
+
+def test_dry_run_warns_when_nothing_would_be_imported(config_root: Path, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude" / "ide").mkdir(parents=True)
+    (home / ".claude" / "ide" / "state.json").write_text("{}")
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(home), "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace("\n", "")
+    assert "Nothing would be imported" in output
+    assert "--with-other" in output
+
+
+def test_vibe_home_is_honoured_for_the_default_home(
+    config_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    custom = tmp_path / "custom-vibe"
+    custom.mkdir()
+    (custom / "config.toml").write_text('active_model = "devstral"')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("VIBE_HOME", str(custom))
+
+    result = runner.invoke(app, ["import", "devstral"])
+
+    assert result.exit_code == 0, result.output
+    imported = config_root / "agents" / "devstral" / ".vibe" / "config.toml"
+    assert imported.read_text() == 'active_model = "devstral"'
+
+
+def test_explicit_home_ignores_vibe_home(
+    config_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    (home / ".vibe").mkdir(parents=True)
+    (home / ".vibe" / "config.toml").write_text("from-home")
+    custom = tmp_path / "custom-vibe"
+    custom.mkdir()
+    (custom / "config.toml").write_text("from-vibe-home")
+    monkeypatch.setenv("VIBE_HOME", str(custom))
+
+    result = runner.invoke(app, ["import", "devstral", "--home", str(home)])
+
+    assert result.exit_code == 0, result.output
+    imported = config_root / "agents" / "devstral" / ".vibe" / "config.toml"
+    assert imported.read_text() == "from-home"
+
+
+def test_bare_import_scans_the_host(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(app, ["import", "--home", str(host_home)])
+    assert result.exit_code == 0, result.output
+    assert "claude" in result.output
+    assert "vp import claude" in result.output
+
+
+def test_profile_to_profile_copy(config_root: Path) -> None:
+    source_dir = config_root / "agents" / "claude"
+    source_dir.mkdir(parents=True)
+    (source_dir / "settings.json").write_text('{"model": "opus"}')
+    (source_dir / "commands").mkdir()
+    (source_dir / "commands" / "ship.md").write_text("ship it")
+    (source_dir / ".credentials.json").write_text("{}")
+
+    result = runner.invoke(
+        app,
+        [
+            "import",
+            "claude",
+            "--from-profile",
+            "default",
+            "--to-profile",
+            "work",
+            "--create-profile",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    dest = config_root / "profiles" / "work" / "agents" / "claude"
+    assert (dest / "settings.json").read_text() == '{"model": "opus"}'
+    assert (dest / "commands" / "ship.md").exists()
+    assert not (dest / ".credentials.json").exists()
+
+
+def test_profile_copy_onto_itself_is_refused(config_root: Path) -> None:
+    source_dir = config_root / "agents" / "claude"
+    source_dir.mkdir(parents=True)
+    (source_dir / "settings.json").write_text("{}")
+
+    result = runner.invoke(app, ["import", "claude", "--from-profile", "default"])
+
+    assert result.exit_code == 1
+    assert "same directory" in result.output
+
+
+def test_profile_copy_does_not_replace_an_existing_agent_dir(config_root: Path) -> None:
+    source_dir = config_root / "agents" / "claude"
+    source_dir.mkdir(parents=True)
+    (source_dir / "settings.json").write_text("new")
+    dest = config_root / "profiles" / "work" / "agents" / "claude"
+    dest.mkdir(parents=True)
+    (dest / "settings.json").write_text("old")
+
+    result = runner.invoke(
+        app,
+        ["import", "claude", "--from-profile", "default", "--to-profile", "work"],
+    )
+
+    assert result.exit_code == 1
+    assert "--force" in result.output
+    assert (dest / "settings.json").read_text() == "old"
+
+
+def test_profile_copy_reports_unmapped_files(config_root: Path) -> None:
+    source_dir = config_root / "agents" / "claude"
+    source_dir.mkdir(parents=True)
+    (source_dir / "settings.json").write_text("{}")
+    (source_dir / "brand-new-thing.json").write_text("{}")
+
+    result = runner.invoke(
+        app,
+        [
+            "import",
+            "claude",
+            "--from-profile",
+            "default",
+            "--to-profile",
+            "work",
+            "--create-profile",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "unrecognized" in result.output
+    assert not (
+        config_root / "profiles" / "work" / "agents" / "claude" / "brand-new-thing.json"
+    ).exists()
+
+
+def test_with_other_copies_unmapped_files(config_root: Path) -> None:
+    source_dir = config_root / "agents" / "claude"
+    source_dir.mkdir(parents=True)
+    (source_dir / "brand-new-thing.json").write_text("{}")
+
+    result = runner.invoke(
+        app,
+        [
+            "import",
+            "claude",
+            "--from-profile",
+            "default",
+            "--to-profile",
+            "work",
+            "--create-profile",
+            "--with-other",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    dest = config_root / "profiles" / "work" / "agents" / "claude"
+    assert (dest / "brand-new-thing.json").read_text() == "{}"
+
+
+def test_host_import_with_other_copies_unmapped_files(config_root: Path, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude" / "ide").mkdir(parents=True)
+    (home / ".claude" / "ide" / "state.json").write_text("{}")
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(home), "--with-other"])
+
+    assert result.exit_code == 0, result.output
+    assert (config_root / "agents" / "claude" / "ide" / "state.json").read_text() == "{}"
+
+
+def test_agent_help_lists_categories_and_paths(config_root: Path) -> None:
+    result = runner.invoke(app, ["import", "claude", "--help-agent"])
+
+    assert result.exit_code == 0, result.output
+    assert "settings" in result.output
+    assert ".claude/settings.json" in result.output
+    assert "skills" in result.output
+    assert "credentials" in result.output
+    assert "--with-credentials" in result.output
+    assert "Keychain" in result.output  # the entry note is shown
+
+
+def test_generic_help_mentions_per_agent_help(config_root: Path) -> None:
+    result = runner.invoke(app, ["import", "--help"])
+
+    assert result.exit_code == 0
+    # Rich forces colour on CI (GITHUB_ACTIONS), which splits option names.
+    plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--help-agent" in plain_output
+
+
+@pytest.mark.parametrize("option", ["--from-profile", "--to-profile"])
+def test_profile_names_with_path_traversal_are_rejected(
+    config_root: Path,
+    host_home: Path,
+    option: str,
+) -> None:
+    # Make the traversal target exist, so only name validation can stop it.
+    (config_root / "profiles").mkdir(parents=True)
+    escape = config_root.parent / "escape"
+    (escape / "agents" / "claude").mkdir(parents=True)
+    (escape / "agents" / "claude" / "settings.json").write_text("{}")
+
+    result = runner.invoke(
+        app,
+        ["import", "claude", "--home", str(host_home), option, "../../escape"],
+    )
+
+    assert result.exit_code == 1
+    assert "Invalid profile name" in result.output
+    assert sorted(p.name for p in (escape / "agents" / "claude").iterdir()) == ["settings.json"]
+
+
+def test_running_container_on_the_destination_profile_warns(
+    config_root: Path,
+    host_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Manager(_FakeDockerManager):
+        containers = [
+            _FakeContainer(
+                "vibepod-claude-1",
+                {"vibepod.agent": "claude", "vibepod.profile": "default"},
+            ),
+            _FakeContainer(
+                "vibepod-claude-2",
+                {"vibepod.agent": "claude", "vibepod.profile": "work"},
+            ),
+            _FakeContainer(
+                "vibepod-codex-1",
+                {"vibepod.agent": "codex", "vibepod.profile": "default"},
+            ),
+        ]
+
+    monkeypatch.setattr(import_cmd, "DockerManager", _Manager)
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home)])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace("\n", " ")
+    assert "vibepod-claude-1" in output
+    assert "vibepod-claude-2" not in output
+    assert "vibepod-codex-1" not in output
+    assert (config_root / "agents" / "claude" / "settings.json").exists()
+
+
+def test_import_without_docker_does_not_warn(config_root: Path, host_home: Path) -> None:
+    result = runner.invoke(app, ["import", "claude", "--home", str(host_home)])
+
+    assert result.exit_code == 0, result.output
+    assert "running" not in result.output

@@ -1,5 +1,10 @@
 # Quickstart
 
+!!! tip "Already running an agent on your machine?"
+    `vp import` copies an existing Claude Code, opencode or Codex setup —
+    settings, models, hooks, skills and memory files — into a VibePod profile.
+    See [Importing an existing setup](import.md).
+
 ## Prerequisites
 
 - Python 3.10+
