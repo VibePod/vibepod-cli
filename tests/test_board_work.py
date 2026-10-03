@@ -38,6 +38,7 @@ def git(cwd: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args],
         cwd=cwd,
+        env=worktrees.git_env(),
         check=True,
         capture_output=True,
         text=True,
@@ -1520,6 +1521,27 @@ def test_vp_board_work_rejects_agents_without_headless_mode(monkeypatch, tmp_pat
 
     assert result.exit_code == 1
     assert "cannot run headless" in result.output
+
+
+def test_host_git_ignores_a_repository_named_in_the_environment(
+    monkeypatch,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    other = tmp_path / "other"
+    other.mkdir()
+    git(other, "init", "--quiet", "--initial-branch=main")
+    git(other, "-c", "user.name=T", "-c", "user.email=t@x", "commit", "--allow-empty", "-qm", "O")
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(other / ".git" / "index"))
+
+    assert worktrees.repository_root(repo) == repo.resolve()
+    worktree = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
+
+    assert worktrees.branch_exists(repo, "issue-1")
+    assert not worktrees.branch_exists(other, "issue-1")
+    assert worktree.path == (tmp_path / "worktrees" / "issue-1").resolve()
 
 
 def test_worktree_helpers_prepare_and_clean_up(repo: Path, tmp_path: Path) -> None:

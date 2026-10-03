@@ -32,10 +32,38 @@ class BranchExistsError(GitError):
     """The task's branch or worktree exists and continuing was not allowed."""
 
 
+# Variables that point git at another repository than the one in `cwd`, as set for a hook
+# or by a wrapper script that `vp` may run from (`git rev-parse --local-env-vars`).
+GIT_LOCATION_ENV = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_INTERNAL_SUPER_PREFIX",
+        "GIT_NAMESPACE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    },
+)
+
+
+def git_env() -> dict[str, str]:
+    """The environment without the variables that would make git work elsewhere."""
+    return {key: value for key, value in os.environ.items() if key not in GIT_LOCATION_ENV}
+
+
 def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *SAFE_CONFIG, *args],
         cwd=cwd,
+        env=git_env(),
         capture_output=True,
         text=True,
         check=False,
