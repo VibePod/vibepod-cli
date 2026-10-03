@@ -4,6 +4,7 @@ HTTP. No agent subscription and no container runtime are involved."""
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +41,17 @@ def git(cwd: Path, *args: str) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def python(code: str) -> str:
+    """A verify command that runs the same in sh and in cmd.exe."""
+    return f'"{sys.executable}" -c "{code}"'
+
+
+# Verify commands for the shell of any platform.
+CHECKS_THE_FEATURE = python("assert 'implemented' in open('feature.txt').read()")
+PASSES = python("pass")
+FAILS = python("raise SystemExit(1)")
 
 
 @pytest.fixture
@@ -192,7 +204,7 @@ def test_hands_a_task_over_after_the_agent_committed_and_verify_passed(
     )
     runner = FakeRunner()
 
-    worker, _ = work(server, runner, repo, verify="grep -q implemented feature.txt")
+    worker, _ = work(server, runner, repo, verify=CHECKS_THE_FEATURE)
 
     assert worker.summary.handed_over == ["VP-1"]
     card = board.card("VP-1")
@@ -201,7 +213,7 @@ def test_hands_a_task_over_after_the_agent_committed_and_verify_passed(
     assert handover == {
         "assignee": "claude@laptop",
         "branchName": "issue-12",
-        "note": "1 commit; verify passed (grep -q implemented feature.txt)",
+        "note": f"1 commit; verify passed ({CHECKS_THE_FEATURE})",
     }
     # The branch holds the work, the worktree is gone.
     assert git(repo, "log", "--format=%s", "main..issue-12") == "Add the feature"
@@ -210,7 +222,7 @@ def test_hands_a_task_over_after_the_agent_committed_and_verify_passed(
     assert report["outcome"] == "done"
     assert report["commits"][0]["subject"] == "Add the feature"
     assert (report["verifyCommand"], report["verifyExitCode"]) == (
-        "grep -q implemented feature.txt",
+        CHECKS_THE_FEATURE,
         0,
     )
     assert report["branchName"] == "issue-12"
@@ -264,7 +276,7 @@ def test_reports_its_status_steps_and_task_in_heartbeats(
 ) -> None:
     board.add_task("Add the feature")
 
-    work(server, FakeRunner(), repo, verify="true")
+    work(server, FakeRunner(), repo, verify=PASSES)
 
     steps = [beat.get("step") for beat in board.heartbeats if beat["status"] == "working"]
     # Long steps repeat in the regular heartbeats; the order is what counts.
@@ -374,7 +386,7 @@ def test_a_failed_verify_returns_the_task_to_planned_with_a_note(
         server,
         FakeRunner(),
         repo,
-        verify="echo '2 tests failed'; exit 1",
+        verify=python("print('2 tests failed'); raise SystemExit(1)"),
         max_attempts=5,
         once=True,
     )
@@ -422,7 +434,7 @@ def test_failed_tasks_can_be_blocked_instead(
 ) -> None:
     board.add_task("Add the feature")
 
-    work(server, FakeRunner(), repo, verify="false", on_fail="blocked", once=True)
+    work(server, FakeRunner(), repo, verify=FAILS, on_fail="blocked", once=True)
 
     [release] = board.requests("POST", "/api/board/card-1/release")
     assert release["outcome"] == "blocked"
@@ -852,6 +864,7 @@ def test_an_interrupt_stops_the_agent_and_gives_the_task_back(
     assert board.requests("POST", "/api/workers/worker-1/sign-off") == [None]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX only")
 def test_stopping_a_verify_command_kills_its_whole_group(monkeypatch, tmp_path: Path) -> None:
     import time
 
@@ -1074,12 +1087,14 @@ def test_the_verify_command_never_sees_the_board_token(
     monkeypatch.setenv("HARMLESS", "kept")
     seen = tmp_path / "env.txt"
 
-    work(server, FakeRunner(), repo, verify=f"env > {seen}")
+    dump = f"import os; open({str(seen)!r}, 'w').write(repr(dict(os.environ)))"
+
+    work(server, FakeRunner(), repo, verify=python(dump))
 
     environment = seen.read_text()
     assert TOKEN not in environment
     assert "VP_BOARD_TOKEN" not in environment
-    assert "HARMLESS=kept" in environment
+    assert "'HARMLESS': 'kept'" in environment
 
 
 def test_a_worker_passes_over_at_most_as_many_tasks_as_a_claim_takes() -> None:
@@ -1415,7 +1430,7 @@ def test_vp_board_work_runs_a_task_end_to_end(
             "--timeout",
             "30m",
             "--verify",
-            "test -f feature.txt",
+            python("open('feature.txt')"),
         ],
     )
 
