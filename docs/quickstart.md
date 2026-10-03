@@ -3,7 +3,21 @@
 ## Prerequisites
 
 - Python 3.10+
-- Docker **or** Podman (running)
+- Docker **or** Podman (running), **or** [microsandbox](microsandbox.md) for
+  microVM isolation
+
+### Using microsandbox instead of Docker
+
+With [microsandbox](https://microsandbox.dev) installed (`msb` on a KVM-capable
+Linux host or an Apple Silicon Mac), agents run as microVMs:
+
+```bash
+vp config init --runtime microsandbox   # or `vp config init -i`
+vp doctor microsandbox
+vp run claude
+```
+
+See [microsandbox runtime](microsandbox.md) for options and limitations.
 
 ### Using Podman instead of Docker
 

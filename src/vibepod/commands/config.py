@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 import yaml
+from rich.prompt import Prompt
 
 from vibepod.constants import SUPPORTED_AGENTS, agent_ids
+from vibepod.core import microsandbox as msb
 from vibepod.core.agents import resolve_agent_name
 from vibepod.core.allowed_dirs import (
     add_allowed_dir,
@@ -19,16 +22,130 @@ from vibepod.core.allowed_dirs import (
     remove_allowed_dir,
 )
 from vibepod.core.config import (
+    deep_merge,
     get_config,
     get_config_root,
     get_global_config_path,
     get_project_config_path,
 )
-from vibepod.utils.console import console, error, success
+from vibepod.utils.console import console, error, success, warning
 
 app = typer.Typer(help="Manage configuration")
 
 PROJECT_CONFIG_MINIMAL = "version: 1\n"
+
+
+def _load_project_mapping(project_path: Path) -> dict[str, Any]:
+    if not project_path.exists():
+        return {}
+    loaded = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        error(f"Project config must contain a YAML mapping: {project_path}")
+        raise typer.Exit(1)
+    return loaded
+
+
+def _prompt_runtime_settings(
+    runtime: str | None,
+    msb_cpus: int | None,
+    msb_memory: str | None,
+) -> tuple[str, int | None, str | None]:
+    """Ask for the runtime and its microsandbox resources on a TTY."""
+    current = str(get_config().get("runtime") or msb.DEFAULT_RUNTIME)
+    runtime = Prompt.ask(
+        "Sandbox runtime",
+        choices=list(msb.RUNTIMES),
+        default=runtime or (current if current in msb.RUNTIMES else msb.DEFAULT_RUNTIME),
+    )
+    if runtime == msb.RUNTIME_MICROSANDBOX:
+        while True:
+            answer = Prompt.ask(
+                "microVM vCPUs (blank for the microsandbox default)",
+                default=str(msb_cpus) if msb_cpus is not None else "",
+                show_default=False,
+            )
+            try:
+                msb_cpus = msb.normalize_cpus(answer, source="vCPUs")
+                break
+            except ValueError as exc:
+                error(str(exc))
+        while True:
+            answer = Prompt.ask(
+                "microVM memory, e.g. 2G (blank for the microsandbox default)",
+                default=msb_memory or "",
+                show_default=False,
+            )
+            try:
+                msb_memory = msb.normalize_memory(answer, source="memory")
+                break
+            except ValueError as exc:
+                error(str(exc))
+    return runtime, msb_cpus, msb_memory
+
+
+def _apply_runtime_settings(
+    project_config: dict[str, Any],
+    *,
+    runtime: str | None,
+    msb_binary: str | None,
+    msb_cpus: int | None,
+    msb_memory: str | None,
+) -> str | None:
+    """Validate runtime options and store them in *project_config*."""
+    msb_options = [
+        flag
+        for flag, value in (
+            ("--msb-binary", msb_binary),
+            ("--msb-cpus", msb_cpus),
+            ("--msb-memory", msb_memory),
+        )
+        if value is not None
+    ]
+    if runtime is None:
+        if msb_options:
+            error(f"{', '.join(msb_options)} require --runtime microsandbox.")
+            raise typer.Exit(1)
+        return None
+    try:
+        selected = msb.resolve_runtime({}, runtime)
+        cpus = msb.normalize_cpus(msb_cpus, source="--msb-cpus")
+        memory = msb.normalize_memory(msb_memory, source="--msb-memory")
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    if msb_options and selected != msb.RUNTIME_MICROSANDBOX:
+        error(f"{', '.join(msb_options)} require --runtime microsandbox.")
+        raise typer.Exit(1)
+    if msb_binary is not None and not msb_binary.strip():
+        error("--msb-binary cannot be empty.")
+        raise typer.Exit(1)
+
+    project_config["runtime"] = selected
+    if selected == msb.RUNTIME_MICROSANDBOX:
+        section = project_config.get("microsandbox")
+        if not isinstance(section, dict):
+            section = {}
+        if msb_binary is not None:
+            section["binary"] = msb_binary.strip()
+        if cpus is not None:
+            section["cpus"] = cpus
+        if memory is not None:
+            section["memory"] = memory
+        if section:
+            project_config["microsandbox"] = section
+    return selected
+
+
+def _report_microsandbox_readiness(project_config: dict[str, Any]) -> None:
+    """Warn (without failing) when this host cannot run microsandbox yet."""
+    try:
+        settings = msb.load_settings(deep_merge(get_config(), project_config))
+        msb.ensure_available(settings)
+    except (ValueError, msb.MicrosandboxError) as exc:
+        warning(f"microsandbox is not ready on this host: {exc}")
+        warning("Check again with `vp doctor microsandbox`.")
 
 
 @app.command("init")
@@ -41,9 +158,38 @@ def init(
         bool,
         typer.Option("--force", help="Overwrite existing project config if present"),
     ] = False,
+    runtime: Annotated[
+        str | None,
+        typer.Option("--runtime", help="Sandbox runtime to store: docker or microsandbox"),
+    ] = None,
+    msb_binary: Annotated[
+        str | None,
+        typer.Option("--msb-binary", help="Path or name of the microsandbox `msb` CLI"),
+    ] = None,
+    msb_cpus: Annotated[
+        int | None,
+        typer.Option("--msb-cpus", help="vCPUs for each microsandbox microVM"),
+    ] = None,
+    msb_memory: Annotated[
+        str | None,
+        typer.Option("--msb-memory", help="Memory for each microsandbox microVM, e.g. 2G"),
+    ] = None,
+    interactive: Annotated[
+        bool,
+        typer.Option("-i", "--interactive", help="Choose the runtime and its settings by prompt"),
+    ] = False,
 ) -> None:
     """Create a minimal project config or add a specific agent config."""
     project_path = get_project_config_path()
+    if interactive:
+        if not sys.stdin.isatty():
+            error("--interactive needs a terminal; pass --runtime and --msb-* options instead.")
+            raise typer.Exit(1)
+        runtime, msb_cpus, msb_memory = _prompt_runtime_settings(runtime, msb_cpus, msb_memory)
+    runtime_requested = runtime is not None or any(
+        value is not None for value in (msb_binary, msb_cpus, msb_memory)
+    )
+
     if agent is not None:
         resolved = resolve_agent_name(agent)
         if resolved is None:
@@ -54,15 +200,7 @@ def init(
         try:
             project_path.parent.mkdir(parents=True, exist_ok=True)
 
-            project_config: dict[str, Any] = {}
-            if project_path.exists():
-                loaded = yaml.safe_load(project_path.read_text(encoding="utf-8"))
-                if loaded is None:
-                    loaded = {}
-                if not isinstance(loaded, dict):
-                    error(f"Project config must contain a YAML mapping: {project_path}")
-                    raise typer.Exit(1)
-                project_config = loaded
+            project_config = _load_project_mapping(project_path)
 
             project_config.setdefault("version", 1)
             agents_config = project_config.setdefault("agents", {})
@@ -85,6 +223,13 @@ def init(
                 raise typer.Exit(1)
 
             agents_config[agent] = copy.deepcopy(effective_agent)
+            selected_runtime = _apply_runtime_settings(
+                project_config,
+                runtime=runtime,
+                msb_binary=msb_binary,
+                msb_cpus=msb_cpus,
+                msb_memory=msb_memory,
+            )
             project_path.write_text(
                 yaml.safe_dump(project_config, sort_keys=False),
                 encoding="utf-8",
@@ -97,6 +242,36 @@ def init(
             raise typer.Exit(1) from exc
 
         success(f"Added agent config '{agent}' to project config: {project_path}")
+        if selected_runtime == msb.RUNTIME_MICROSANDBOX:
+            _report_microsandbox_readiness(project_config)
+        return
+
+    if runtime_requested and project_path.exists() and not force:
+        # Selecting a runtime for an existing project updates it in place.
+        try:
+            project_config = _load_project_mapping(project_path)
+        except yaml.YAMLError as exc:
+            error(f"Failed to parse project config at {project_path}: {exc}")
+            raise typer.Exit(1) from exc
+        project_config.setdefault("version", 1)
+        selected_runtime = _apply_runtime_settings(
+            project_config,
+            runtime=runtime,
+            msb_binary=msb_binary,
+            msb_cpus=msb_cpus,
+            msb_memory=msb_memory,
+        )
+        try:
+            project_path.write_text(
+                yaml.safe_dump(project_config, sort_keys=False),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            error(f"Failed to update project config at {project_path}: {exc}")
+            raise typer.Exit(1) from exc
+        success(f"Set runtime '{selected_runtime}' in project config: {project_path}")
+        if selected_runtime == msb.RUNTIME_MICROSANDBOX:
+            _report_microsandbox_readiness(project_config)
         return
 
     if project_path.exists() and not force:
@@ -104,13 +279,28 @@ def init(
         error("Use --force to overwrite.")
         raise typer.Exit(1)
 
+    project_config = {"version": 1}
+    selected_runtime = _apply_runtime_settings(
+        project_config,
+        runtime=runtime,
+        msb_binary=msb_binary,
+        msb_cpus=msb_cpus,
+        msb_memory=msb_memory,
+    )
+    content = (
+        yaml.safe_dump(project_config, sort_keys=False)
+        if selected_runtime is not None
+        else PROJECT_CONFIG_MINIMAL
+    )
     try:
         project_path.parent.mkdir(parents=True, exist_ok=True)
-        project_path.write_text(PROJECT_CONFIG_MINIMAL, encoding="utf-8")
+        project_path.write_text(content, encoding="utf-8")
     except OSError as exc:
         error(f"Failed to create project config at {project_path}: {exc}")
         raise typer.Exit(1) from exc
     success(f"Created project config: {project_path}")
+    if selected_runtime == msb.RUNTIME_MICROSANDBOX:
+        _report_microsandbox_readiness(project_config)
 
 
 @app.command("show")

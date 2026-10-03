@@ -61,6 +61,7 @@ from vibepod.core.launch import (
     terminal_env_defaults,
     update_container_mapping,
 )
+from vibepod.core.microsandbox import RUNTIME_DOCKER, resolve_runtime
 from vibepod.core.profiles import resolve_profile
 from vibepod.core.provider_launch import prepare_launch
 from vibepod.core.provider_runtime import WRAPPED_AGENTS, bootstrap_volume, wrap_provider_command
@@ -509,9 +510,16 @@ def launch_task(
     spec = get_agent_spec(selected)
     try:
         validate_llm_support(selected, config)
+        selected_runtime = resolve_runtime(config)
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
+    if selected_runtime != RUNTIME_DOCKER:
+        error(
+            f"`vp task` does not support the {selected_runtime} runtime yet; tasks run "
+            "on Docker. Run it with `VP_RUNTIME=docker vp task create ...`.",
+        )
+        raise typer.Exit(1)
     if not spec.headless_prefix and not spec.headless_command:
         supported = ", ".join(
             agent

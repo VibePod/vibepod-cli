@@ -31,6 +31,7 @@ def _default_config() -> dict[str, Any]:
     return {
         "version": 1,
         "default_agent": "claude",
+        "runtime": "docker",
         "auto_pull": True,
         "auto_clean": True,
         "auto_remove": True,
@@ -196,6 +197,12 @@ def _default_config() -> dict[str, Any]:
                 "deny": [],
             },
         },
+        "microsandbox": {
+            "binary": "msb",
+            "cpus": None,
+            "memory": None,
+            "args": [],
+        },
         "llm": {
             "enabled": False,
             "base_url": "",
@@ -280,6 +287,7 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
     mappings: dict[str, tuple[str, Any]] = {
         "VP_DEFAULT_AGENT": ("default_agent", str),
+        "VP_RUNTIME": ("runtime", str),
         "VP_AUTO_PULL": ("auto_pull", lambda x: x.lower() == "true"),
         "VP_AUTO_CLEAN": ("auto_clean", lambda x: x.lower() == "true"),
         "VP_LOG_LEVEL": ("log_level", str),

@@ -34,6 +34,14 @@ Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
 
+## Runtimes
+
+`vp run` has two runtimes (`runtime` config / `VP_RUNTIME` / `--runtime`):
+Docker (default, `core/docker.py`) and microsandbox microVMs driven through the
+`msb` CLI (`core/microsandbox.py`, `run.py::_run_microsandbox`, `docs/microsandbox.md`).
+A new Docker-only launch feature must be rejected or skipped explicitly on the
+microsandbox path (see `_check_microsandbox_launch`); `vp task` is Docker-only.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

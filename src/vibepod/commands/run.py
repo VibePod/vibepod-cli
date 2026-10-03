@@ -8,12 +8,14 @@ import sys
 import time
 from pathlib import Path, PurePath
 from typing import Annotated, Any
+from uuid import uuid4
 
 import typer
 from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
-from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.constants import CONTAINER_LABEL_MANAGED, EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.core import microsandbox as msb
 from vibepod.core import skills_engine
 from vibepod.core.acp import AcpClientChannel
 from vibepod.core.agents import (
@@ -92,6 +94,9 @@ from vibepod.core.launch import (
     materialize_launch_policy as _materialize_launch_policy,
 )
 from vibepod.core.launch import (
+    overlay_enabled as _overlay_enabled,
+)
+from vibepod.core.launch import (
     parse_env_pairs as _parse_env_pairs,
 )
 from vibepod.core.launch import (
@@ -121,6 +126,7 @@ from vibepod.core.launch import (
 from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
+from vibepod.core.overlay import find_overlay_dockerfile
 from vibepod.core.profiles import resolve_profile
 from vibepod.core.provider_launch import ProviderLaunch, prepare_launch
 from vibepod.core.provider_runtime import (
@@ -562,6 +568,7 @@ def run(
     ] = None,
     passthrough_args: list[str] | None = None,
     provider_names: list[str] | None = None,
+    runtime: str | None = None,
 ) -> None:
     """Start an agent container.
 
@@ -627,9 +634,20 @@ def run(
     try:
         if not provider_names:
             validate_llm_support(selected_agent, config)
+        selected_runtime = msb.resolve_runtime(config, runtime)
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
+
+    msb_settings: msb.MicrosandboxSettings | None = None
+    msb_binary = ""
+    if selected_runtime == msb.RUNTIME_MICROSANDBOX:
+        msb_settings, msb_binary = _check_microsandbox_launch(
+            config,
+            acp=acp,
+            network=network,
+            paste_images=paste_images,
+        )
 
     acp_channel: AcpClientChannel | None = None
     if acp:
@@ -814,6 +832,32 @@ def run(
             llm_command_extra = [*spec.llm_model_args, llm_model]
 
     image = effective_agent_image(selected_agent, config)
+
+    if msb_settings is not None:
+        _run_microsandbox(
+            settings=msb_settings,
+            binary=msb_binary,
+            config=config,
+            agent=selected_agent,
+            spec=spec,
+            agent_cfg=agent_cfg,
+            image=image,
+            workspace_path=workspace_path,
+            env=merged_env,
+            ports=agent_ports,
+            custom_volumes=custom_volumes,
+            init_commands=init_commands,
+            command_extra=llm_command_extra,
+            passthrough_args=passthrough_args,
+            provider_names=provider_names or [],
+            profile=active_profile,
+            name=name,
+            detach=detach,
+            pull=pull,
+            no_overlay=no_overlay,
+            ikwid=ikwid,
+        )
+        return
 
     try:
         manager = DockerManager()
@@ -1262,6 +1306,213 @@ def run(
 
     if acp and exit_code != 0:
         # Surface adapter failures to the ACP client instead of exiting 0.
+        raise typer.Exit(exit_code)
+
+
+def _check_microsandbox_launch(
+    config: dict[str, Any],
+    *,
+    acp: bool,
+    network: str | None,
+    paste_images: bool,
+) -> tuple[msb.MicrosandboxSettings, str]:
+    """Reject Docker-only options and check msb before any workspace prompt."""
+    unsupported = [
+        flag
+        for flag, used in (
+            ("--acp", acp),
+            ("--network", network is not None),
+            ("--paste-images", paste_images),
+        )
+        if used
+    ]
+    if unsupported:
+        error(
+            f"{', '.join(unsupported)} cannot be used with the microsandbox runtime: "
+            "these features need Docker. Use `--runtime docker` for this run.",
+        )
+        raise typer.Exit(1)
+    try:
+        settings = msb.load_settings(config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    try:
+        binary = msb.ensure_available(settings)
+    except msb.MicrosandboxError as exc:
+        error(str(exc))
+        raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
+    return settings, binary
+
+
+def _run_microsandbox(
+    *,
+    settings: msb.MicrosandboxSettings,
+    binary: str,
+    config: dict[str, Any],
+    agent: str,
+    spec: AgentSpec,
+    agent_cfg: dict[str, Any],
+    image: str,
+    workspace_path: Path,
+    env: dict[str, str],
+    ports: dict[str, Any] | None,
+    custom_volumes: list[tuple[str, str, str]],
+    init_commands: list[str],
+    command_extra: list[str],
+    passthrough_args: list[str],
+    provider_names: list[str],
+    profile: str,
+    name: str | None,
+    detach: bool,
+    pull: bool,
+    no_overlay: bool,
+    ikwid: bool,
+) -> None:
+    """Launch the agent image as a microsandbox microVM through `msb run`."""
+    if init_commands:
+        error(
+            f"agents.{agent}.init is not supported with the microsandbox runtime yet. "
+            "Bake the setup into the image, or use `--runtime docker`.",
+        )
+        raise typer.Exit(1)
+    if (
+        not no_overlay
+        and _overlay_enabled(workspace_path, agent, agent_cfg)
+        and find_overlay_dockerfile(workspace_path, agent) is not None
+    ):
+        error(
+            "Project overlays are built with Docker and are not supported with the "
+            "microsandbox runtime. Pass --no-overlay, set "
+            f"agents.{agent}.overlay: false, or use `--runtime docker`.",
+        )
+        raise typer.Exit(1)
+    if detach and agent == "claude" and "setup-token" in passthrough_args:
+        error(
+            "Cannot use --detach with `claude setup-token`: "
+            "the setup-token flow requires an interactive session.",
+        )
+        raise typer.Exit(1)
+    if spec.platform:
+        warning(
+            f"{agent} images are published for {spec.platform}; microsandbox runs "
+            "images for the host architecture only.",
+        )
+
+    agent_auto_pull = agent_cfg.get("auto_pull")
+    auto_pull_enabled = (
+        agent_auto_pull if agent_auto_pull is not None else bool(config.get("auto_pull", False))
+    )
+    if pull or (auto_pull_enabled and _is_latest_tag(image)):
+        info(f"Pulling image with microsandbox: {image}")
+        try:
+            msb.pull_image(binary, image)
+        except msb.MicrosandboxError as exc:
+            if pull:
+                error(str(exc))
+                raise typer.Exit(1) from exc
+            warning(f"{exc} Using the cached image if there is one.")
+
+    extra_args: list[str] = []
+    if ikwid:
+        if spec.ikwid_args:
+            info(f"IKWID mode: appending {spec.ikwid_args} to {agent} command")
+            extra_args.extend(spec.ikwid_args)
+        else:
+            warning(f"IKWID mode not supported for agent '{agent}', ignoring")
+    extra_args.extend(command_extra)
+    extra_args.extend(passthrough_args)
+    command = spec.command
+    if extra_args:
+        if command is None:
+            error(
+                f"{agent} uses its image's default command, which the microsandbox "
+                "runtime cannot extend with extra arguments. Use `--runtime docker`.",
+            )
+            raise typer.Exit(1)
+        command = [*command, *extra_args]
+
+    env = dict(env)
+    config_dir = agent_config_dir(agent, profile)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    volumes: list[tuple[str, str, str]] = [
+        (str(workspace_path), "/workspace", "rw"),
+        (str(config_dir), spec.config_mount_path, "rw"),
+    ]
+    extra_volumes = _agent_extra_volumes(agent, config_dir)
+    for host_path, _, _ in extra_volumes:
+        Path(host_path).mkdir(parents=True, exist_ok=True)
+    extra_volumes.extend(_skills_mounts_for_agent(agent, workspace_path))
+    if provider_names and agent in _PROVIDER_WRAPPED_AGENTS:
+        wrapped, wrapper_env = _wrap_provider_command(agent, list(command or []))
+        command = wrapped
+        env.update(wrapper_env)
+        extra_volumes.append(_provider_bootstrap_volume(agent))
+    _check_custom_volume_targets(
+        custom_volumes,
+        ["/workspace", spec.config_mount_path, *(target for _, target, _ in extra_volumes)],
+    )
+    volumes.extend(extra_volumes)
+    volumes.extend(custom_volumes)
+
+    if bool(config.get("proxy", {}).get("enabled", True)):
+        info("The VibePod proxy runs on Docker and is skipped with the microsandbox runtime.")
+
+    labels = {
+        CONTAINER_LABEL_MANAGED: "true",
+        "vibepod.agent": agent,
+        "vibepod.workspace": str(workspace_path),
+        "vibepod.version": __version__,
+        "vibepod.runtime": msb.RUNTIME_MICROSANDBOX,
+        "vibepod.profile": profile,
+    }
+    if provider_names:
+        labels["vibepod.provider"] = ",".join(provider_names)
+
+    auto_remove = bool(config.get("auto_remove", True))
+    # Unnamed sandboxes are removed by msb on exit; a detached or kept one
+    # needs a name to be found again with `msb ls` / `msb stop`.
+    sandbox_name = name
+    if sandbox_name is None and (detach or not auto_remove):
+        sandbox_name = f"vibepod-{agent}-{uuid4().hex[:8]}"
+
+    try:
+        runtime_conf = msb.write_runtime_conf(env=env, labels=labels, workdir="/workspace")
+    except OSError as exc:
+        error(f"Could not write the microsandbox runtime config: {exc}")
+        raise typer.Exit(1) from exc
+    try:
+        argv = msb.build_run_argv(
+            binary=binary,
+            settings=settings,
+            image=image,
+            runtime_conf=runtime_conf,
+            volumes=volumes,
+            ports=ports,
+            command=command,
+            name=sandbox_name,
+            detach=detach,
+        )
+        info(f"Starting {agent} with image {image} in a microsandbox microVM")
+        exit_code = msb.run_foreground(argv)
+    except msb.MicrosandboxError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    finally:
+        runtime_conf.unlink(missing_ok=True)
+
+    if detach:
+        if exit_code != 0:
+            error(f"microsandbox failed to start the sandbox (exit code {exit_code}).")
+            raise typer.Exit(exit_code)
+        success(f"Started {sandbox_name} (manage it with `msb ls` / `msb stop {sandbox_name}`)")
+        return
+
+    if name is not None and auto_remove:
+        msb.remove_sandbox(binary, name)
+    if agent == "claude" and "setup-token" in passthrough_args and exit_code == 0:
+        _capture_claude_setup_token(config_dir)
+    if exit_code != 0:
         raise typer.Exit(exit_code)
 
 

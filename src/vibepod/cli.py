@@ -123,6 +123,13 @@ def run_command(
         list[str] | None,
         typer.Option("--provider", help="Temporarily use a global provider"),
     ] = None,
+    runtime: Annotated[
+        str | None,
+        typer.Option(
+            "--runtime",
+            help="Sandbox runtime for this run: docker or microsandbox (overrides config)",
+        ),
+    ] = None,
 ) -> None:
     """Start an agent container."""
     run.run(
@@ -144,6 +151,7 @@ def run_command(
         profile=profile,
         provider_names=provider_names,
         passthrough_args=_context_args(ctx),
+        runtime=runtime,
     )
 
 
@@ -253,6 +261,13 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             list[str] | None,
             typer.Option("--provider", help="Temporarily use a global provider"),
         ] = None,
+        runtime: Annotated[
+            str | None,
+            typer.Option(
+                "--runtime",
+                help="Sandbox runtime for this run: docker or microsandbox (overrides config)",
+            ),
+        ] = None,
     ) -> None:
         run.run(
             agent=agent_name,
@@ -273,6 +288,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             profile=profile,
             provider_names=provider_names,
             passthrough_args=_context_args(ctx),
+            runtime=runtime,
         )
 
     _alias.__name__ = f"alias_{command_name}"

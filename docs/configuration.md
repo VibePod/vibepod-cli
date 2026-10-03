@@ -19,6 +19,10 @@ version: 1
 # Alias `devstral` resolves to `vibe`.
 default_agent: claude
 
+# Sandbox runtime for `vp run`: docker (Docker or Podman) | microsandbox
+# (hardware-isolated microVMs, see microsandbox.md)
+runtime: docker
+
 # Pull the latest image before every run (default: true)
 # Can be overridden per agent with agents.<agent>.auto_pull
 auto_pull: true
@@ -173,6 +177,13 @@ agents:
     ports: []
     init: []
 
+# microsandbox runtime settings (used when runtime: microsandbox)
+microsandbox:
+  binary: msb # msb CLI name on PATH, or a path
+  cpus: null # vCPUs per microVM (null: msb default)
+  memory: null # memory per microVM, e.g. 4G (null: msb default)
+  args: [] # extra `msb run` flags
+
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
   enabled: false
@@ -210,6 +221,7 @@ These variables override the corresponding config keys without editing any file:
 | Variable               | Config key          | Example                                  |
 | ---------------------- | ------------------- | ---------------------------------------- |
 | `VP_DEFAULT_AGENT`     | `default_agent`     | `VP_DEFAULT_AGENT=vibe`                  |
+| `VP_RUNTIME`           | `runtime`           | `VP_RUNTIME=microsandbox`                |
 | `VP_AUTO_PULL`         | `auto_pull`         | `VP_AUTO_PULL=true`                      |
 | `VP_AUTO_CLEAN`        | `auto_clean`        | `VP_AUTO_CLEAN=false`                    |
 | `VP_LOG_LEVEL`         | `log_level`         | `VP_LOG_LEVEL=debug`                     |

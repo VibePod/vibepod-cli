@@ -22,7 +22,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 ## Features
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
-- 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
+- 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container, or in a hardware-isolated microVM with the [microsandbox](https://microsandbox.dev) runtime (`vp run --runtime microsandbox`, [docs](https://vibepod.dev/docs/microsandbox/))
 - 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Mistral Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes & more
 - 🔌 **Model providers** — register any OpenAI- or Anthropic-compatible endpoint or local model server once with `vp provider add`, then route agents to it with `vp run --provider` ([docs](https://vibepod.dev/docs/providers/))
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`

@@ -706,3 +706,81 @@ def herdr_doctor(
         "herdr wiring looks healthy — if the sidebar stays empty, the reports reach "
         "herdr but it does not surface them; check `herdr agent list` output above",
     )
+
+
+@app.command("microsandbox")
+def microsandbox_doctor() -> None:
+    """Check that the microsandbox runtime can launch agents on this host.
+
+    Validates the ``runtime``/``microsandbox`` config, locates the ``msb`` CLI,
+    checks the host virtualization prerequisites (KVM on Linux, Apple Silicon
+    on macOS), and runs ``msb doctor`` for the runtime's own checks.
+    """
+    import subprocess
+
+    from vibepod.core import microsandbox as msb
+
+    config = get_config()
+    failures = 0
+
+    console.print("[bold]Configuration[/bold]")
+    try:
+        runtime = msb.resolve_runtime(config)
+        console.print(f"  runtime: {runtime}")
+        if runtime != msb.RUNTIME_MICROSANDBOX:
+            info(
+                "  vp run uses Docker; select microsandbox with "
+                "`vp config init --runtime microsandbox` or `vp run --runtime microsandbox`",
+            )
+    except ValueError as exc:
+        error(f"  {exc}")
+        failures += 1
+    try:
+        settings = msb.load_settings(config)
+    except ValueError as exc:
+        error(f"  {exc}")
+        failures += 1
+        settings = msb.MicrosandboxSettings()
+    console.print(f"  cpus:   {settings.cpus if settings.cpus is not None else 'msb default'}")
+    console.print(f"  memory: {settings.memory or 'msb default'}")
+    if settings.args:
+        console.print(f"  args:   {' '.join(settings.args)}")
+
+    console.print()
+    console.print("[bold]Host[/bold]")
+    problem = msb.host_support_problem()
+    if problem is None:
+        success("  virtualization prerequisites met")
+    else:
+        error(f"  {problem}")
+        failures += 1
+
+    console.print()
+    console.print("[bold]msb CLI[/bold]")
+    binary: str | None = None
+    try:
+        binary = msb.find_binary(settings)
+    except msb.MicrosandboxError as exc:
+        error(f"  {exc}")
+        failures += 1
+    if binary is not None:
+        console.print(f"  path:    {binary}")
+        console.print(f"  version: {msb.binary_version(binary) or 'unknown'}")
+        try:
+            proc = subprocess.run([binary, "doctor"], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as exc:
+            error(f"  could not run `msb doctor`: {exc}")
+            failures += 1
+        else:
+            output = (proc.stdout + proc.stderr).strip()
+            for line in output.splitlines():
+                console.print(f"  {line}", markup=False, highlight=False)
+            if proc.returncode != 0:
+                error(f"  `msb doctor` reported problems (exit code {proc.returncode})")
+                failures += 1
+
+    console.print()
+    if failures:
+        error(f"{failures} problem(s) found")
+        raise typer.Exit(1)
+    success("microsandbox is ready for `vp run`")
