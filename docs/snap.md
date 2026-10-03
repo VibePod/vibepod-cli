@@ -138,7 +138,9 @@ suite and installed-package smoke test pass. The version is read directly from
 `v` prefix). Normal releases go to `latest/stable`, prereleases to `latest/beta`.
 The tested amd64 artifact is retained on the workflow run. No main-branch or
 pull-request build uploads to the Store.
-Release runs fail early with a setup error if publisher credentials are missing.
+Release runs still build, validate and retain the artifact when publisher credentials
+are missing, then fail with a setup error before upload. This lets a maintainer
+recover the tested artifact after completing Store setup without bypassing validation.
 
 One-time publisher setup:
 

@@ -31,15 +31,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Check release publisher setup
-        if: github.event_name == 'release'
-        env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-        run: |
-          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
-            echo '::error::Snap publication requires SNAPCRAFT_STORE_CREDENTIALS. Complete the publisher setup in docs/snap.md.'
-            exit 1
-          fi
       - name: Validate source and release version
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -86,6 +77,15 @@ jobs:
           name: vibepod-snap-amd64
           path: ${{ steps.build.outputs.snap }}
           if-no-files-found: error
+      - name: Check release publisher setup
+        if: github.event_name == 'release'
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
+            echo '::error::Snap publication requires SNAPCRAFT_STORE_CREDENTIALS. Complete the publisher setup in docs/snap.md.'
+            exit 1
+          fi
       - name: Publish validated release
         if: github.event_name == 'release'
         uses: snapcore/action-publish@v1
