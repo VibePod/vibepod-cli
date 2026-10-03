@@ -616,7 +616,8 @@ class BoardWorker:
             while True:
                 code = poll()
                 if code is not None:
-                    return code, "exit"
+                    # A stop or cancel that came while the process was ending still counts.
+                    return code, self._interruption(None) or "exit"
                 ended = self._interruption(deadline)
                 if ended is not None:
                     stop()
@@ -918,6 +919,10 @@ class BoardWorker:
         repo: Path | None,
         worktree: worktrees.Worktree | None,
     ) -> None:
+        if result.outcome == "done":
+            # The board's last word before the hand-over: a stop or cancel still wins.
+            self._set("working", step=STEP_HANDING_OVER)
+            self._ended_early(self._interruption(None) or "exit", result)
         if self.cancel_reason is not None:
             # The board already put the task back; it is no longer ours to hand over or
             # release, whatever the run came to.
@@ -927,7 +932,6 @@ class BoardWorker:
         card_ref = str(card["id"])
         branch, note = result.branch, self._handover_note(result)
         if result.outcome == "done":
-            self._set("working", step=STEP_HANDING_OVER)
             delivered = self._deliver(
                 f"Handing {key} over",
                 lambda: self.client.hand_over(card_ref, self.options.name, branch, note),

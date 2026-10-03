@@ -714,6 +714,29 @@ def test_a_stop_from_the_board_ends_the_run_and_the_worker(
     assert board.requests("POST", "/api/workers/worker-1/sign-off") == [None]
 
 
+@pytest.mark.parametrize("step", ["agent_running", "handing_over"])
+def test_a_stop_that_comes_as_the_agent_finishes_still_gives_the_task_back(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    step: str,
+) -> None:
+    board.add_task("Stopped as it finished")
+
+    def stop_at(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"type": "stop"}] if beat.get("step") == step else []
+
+    board.on_heartbeat = stop_at
+    # The agent is done by the first look at it, right after the stop arrived.
+    worker, _ = work(server, FakeRunner(polls=1), repo, poll_seconds=30)
+
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "released"
+    assert board.runs[0]["outcome"] == "cancelled"
+    assert worker.summary.ended_because == "Stopped from the board"
+
+
 def test_a_paused_project_takes_no_new_task_until_resumed(
     board: FakeBoard,
     server: FakeBoardServer,
