@@ -102,6 +102,7 @@ snapcraft
 sudo snap install --dangerous --classic ./vibepod_*.snap
 export VP_SNAP_EXPECTED_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
 export VP_CONFIG_DIR="$(mktemp -d)"
+export VP_SNAP_EXPECTED_RUNTIME=docker
 snap run vibepod version
 snap run vibepod.vp version
 snap run --shell vibepod <<'SH'
@@ -121,7 +122,10 @@ a dynamically assigned localhost port, validating the port publishing used by
 the proxy and dashboard. It removes its test container even
 if validation fails. A running Docker
 or Podman API is required. Repeat with `DOCKER_HOST` set to a rootless Podman
-socket before claiming support on a new runtime or base. Before the first Store
+socket and `VP_SNAP_EXPECTED_RUNTIME=rootless-podman` before claiming support
+on a new runtime or base. The test checks the daemon's engine and rootless
+status before creating a container, so an accidental fallback to Docker or
+rootful Podman cannot pass the rootless release gate. Before the first Store
 release, also exercise an authenticated agent session, HTTP tracking and the
 dashboard on the installed snap.
 

@@ -17,6 +17,17 @@ from uuid import uuid4
 from vibepod.core.docker import DockerManager
 
 
+def validate_runtime(manager: DockerManager, expected: str) -> None:
+    """Reject a fallback daemon before claiming runtime support."""
+    if expected == "docker":
+        assert not manager.is_podman(), "Expected Docker, connected to Podman"
+    elif expected == "rootless-podman":
+        assert manager.is_podman(), "Expected rootless Podman, connected to another engine"
+        assert manager.is_rootless_podman(), "Expected rootless Podman, connected to rootful Podman"
+    else:
+        raise ValueError(f"Unsupported expected runtime: {expected!r}")
+
+
 def main() -> None:
     snap_root = Path(os.environ["SNAP"]).resolve()
     assert Path(sys.executable).resolve().is_relative_to(snap_root)
@@ -37,6 +48,7 @@ def main() -> None:
         ), reported.stdout
     subprocess.run(["snap", "run", "vibepod", "--help"], check=True, timeout=30)
     manager = DockerManager()
+    validate_runtime(manager, os.environ["VP_SNAP_EXPECTED_RUNTIME"])
     manager.pull_image("alpine:3.20")
     # A host path outside snap-private storage must be visible to the daemon.
     with tempfile.TemporaryDirectory(prefix="vibepod-snap-", dir=Path.home()) as tmp:

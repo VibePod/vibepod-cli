@@ -59,6 +59,7 @@ jobs:
         env:
           SNAP_FILE: ${{ steps.build.outputs.snap }}
           DOCKER_HOST: unix:///var/run/docker.sock
+          VP_SNAP_EXPECTED_RUNTIME: docker
         run: |
           sudo snap install --dangerous --classic "$SNAP_FILE"
           export VP_CONFIG_DIR="$RUNNER_TEMP/vibepod-snap-config"
@@ -69,6 +70,8 @@ jobs:
           exec "$SNAP/bin/python3" "$PWD/scripts/smoke_snap.py"
           SH
       - name: Validate the packaged CLI with rootless Podman
+        env:
+          VP_SNAP_EXPECTED_RUNTIME: rootless-podman
         run: |
           systemctl --user enable --now podman.socket
           export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
