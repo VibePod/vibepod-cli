@@ -55,7 +55,7 @@ class _Recorder:
 @pytest.fixture
 def relay(tmp_path: Path) -> Iterator[tuple[HerdrEventRelay, _Recorder]]:
     recorder = _Recorder()
-    relay = HerdrEventRelay(PANE, recorder, root=tmp_path / "relay", interval=0.01)
+    relay = HerdrEventRelay(PANE, recorder, agent="claude", root=tmp_path / "relay", interval=0.01)
     relay.prepare()
     try:
         yield relay, recorder
@@ -73,7 +73,7 @@ def _append(relay: HerdrEventRelay, data: bytes) -> None:
 
 def test_validate_accepts_known_fields() -> None:
     event = _event("blocked", display_agent="vp:claude", agent_session_id="s1")
-    assert validate_event(json.dumps(event).encode(), PANE) == event
+    assert validate_event(json.dumps(event).encode(), PANE, "claude") == event
 
 
 @pytest.mark.parametrize(
@@ -87,20 +87,23 @@ def test_validate_accepts_known_fields() -> None:
         {**_event(), "agent": ""},
         {**_event(), "agent": 3},
         _event(display_agent="x" * 600),
+        {**_event(), "agent": "codex"},
+        {**_event(), "source": "someone-else"},
+        _event(display_agent="vp:codex"),
     ],
 )
 def test_validate_rejects_untrusted_events(event: dict) -> None:
-    assert validate_event(json.dumps(event).encode(), PANE) is None
+    assert validate_event(json.dumps(event).encode(), PANE, "claude") is None
 
 
 @pytest.mark.parametrize("raw", [b"not json", b"[1, 2]", b"\xff\xfe", b'"idle"'])
 def test_validate_rejects_malformed_lines(raw: bytes) -> None:
-    assert validate_event(raw, PANE) is None
+    assert validate_event(raw, PANE, "claude") is None
 
 
 def test_validate_rejects_oversized_line() -> None:
     raw = json.dumps(_event(display_agent="x" * 400)).encode() + b" " * MAX_LINE_BYTES
-    assert validate_event(raw, PANE) is None
+    assert validate_event(raw, PANE, "claude") is None
 
 
 # --- tailing ----------------------------------------------------------------------
@@ -247,7 +250,7 @@ def test_directory_events_file_is_refused(relay) -> None:
 
 
 def test_rejected_send_is_not_counted(tmp_path: Path) -> None:
-    relay_obj = HerdrEventRelay(PANE, lambda event: False, root=tmp_path / "relay")
+    relay_obj = HerdrEventRelay(PANE, lambda event: False, agent="claude", root=tmp_path / "relay")
     relay_obj.prepare()
     _append(relay_obj, _line(_event()))
     assert relay_obj.poll() == 0
@@ -259,7 +262,9 @@ def test_rejected_send_is_not_counted(tmp_path: Path) -> None:
 
 def test_thread_forwards_and_close_drains_and_removes_dir(tmp_path: Path) -> None:
     recorder = _Recorder()
-    relay_obj = HerdrEventRelay(PANE, recorder, root=tmp_path / "relay", interval=0.01)
+    relay_obj = HerdrEventRelay(
+        PANE, recorder, agent="claude", root=tmp_path / "relay", interval=0.01
+    )
     relay_obj.prepare()
     relay_obj.start()
     _append(relay_obj, _line(_event("working")))
@@ -277,7 +282,9 @@ def test_thread_forwards_and_close_drains_and_removes_dir(tmp_path: Path) -> Non
 
 def test_close_drains_lines_written_after_the_last_tick(tmp_path: Path) -> None:
     recorder = _Recorder()
-    relay_obj = HerdrEventRelay(PANE, recorder, root=tmp_path / "relay", interval=60)
+    relay_obj = HerdrEventRelay(
+        PANE, recorder, agent="claude", root=tmp_path / "relay", interval=60
+    )
     relay_obj.prepare()
     relay_obj.start()
     _append(relay_obj, _line(_event("working")) + _line(_event("idle")))
@@ -287,7 +294,9 @@ def test_close_drains_lines_written_after_the_last_tick(tmp_path: Path) -> None:
 
 
 def test_close_soft_fails_when_the_final_drain_fails(monkeypatch, tmp_path: Path) -> None:
-    relay_obj = HerdrEventRelay(PANE, _Recorder(), root=tmp_path / "relay", interval=60)
+    relay_obj = HerdrEventRelay(
+        PANE, _Recorder(), agent="claude", root=tmp_path / "relay", interval=60
+    )
     relay_obj.prepare()
     relay_obj.start()
 
@@ -300,7 +309,7 @@ def test_close_soft_fails_when_the_final_drain_fails(monkeypatch, tmp_path: Path
 
 
 def test_close_before_prepare_is_harmless(tmp_path: Path) -> None:
-    HerdrEventRelay(PANE, _Recorder(), root=tmp_path / "relay").close()
+    HerdrEventRelay(PANE, _Recorder(), agent="claude", root=tmp_path / "relay").close()
 
 
 def test_prepare_prunes_dirs_of_dead_runs(tmp_path: Path) -> None:
@@ -363,7 +372,7 @@ def test_relay_forwards_to_herdr_socket_as_report_agent(
     received: list = []
     thread = _serve(sock_dir / "herdr.sock", received, 2)
     monkeypatch.setenv("HERDR_SOCKET_PATH", str(sock_dir / "herdr.sock"))
-    relay_obj = HerdrEventRelay(PANE, herdr.forward_event, root=tmp_path / "relay")
+    relay_obj = HerdrEventRelay(PANE, herdr.forward_event, agent="claude", root=tmp_path / "relay")
     relay_obj.prepare()
     _append(relay_obj, _line(_event("working")) + b"{bad\n" + _line(_event("idle")))
 
@@ -376,14 +385,15 @@ def test_relay_forwards_to_herdr_socket_as_report_agent(
 
 
 def test_create_event_relay_needs_a_reporting_pane(monkeypatch, tmp_path: Path) -> None:
-    assert herdr.create_event_relay({}, no_herdr=False) is None
+    assert herdr.create_event_relay("claude", {}, no_herdr=False) is None
     monkeypatch.setattr(herdr, "pane_reporting_enabled", lambda config, no_herdr: not no_herdr)
     monkeypatch.setenv("HERDR_PANE_ID", PANE)
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
-    assert herdr.create_event_relay({}, no_herdr=True) is None
-    relay_obj = herdr.create_event_relay({}, no_herdr=False)
+    assert herdr.create_event_relay("claude", {}, no_herdr=True) is None
+    relay_obj = herdr.create_event_relay("claude", {}, no_herdr=False)
     assert relay_obj is not None
     assert relay_obj.pane_id == PANE
+    assert relay_obj.agent == "claude"
     assert relay_obj.host_dir.parent == tmp_path / "herdr-relay"
     assert not relay_obj.host_dir.exists()
 
@@ -397,7 +407,7 @@ def test_apply_wires_events_file_when_socket_cannot_be_mounted(
     monkeypatch.setenv("HERDR_TAB_ID", "t1")
     config_dir = tmp_path / "cfg"
     config_dir.mkdir()
-    relay_obj = HerdrEventRelay(PANE, _Recorder(), root=tmp_path / "relay")
+    relay_obj = HerdrEventRelay(PANE, _Recorder(), agent="claude", root=tmp_path / "relay")
 
     volumes, env = herdr.apply_herdr_if_enabled(
         "claude",
@@ -480,7 +490,7 @@ def test_claude_hook_appends_to_events_file_without_socket(tmp_path: Path) -> No
         }
         for state in ("idle", "blocked")
     ]
-    assert all(validate_event(json.dumps(event).encode(), PANE) for event in events)
+    assert all(validate_event(json.dumps(event).encode(), PANE, "claude") for event in events)
     assert "via=file rc=0" in (config_dir / "herdr-hook.log").read_text()
 
 

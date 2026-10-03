@@ -97,7 +97,9 @@ When the socket cannot be mounted (see
 [Socket or file relay](#socket-or-file-relay)), neither `HERDR_SOCKET_PATH`
 nor `HERDR_BIN_PATH` is set, but `HERDR_EVENTS_FILE` is. Append one
 `pane.report_agent` params object per line, in a single write of under 4 KB
-so concurrent hooks don't interleave:
+so concurrent hooks don't interleave. The relay only forwards lines for the
+run's own pane with `source` `vibepod`, `agent` set to the run's agent id and,
+if given, `display_agent` `vp:<agent>`:
 
 ```sh
 if [ -n "${HERDR_SOCKET_PATH:-}" ]; then

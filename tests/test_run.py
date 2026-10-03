@@ -1139,10 +1139,12 @@ def _run_in_herdr_pane(
             return [event_relay.volume()], event_relay.container_env()
         return [], {}
 
-    def _fake_create_relay(config, *, no_herdr):
+    def _fake_create_relay(agent, config, *, no_herdr):
+        calls["relay_agent"] = agent
         relay = HerdrEventRelay(
             "pane-1",
             lambda event: calls["forwarded"].append(event) or True,
+            agent=agent,
             root=relay_root,
             interval=0.01,
         )
@@ -1226,6 +1228,8 @@ class _RelayAttachManager(_NoSocketMountManager):
                 json.dumps({"pane_id": "other", "source": "x", "agent": "claude", "state": "idle"})
                 + "\n",
             )
+            foreign_agent = {"pane_id": "pane-1", "source": "vibepod", "agent": "codex"}
+            handle.write(json.dumps({**foreign_agent, "state": "idle"}) + "\n")
         # the agent exits right away; close() must still drain these lines
         return b""
 
@@ -1257,7 +1261,8 @@ def test_run_relays_herdr_events_through_file_on_vm_backed_engine(
     assert "/herdr-events" in dests
     assert "/herdr/herdr.sock" not in dests
     assert stub.seen["file_existed"] is True
-    # forwarded in order; the foreign-pane line is dropped
+    # forwarded in order; the foreign-pane and foreign-agent lines are dropped
+    assert calls["relay_agent"] == "claude"
     assert [event["state"] for event in calls["forwarded"]] == ["working", "blocked"]
     # the relay stops (and its dir goes) before the agent is released
     assert calls["released_with_relay_dir"] is False

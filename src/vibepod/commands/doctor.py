@@ -597,7 +597,7 @@ def herdr_doctor(
                 # replay the file relay `vp run` uses on this engine
                 from vibepod.core.herdr_relay import HerdrEventRelay
 
-                relay = HerdrEventRelay(pane, herdr_core.forward_event)
+                relay = HerdrEventRelay(pane, herdr_core.forward_event, agent=agent)
                 relay.prepare()
                 volumes = [relay.volume()]
                 env = {**relay.container_env(), "HERDR_PANE_ID": pane}
