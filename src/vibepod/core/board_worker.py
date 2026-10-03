@@ -336,11 +336,10 @@ def _iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
-def _commit_message(task: dict[str, Any]) -> str:
+def _commit_message(task: dict[str, Any], subject: str | None = None) -> str:
     key = task.get("key") or task.get("id")
-    return (
-        f"{str(task.get('title') or 'Board task').strip()}\n\nCommitted for {key} by vp board work."
-    )
+    subject = subject or str(task.get("title") or "Board task").strip()
+    return f"{subject}\n\nCommitted for {key} by vp board work."
 
 
 Say = Callable[[str, str], None]
@@ -819,6 +818,14 @@ class BoardWorker:
                     self._failure(),
                 )
                 return
+            # What the verify command changed or committed, such as formatted files or
+            # updated snapshots, goes with the work instead of being lost with the worktree.
+            worktrees.commit_all(
+                worktree.path,
+                _commit_message(task, "Changes left by the verify command"),
+            )
+            result.commits = worktrees.commits_since(worktree.path, worktree.start)
+            result.branch_commits = worktrees.commits_since(worktree.path, worktree.base)
         result.outcome, result.reason, result.release = "done", None, None
 
     def _did_work(self, worktree: worktrees.Worktree) -> bool:

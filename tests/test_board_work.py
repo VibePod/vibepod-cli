@@ -324,6 +324,29 @@ def test_the_worker_commit_is_not_signed(repo: Path, tmp_path: Path) -> None:
     assert git(repo, "show", "HEAD:notes.txt") == "left by the agent"
 
 
+def test_changes_the_verify_command_made_are_committed_too(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Verify formats")
+
+    work(
+        server,
+        FakeRunner(),
+        repo,
+        verify=python("open('feature.txt', 'w').write('formatted')"),
+        once=True,
+    )
+
+    assert board.card("VP-1")["column"] == "review"
+    assert git(repo, "show", "vp-1:feature.txt") == "formatted"
+    subjects = [commit["subject"] for commit in board.runs[0]["commits"]]
+    assert subjects == ["Add the feature", "Changes left by the verify command"]
+    [handover] = board.requests("POST", "/api/board/card-1/handover")
+    assert handover["note"].startswith("2 commits; verify passed")
+
+
 def test_works_through_every_planned_task_then_exits(
     board: FakeBoard,
     server: FakeBoardServer,
