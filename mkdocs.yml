@@ -51,6 +51,8 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Development: development.md
+  - Architecture analyses:
+      - "VP-151: Hyperlight": analysis/VP-151-hyperlight.md
   - Agents: agents/index.md
   - Profiles: profiles.md
   - Model providers: providers.md

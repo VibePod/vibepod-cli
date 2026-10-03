@@ -36,3 +36,8 @@ Build the static docs site:
 ```bash
 mkdocs build
 ```
+
+## Architecture analyses
+
+- [VP-151: Hyperlight for sandboxing agent work](analysis/VP-151-hyperlight.md)
+  records the no-go decision, platform constraints and assessed operations.
