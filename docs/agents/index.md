@@ -1308,6 +1308,20 @@ vp task create qwen "fix the failing test" --ikwid
 vp run cursor   # or: vp cu
 ```
 
+The default image is `vibepod/cursor:latest`. Until it is published, build the
+Cursor image from the companion
+[vibepod-agents branch](https://github.com/VibePod/vibepod-agents/tree/cursor-agent/docker/cursor)
+and select the local image explicitly. From that repository's checkout:
+
+```bash
+docker build -t vibepod/cursor:local docker/cursor
+VP_IMAGE_CURSOR=vibepod/cursor:local vp run cursor
+```
+
+The `:local` tag avoids automatic pulls of `:latest`. The CLI registration
+alone does not install Cursor; the image must provide `cursor-agent` and the
+`/config` state mount described below.
+
 Cursor CLI (`cursor-agent`) is the terminal agent from the makers of the Cursor
 editor. It is closed source and ships as a self-contained package (bundled
 Node.js runtime) from `downloads.cursor.com`; the image pins one release and
@@ -1343,14 +1357,18 @@ agents:
 
 Or per run: `vp run cursor -e CURSOR_API_KEY=key_...`.
 
-**Proxy and TLS.** Cursor honors `HTTPS_PROXY` for its API traffic and starts
-Node with `--use-system-ca` plus `NODE_EXTRA_CA_CERTS`, so requests route
-through `vibepod-proxy` with the mounted mitmproxy CA.
+**Proxy and TLS.** VibePod enables Node's environment proxy support with
+`NODE_USE_ENV_PROXY=1`. When the proxy is enabled, VibePod also supplies
+`HTTP_PROXY`/`HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS` pointing at the mounted
+mitmproxy CA. Routing of Cursor's API traffic through the proxy still needs
+verification against the published image.
 
 **Non-interactive mode.** Print mode works with both `vp run` and task mode.
-It refuses a workspace it has not been told to trust, so task mode passes
-`--trust` (interactive runs ask once per workspace and remember the answer in
-the config mount):
+It refuses a workspace it has not been told to trust, so task mode always
+passes `--trust`, with or without `--ikwid`: a detached task cannot answer
+Cursor's workspace-trust prompt (interactive runs ask once per workspace and
+remember the answer in the config mount). `--trust` only marks the workspace as
+trusted; it does not skip command approvals, which is what `--ikwid` is for:
 
 ```bash
 vp run cursor -- --trust -p "explain this repo"
