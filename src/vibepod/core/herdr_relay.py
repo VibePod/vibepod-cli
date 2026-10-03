@@ -37,6 +37,8 @@ MAX_LINE_BYTES = 4096
 MAX_FIELD_CHARS = 512
 #: Bytes read per poll, so a container growing the file cannot exhaust host memory.
 MAX_READ_BYTES = 1024 * 1024
+# How many bounded polls the final drain on close may take before it gives up.
+MAX_DRAIN_POLLS = 16
 ALLOWED_STATES = frozenset({"working", "blocked", "idle"})
 REQUIRED_FIELDS = ("pane_id", "source", "agent", "state")
 OPTIONAL_FIELDS = ("display_agent", "agent_session_id")
@@ -202,6 +204,7 @@ class HerdrEventRelay:
         self._thread: threading.Thread | None = None
         self.forwarded = 0
         self.dropped = 0
+        self.rejected = 0
 
     def volume(self) -> tuple[str, str, str]:
         return (str(self.host_dir), CONTAINER_EVENTS_DIR, "rw")
@@ -234,8 +237,13 @@ class HerdrEventRelay:
         if self._thread is not None:
             self._thread.join(timeout=5)
             self._thread = None
-            # lines written after the last tick still belong to this run
-            self._safe_poll()
+            # lines written after the last tick still belong to this run; each poll is
+            # bounded, so keep going until one reads nothing new
+            for _ in range(MAX_DRAIN_POLLS):
+                before = self._offset
+                self._safe_poll()
+                if self._offset == before:
+                    break
         shutil.rmtree(self.host_dir, ignore_errors=True)
 
     def _loop(self) -> None:
@@ -261,6 +269,7 @@ class HerdrEventRelay:
                 if self._send(event):
                     forwarded += 1
                 else:
+                    self.rejected += 1
                     logger.debug("herdr relay: herdr rejected event %r", event)
             self.forwarded += forwarded
             return forwarded

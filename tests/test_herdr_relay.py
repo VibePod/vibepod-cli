@@ -301,6 +301,27 @@ def test_close_drains_lines_written_after_the_last_tick(tmp_path: Path) -> None:
     assert not relay_obj.host_dir.exists()
 
 
+def test_poll_counts_events_herdr_rejects(tmp_path: Path) -> None:
+    relay_obj = HerdrEventRelay(PANE, lambda event: False, agent="claude", root=tmp_path / "r")
+    relay_obj.prepare()
+    _append(relay_obj, _line(_event("working")) + b"garbage\n")
+    assert relay_obj.poll() == 0
+    assert (relay_obj.forwarded, relay_obj.rejected, relay_obj.dropped) == (0, 1, 1)
+    relay_obj.close()
+
+
+def test_close_drains_more_than_one_bounded_read(monkeypatch, tmp_path: Path) -> None:
+    line = _line(_event("working"))
+    monkeypatch.setattr(herdr_relay, "MAX_READ_BYTES", 3 * len(line))
+    recorder = _Recorder()
+    relay_obj = HerdrEventRelay(PANE, recorder, agent="claude", root=tmp_path / "r", interval=60)
+    relay_obj.prepare()
+    relay_obj.start()
+    _append(relay_obj, line * 7 + _line(_event("idle")))
+    relay_obj.close()
+    assert recorder.states == ["working"] * 7 + ["idle"]
+
+
 def test_close_soft_fails_when_the_final_drain_fails(monkeypatch, tmp_path: Path) -> None:
     relay_obj = HerdrEventRelay(
         PANE,
