@@ -30,6 +30,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 - 🔌 **External tools** — LiteLLM, Headroom, RTK, Graphify and other tooling plug in through the shared `vibepod-network` or a project overlay ([docs](https://vibepod.dev/docs/integrations/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
 - 📋 **Board automation** — `vp board work VP --agent claude` works through the planned tasks of a [vibepod-board](https://github.com/VibePod/vibepod-board) project: one branch per task, the agent headless, an optional verify command, then the task moves to Review ([docs](https://vibepod.dev/docs/board/))
+- 🛡️ **Process sandbox (opt-in)** — `vp run --sandbox syd` runs the agent under [Sydbox](https://gitlab.exherbo.org/sydbox/sydbox): writes confined to the workspace and agent dirs, git hooks/config protected from host-side persistence ([docs](https://vibepod.dev/docs/sandbox/))
 - 🐑 **Herdr aware** — `vp run` inside a [herdr](https://herdr.dev/) pane reports agent state automatically
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
 - 🔒 **Privacy-first** — all metrics collected and stored locally, never sent to the cloud

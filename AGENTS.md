@@ -34,6 +34,16 @@ Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
 
+## Process sandbox (syd)
+
+`--sandbox syd` (`src/vibepod/core/sandbox.py`, `docs/sandbox.md`) inserts
+`syd -P <policy> --` *after* the native entrypoint prefix, at the same slot as
+the provider wrapper. Sandboxing the root entrypoint breaks its `su`/setgroups
+privilege drop, which is also why `syd-oci` was rejected. Keep the rendered
+policy to rules that both the newest static syd build (3.53) and current syd
+(3.59) accept: `npath`, for example, is 3.59-only. Check changes against a
+real binary with `VP_TEST_SYD_BINARY=/path/to/syd`.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

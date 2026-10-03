@@ -201,30 +201,40 @@ proxy:
     mode: open # open | allow | deny
     allow: []
     deny: []
+
+# Opt-in process sandbox for the agent, see sandbox.md
+sandbox:
+  type: none # none | syd; --sandbox overrides it per run
+  syd:
+    binary: "" # Host path to a static syd binary
+    log_level: warn # Denial lines on the agent's stderr; error silences them
+    rules: [] # Extra syd rules appended to the generated policy
 ```
 
 ## Environment variables
 
 These variables override the corresponding config keys without editing any file:
 
-| Variable               | Config key          | Example                                  |
-| ---------------------- | ------------------- | ---------------------------------------- |
-| `VP_DEFAULT_AGENT`     | `default_agent`     | `VP_DEFAULT_AGENT=vibe`                  |
-| `VP_AUTO_PULL`         | `auto_pull`         | `VP_AUTO_PULL=true`                      |
-| `VP_AUTO_CLEAN`        | `auto_clean`        | `VP_AUTO_CLEAN=false`                    |
-| `VP_LOG_LEVEL`         | `log_level`         | `VP_LOG_LEVEL=debug`                     |
-| `VP_NO_COLOR`          | `no_color`          | `VP_NO_COLOR=true`                       |
-| `VP_DATASETTE_PORT`    | `logging.ui_port`   | `VP_DATASETTE_PORT=9001`                 |
-| `VP_PROXY_ENABLED`     | `proxy.enabled`     | `VP_PROXY_ENABLED=false`                 |
-| `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow`             |
-| `VP_LLM_ENABLED`       | `llm.enabled`       | `VP_LLM_ENABLED=true`                    |
-| `VP_LLM_BASE_URL`      | `llm.base_url`      | `VP_LLM_BASE_URL=http://localhost:11434` |
-| `VP_LLM_API_KEY`       | `llm.api_key`       | `VP_LLM_API_KEY=ollama`                  |
-| `VP_LLM_MODEL`         | `llm.model`         | `VP_LLM_MODEL=qwen3:14b`                 |
-| `VP_BOARD_URL`         | `board.url`         | `VP_BOARD_URL=http://localhost:3000`     |
-| `VP_BOARD_TOKEN`       | `board.token`       | `VP_BOARD_TOKEN=vbp_...`                 |
-| `VP_CONFIG_DIR`        | _(config root)_     | `VP_CONFIG_DIR=/custom/path`             |
-| `VP_PROFILE`           | `profile`           | `VP_PROFILE=work`                        |
+| Variable                | Config key           | Example                                          |
+| ----------------------- | -------------------- | ------------------------------------------------ |
+| `VP_DEFAULT_AGENT`      | `default_agent`      | `VP_DEFAULT_AGENT=vibe`                          |
+| `VP_AUTO_PULL`          | `auto_pull`          | `VP_AUTO_PULL=true`                              |
+| `VP_AUTO_CLEAN`         | `auto_clean`         | `VP_AUTO_CLEAN=false`                            |
+| `VP_LOG_LEVEL`          | `log_level`          | `VP_LOG_LEVEL=debug`                             |
+| `VP_NO_COLOR`           | `no_color`           | `VP_NO_COLOR=true`                               |
+| `VP_DATASETTE_PORT`     | `logging.ui_port`    | `VP_DATASETTE_PORT=9001`                         |
+| `VP_PROXY_ENABLED`      | `proxy.enabled`      | `VP_PROXY_ENABLED=false`                         |
+| `VP_PROXY_FILTER_MODE`  | `proxy.filter.mode`  | `VP_PROXY_FILTER_MODE=allow`                     |
+| `VP_LLM_ENABLED`        | `llm.enabled`        | `VP_LLM_ENABLED=true`                            |
+| `VP_LLM_BASE_URL`       | `llm.base_url`       | `VP_LLM_BASE_URL=http://localhost:11434`         |
+| `VP_LLM_API_KEY`        | `llm.api_key`        | `VP_LLM_API_KEY=ollama`                          |
+| `VP_LLM_MODEL`          | `llm.model`          | `VP_LLM_MODEL=qwen3:14b`                         |
+| `VP_BOARD_URL`          | `board.url`          | `VP_BOARD_URL=http://localhost:3000`             |
+| `VP_BOARD_TOKEN`        | `board.token`        | `VP_BOARD_TOKEN=vbp_...`                         |
+| `VP_SANDBOX`            | `sandbox.type`       | `VP_SANDBOX=syd`                                 |
+| `VP_SANDBOX_SYD_BINARY` | `sandbox.syd.binary` | `VP_SANDBOX_SYD_BINARY=~/.local/lib/vibepod/syd` |
+| `VP_CONFIG_DIR`         | _(config root)_      | `VP_CONFIG_DIR=/custom/path`                     |
+| `VP_PROFILE`            | `profile`            | `VP_PROFILE=work`                                |
 
 The `profile` key selects the active [credential profile](profiles.md); the
 `--profile` flag on `vp run`, `vp task create`, and `vp doctor claude` takes

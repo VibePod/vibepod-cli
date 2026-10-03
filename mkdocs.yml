@@ -64,6 +64,7 @@ nav:
   - Board automation: board.md
   - Herdr integration: herdr.md
   - Editor integration (ACP): acp.md
+  - Process sandbox (Sydbox): sandbox.md
   - Configuration: configuration.md
   - LLM Integration: llm.md
   - Badge: badge.md
