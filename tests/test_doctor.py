@@ -257,3 +257,44 @@ def test_doctor_reports_host_env_mode(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "CLAUDE_CODE_OAUTH_TOKEN" in result.stdout
     assert "passed from host env" in result.stdout
+
+
+def test_herdr_doctor_reports_events_herdr_rejects(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    import pytest
+    import typer
+
+    from vibepod.commands import doctor as doctor_cmd
+    from vibepod.core import herdr as herdr_core
+
+    cfg_dir = _herdr_doctor_env(monkeypatch, tmp_path, sockets=False)
+    herdr_core.sync_herdr_files("claude", cfg_dir, {})
+    herdr_core.register_claude_hooks(cfg_dir)
+    monkeypatch.setattr(herdr_core, "forward_event", lambda event: False)
+
+    def run(self, image, **kwargs):
+        host_dir = next(
+            host for host, bind in kwargs["volumes"].items() if bind["bind"] == "/herdr-events"
+        )
+        event = {
+            "pane_id": kwargs["environment"]["HERDR_PANE_ID"],
+            "source": "vibepod",
+            "agent": "claude",
+            "state": "idle",
+        }
+        with (Path(host_dir) / "herdr-events.jsonl").open("a") as handle:
+            handle.write(json.dumps(event) + "\n")
+        return b""
+
+    class _Manager:
+        client = type("_Client", (), {"containers": type("_C", (), {"run": run})()})()
+
+    monkeypatch.setattr("vibepod.core.docker.DockerManager", _Manager)
+
+    with pytest.raises(typer.Exit):
+        doctor_cmd.herdr_doctor(agent="claude")
+    out = " ".join(capsys.readouterr().out.split())
+    assert "herdr rejected 1 valid event(s); check the herdr connection" in out

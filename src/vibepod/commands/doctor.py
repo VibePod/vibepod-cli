@@ -658,6 +658,12 @@ def herdr_doctor(
                 relay.poll()
                 if relay.forwarded:
                     success(f"  file relay: {relay.forwarded} event(s) forwarded to herdr")
+                elif relay.rejected:
+                    error(
+                        f"  file relay: herdr rejected {relay.rejected} valid event(s); "
+                        "check the herdr connection",
+                    )
+                    failures += 1
                 else:
                     error(
                         "  file relay: no event from the container reached herdr "
