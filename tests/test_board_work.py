@@ -313,6 +313,17 @@ def test_commits_what_the_agent_left_uncommitted(
     assert board.runs[0]["commits"][0]["subject"] == "Leave changes"
 
 
+def test_the_worker_commit_is_not_signed(repo: Path, tmp_path: Path) -> None:
+    git(repo, "config", "commit.gpgSign", "true")
+    git(repo, "config", "gpg.program", str(tmp_path / "no-such-gpg"))
+    (repo / "notes.txt").write_text("left by the agent\n")
+
+    sha = worktrees.commit_all(repo, "Leave changes")
+
+    assert sha == git(repo, "rev-parse", "HEAD")
+    assert git(repo, "show", "HEAD:notes.txt") == "left by the agent"
+
+
 def test_works_through_every_planned_task_then_exits(
     board: FakeBoard,
     server: FakeBoardServer,

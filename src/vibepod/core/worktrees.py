@@ -302,7 +302,8 @@ def commit_all(path: Path, message: str) -> str | None:
     if not _has_identity(path):
         name, email = FALLBACK_IDENTITY
         identity = ["-c", f"user.name={name}", "-c", f"user.email={email}"]
-    git(path, *identity, "commit", "--quiet", "--no-verify", "-m", message)
+    # Unsigned: a background worker has no TTY or agent to unlock a signing key with.
+    git(path, *identity, "commit", "--quiet", "--no-verify", "--no-gpg-sign", "-m", message)
     return git(path, "rev-parse", "HEAD")
 
 
