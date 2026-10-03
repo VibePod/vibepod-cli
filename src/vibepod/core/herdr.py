@@ -464,8 +464,8 @@ def apply_herdr_if_enabled(
     if not mount_socket:
         warning(
             "herdr: this container engine cannot bind-mount the herdr socket "
-            "(Podman runs the engine in a VM on macOS and Windows); reporting pane "
-            "identity from the host only, without live agent state",
+            "(off Linux the engine runs in a VM that cannot share host sockets); "
+            "reporting pane identity from the host only, without live agent state",
         )
         return [], {}
     volumes, env = herdr_volumes_and_env()

@@ -1,0 +1,62 @@
+name: Badge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/assets/icon.png
+      - .github/workflows/badge.yml
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate-badge:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Regenerate endpoint badge JSON
+        run: |
+          npx --yes sharp-cli@5.3.0 --input docs/assets/icon.png \
+            --output "$RUNNER_TEMP/icon.png" --format png --palette --compressionLevel 9 \
+            -- resize 1000 42 --fit inside
+          read -r width height < <(
+            node -e 'const b = require("fs").readFileSync(process.argv[1]);
+              console.log(b.readUInt32BE(16), b.readUInt32BE(20))' "$RUNNER_TEMP/icon.png"
+          )
+          printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %s %s"><image width="%s" height="%s" href="data:image/png;base64,%s"/></svg>' \
+            "$width" "$height" "$width" "$height" "$(base64 -w0 "$RUNNER_TEMP/icon.png")" \
+            > "$RUNNER_TEMP/icon.svg"
+          npx --yes svgo@4.1.0 --multipass --precision 2 \
+            --input "$RUNNER_TEMP/icon.svg" --output - > "$RUNNER_TEMP/icon.min.svg"
+          jq -n --rawfile logo "$RUNNER_TEMP/icon.min.svg" '{
+            schemaVersion: 1,
+            label: "built with",
+            message: "VibePod",
+            color: "0e7490",
+            logoSvg: ($logo | rtrimstr("\n"))
+          }' > .github/badges/vibepod.json
+          jq -e '.logoSvg | startswith("<svg") and contains("viewBox")' .github/badges/vibepod.json
+
+      - name: Commit updated badge
+        run: |
+          if git diff --quiet -- .github/badges/vibepod.json; then
+            echo "Badge JSON unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/badges/vibepod.json
+          git commit -m "Regenerate VibePod badge JSON"
+          git push

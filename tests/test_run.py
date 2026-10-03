@@ -903,8 +903,238 @@ def test_run_publish_flag_rejects_invalid_entry(monkeypatch, _tmp_config_root) -
     assert stub.run_kwargs is None
 
 
+def test_agent_custom_volumes_empty_config(tmp_path: Path) -> None:
+    for cfg in ({}, {"volumes": None}, {"volumes": []}):
+        assert launch.agent_custom_volumes("claude", cfg, base_dir=tmp_path) == []
+
+
+def test_agent_custom_volumes_parses_paths_and_named_volumes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    (home / "notes").mkdir(parents=True)
+    (tmp_path / "data").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    # Windows expands `~` from USERPROFILE and ignores HOME.
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    volumes = launch.agent_custom_volumes(
+        "claude",
+        {
+            "volumes": [
+                f"{tmp_path / 'data'}:/data",
+                "~/notes:/notes:ro",
+                "./data:/rel/:rw,z",
+                "pgdata:/var/lib/postgresql/data",
+            ],
+        },
+        base_dir=tmp_path,
+    )
+
+    assert volumes == [
+        (str(tmp_path / "data"), "/data", "rw"),
+        (str(home / "notes"), "/notes", "ro"),
+        (str(tmp_path / "data"), "/rel", "rw,z"),
+        ("pgdata", "/var/lib/postgresql/data", "rw"),
+    ]
+    assert launch.agent_custom_volumes(
+        "claude",
+        {"volumes": "cache:/cache"},
+        base_dir=tmp_path,
+    ) == [
+        ("cache", "/cache", "rw"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        ("/data", r"SOURCE:TARGET"),
+        ("a:b:c:d", r"SOURCE:TARGET"),
+        ("cache:relative", r"must be absolute"),
+        ("cache:/", r"container root"),
+        ("cache:/data:rx", r"mode must be"),
+        ("cache:/data:ro,rw", r"mode must be"),
+        ("./missing:/data", r"does not exist"),
+        ("bad name:/data", r"host path or a Docker named volume"),
+    ],
+)
+def test_agent_custom_volumes_rejects_invalid_entries(
+    tmp_path: Path,
+    entry: str,
+    message: str,
+) -> None:
+    with pytest.raises(typer.BadParameter, match=rf"agents\.claude\.volumes\[1\].*{message}"):
+        launch.agent_custom_volumes("claude", {"volumes": [entry]}, base_dir=tmp_path)
+
+
+def test_agent_custom_volumes_rejects_non_string_values(tmp_path: Path) -> None:
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.volumes\[2\]"):
+        launch.agent_custom_volumes(
+            "claude",
+            {"volumes": ["cache:/a", {"src": "b"}]},
+            base_dir=tmp_path,
+        )
+    with pytest.raises(typer.BadParameter, match=r"agents\.claude\.volumes value"):
+        launch.agent_custom_volumes("claude", {"volumes": {"a": "/a"}}, base_dir=tmp_path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="`c:/data` is a drive path on Windows hosts")
+def test_agent_custom_volumes_one_letter_named_volume_off_windows(tmp_path: Path) -> None:
+    assert launch.agent_custom_volumes("claude", {"volumes": ["c:/data"]}, base_dir=tmp_path) == [
+        ("c", "/data", "rw"),
+    ]
+
+
+def test_agent_custom_volumes_drops_replaced_targets_without_resolving_them(
+    tmp_path: Path,
+) -> None:
+    cfg = {"volumes": ["./missing:/b", "keep:/a", "gone:///c"]}
+
+    assert launch.agent_custom_volumes(
+        "claude",
+        cfg,
+        base_dir=tmp_path,
+        replaced_targets=["/b", "/c"],
+    ) == [("keep", "/a", "rw")]
+    # Replaced entries are still syntax-checked.
+    with pytest.raises(typer.BadParameter, match=r"mode must be"):
+        launch.agent_custom_volumes(
+            "claude",
+            {"volumes": ["./missing:/b:bad"]},
+            base_dir=tmp_path,
+            replaced_targets=["/b"],
+        )
+
+
+def test_agent_custom_volumes_canonicalizes_leading_slashes(tmp_path: Path) -> None:
+    assert launch.agent_custom_volumes(
+        "claude",
+        {"volumes": ["cache://workspace/", "data:///srv//x/../y"]},
+        base_dir=tmp_path,
+    ) == [("cache", "/workspace", "rw"), ("data", "/srv/y", "rw")]
+
+
+def test_check_custom_volume_targets_rejects_collisions() -> None:
+    launch.check_custom_volume_targets([("a", "/data", "rw")], ["/workspace"])
+    with pytest.raises(typer.BadParameter, match=r"'/workspace' is already mounted"):
+        launch.check_custom_volume_targets([("a", "/workspace", "rw")], ["/workspace"])
+    with pytest.raises(typer.BadParameter, match=r"'/data' is mounted more than once"):
+        launch.check_custom_volume_targets([("a", "/data", "rw"), ("b", "/data", "ro")], [])
+
+
+def _volumes_config(volumes) -> dict:
+    config = _ports_config("claude", None)
+    config["agents"]["claude"]["volumes"] = volumes
+    return config
+
+
+def test_run_mounts_configured_and_flag_volumes(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    (workspace / "fixtures").mkdir(parents=True)
+    shared = _tmp_config_root / "shared"
+    shared.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _volumes_config(["./fixtures:/fixtures:ro", "cache:/cache"]),
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    monkeypatch.chdir(_tmp_config_root)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "claude",
+            "-w",
+            str(workspace),
+            "--detach",
+            "-v",
+            "./shared:/shared",
+            "--volume",
+            "other-cache:/cache:ro",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    custom = [
+        vol
+        for vol in stub.run_kwargs["extra_volumes"]
+        if vol[1] in {"/fixtures", "/cache", "/shared"}
+    ]
+    # Config paths resolve against the workspace, flag paths against the cwd;
+    # the flag's /cache entry replaces the configured one.
+    assert custom == [
+        (str(workspace / "fixtures"), "/fixtures", "ro"),
+        (str(shared), "/shared", "rw"),
+        ("other-cache", "/cache", "ro"),
+    ]
+
+
+@pytest.mark.parametrize("target", ["/workspace", "//workspace", "/workspace/"])
+def test_run_rejects_volume_over_managed_mount(monkeypatch, _tmp_config_root, target) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _volumes_config(None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "-v", f"cache:{target}"],
+    )
+
+    assert result.exit_code != 0
+    assert "already mounted by VibePod" in result.output
+    assert stub.run_kwargs is None
+
+
+def test_run_volume_flag_replaces_configured_entry_with_missing_source(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    """A -v override must not resolve the host source of the entry it replaces."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(
+        run_cmd,
+        "get_config",
+        lambda: _volumes_config(["./missing:/datasets", "cache:/cache"]),
+    )
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "-v", "datasets://datasets/:ro"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    custom = [vol for vol in stub.run_kwargs["extra_volumes"] if vol[1] in {"/datasets", "/cache"}]
+    assert custom == [("cache", "/cache", "rw"), ("datasets", "/datasets", "ro")]
+
+
+def test_run_rejects_invalid_configured_volume(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _volumes_config(["./missing:/data"]))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "claude", "-w", str(workspace), "--detach"])
+
+    assert result.exit_code != 0
+    assert "agents.claude.volumes" in result.output
+    assert stub.run_kwargs is None
+
+
 class _NoSocketMountManager(_PortCapturingManager):
-    """Engine that cannot bind-mount a host unix socket (Podman in a VM)."""
+    """Engine that cannot bind-mount a host unix socket (any engine off Linux)."""
 
     def supports_host_socket_mounts(self) -> bool:
         return False
@@ -1007,12 +1237,14 @@ def test_run_agent_is_rootless_podman_requires_rootless_podman_evidence(
 @pytest.mark.parametrize(
     ("platform", "version", "expected"),
     [
-        # Podman off Linux is VM-backed: host paths arrive over virtiofs, which
-        # cannot carry the herdr socket (issue #170).
+        # Every engine off Linux is VM-backed: host paths arrive over a file
+        # share that cannot carry the herdr socket (issues #170 and #203).
         ("darwin", {"Components": [{"Name": "Podman Engine"}]}, False),
         ("win32", {"Components": [{"Name": "Podman Engine"}]}, False),
+        ("darwin", {"Components": [{"Name": "Docker Engine"}]}, False),
+        ("win32", {"Components": [{"Name": "Docker Engine"}]}, False),
         ("linux", {"Components": [{"Name": "Podman Engine"}]}, True),
-        ("darwin", {"Components": [{"Name": "Docker Engine"}]}, True),
+        ("linux", {"Components": [{"Name": "Docker Engine"}]}, True),
     ],
 )
 def test_supports_host_socket_mounts(
@@ -1026,17 +1258,6 @@ def test_supports_host_socket_mounts(
     manager.client = _EngineClient({}, version)  # type: ignore[assignment]
 
     assert manager.supports_host_socket_mounts() is expected
-
-
-def test_supports_host_socket_mounts_assumes_docker_when_engine_is_silent(monkeypatch) -> None:
-    class _NoVersionClient:
-        pass
-
-    monkeypatch.setattr(sys, "platform", "darwin")
-    manager = object.__new__(DockerManager)
-    manager.client = _NoVersionClient()  # type: ignore[assignment]
-
-    assert manager.supports_host_socket_mounts() is True
 
 
 def test_run_agent_is_rootless_podman_treats_sdk_failures_as_false() -> None:

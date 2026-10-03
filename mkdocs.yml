@@ -53,6 +53,7 @@ nav:
   - Development: development.md
   - Agents: agents/index.md
   - Profiles: profiles.md
+  - Model providers: providers.md
   - Skills:
       - Overview: skills/index.md
       - Locator format: skills/locators.md
@@ -64,4 +65,5 @@ nav:
   - Editor integration (ACP): acp.md
   - Configuration: configuration.md
   - LLM Integration: llm.md
+  - Badge: badge.md
   - CLI Reference: cli-reference.md

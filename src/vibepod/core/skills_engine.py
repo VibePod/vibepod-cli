@@ -327,3 +327,7 @@ def resolve(scope: Scope | None = None, *, cwd: Path | None = None) -> EngineRes
     if scope:
         args.extend(["--scope", scope])
     return run_engine(args, cwd=cwd, local_required=scope == "local")
+
+
+def cache_clear() -> EngineResult:
+    return run_engine(["cache", "clear"])

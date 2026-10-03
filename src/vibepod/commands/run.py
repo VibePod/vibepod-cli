@@ -53,6 +53,12 @@ from vibepod.core.herdr import (
     report_pane_metadata as _report_herdr_metadata,
 )
 from vibepod.core.launch import (
+    PROXY_CA_MOUNT_PATH as _PROXY_CA_MOUNT_PATH,
+)
+from vibepod.core.launch import (
+    agent_custom_volumes as _agent_custom_volumes,
+)
+from vibepod.core.launch import (
     agent_extra_volumes as _agent_extra_volumes,
 )
 from vibepod.core.launch import (
@@ -66,6 +72,9 @@ from vibepod.core.launch import (
 )
 from vibepod.core.launch import (
     apply_proxy_env as _apply_proxy_env,
+)
+from vibepod.core.launch import (
+    check_custom_volume_targets as _check_custom_volume_targets,
 )
 from vibepod.core.launch import (
     get_container_ip as _get_container_ip,
@@ -84,6 +93,9 @@ from vibepod.core.launch import (
 )
 from vibepod.core.launch import (
     parse_env_pairs as _parse_env_pairs,
+)
+from vibepod.core.launch import (
+    parse_volume_specs as _parse_volume_specs,
 )
 from vibepod.core.launch import (
     prepare_x11_auth as _prepare_x11_auth,
@@ -110,6 +122,16 @@ from vibepod.core.launch import (
     x11_volumes_and_env as _x11_volumes_and_env,
 )
 from vibepod.core.profiles import resolve_profile
+from vibepod.core.provider_launch import ProviderLaunch, prepare_launch
+from vibepod.core.provider_runtime import (
+    WRAPPED_AGENTS as _PROVIDER_WRAPPED_AGENTS,
+)
+from vibepod.core.provider_runtime import (
+    bootstrap_volume as _provider_bootstrap_volume,
+)
+from vibepod.core.provider_runtime import (
+    wrap_provider_command as _wrap_provider_command,
+)
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
@@ -566,6 +588,16 @@ def run(
             show_default=False,
         ),
     ] = None,
+    volume: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-v",
+            "--volume",
+            help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+            "added to configured agents.<agent>.volumes (same TARGET replaces)",
+            show_default=False,
+        ),
+    ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
     network: Annotated[
         str | None,
@@ -597,6 +629,7 @@ def run(
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
     passthrough_args: list[str] | None = None,
+    provider_names: list[str] | None = None,
 ) -> None:
     """Start an agent container.
 
@@ -631,13 +664,37 @@ def run(
         error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
 
+    provider_env: dict[str, str] = {}
+    provider_launch: ProviderLaunch | None = None
+    if provider_names:
+        if acp and selected_agent in _PROVIDER_WRAPPED_AGENTS:
+            error(
+                "Temporary provider injection is not yet supported in ACP mode for "
+                f"{selected_agent}.",
+            )
+            raise typer.Exit(1)
+        configured_env = {
+            **{
+                str(k): str(v)
+                for k, v in config.get("agents", {}).get(selected_agent, {}).get("env", {}).items()
+            },
+            **_parse_env_pairs(env or []),
+        }
+        try:
+            provider_launch = prepare_launch(selected_agent, provider_names, configured_env)
+            provider_env = provider_launch.env
+        except (ValueError, OSError) as exc:
+            error(str(exc) if isinstance(exc, ValueError) else "Cannot access provider credentials")
+            raise typer.Exit(1) from exc
+
     _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
 
     # Reject unsupported wiring before any herdr hint or workspace processing:
     # the allow-dir prompt below persists a workspace to the allow list, which
     # must never happen for an agent/config this launch is about to refuse.
     try:
-        validate_llm_support(selected_agent, config)
+        if not provider_names:
+            validate_llm_support(selected_agent, config)
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
@@ -741,6 +798,7 @@ def run(
         **spec.extra_env,
         **{str(k): str(v) for k, v in agent_cfg.get("env", {}).items()},
         **_parse_env_pairs(env or []),
+        **provider_env,
     }
     # The flag replaces the resolved config list, mirroring the config chain's
     # list-replace semantics (defaults -> global -> project -> CLI), so the
@@ -750,6 +808,19 @@ def run(
         agent_ports = _publish_port_bindings(publish, source="--publish") or None
     else:
         agent_ports = _agent_port_bindings(selected_agent, agent_cfg) or None
+    # Unlike --publish, -v adds to the configured list: a flag entry only
+    # replaces the configured entry mounted at the same container path.
+    # Config paths are relative to the workspace, flag paths to the shell cwd.
+    flag_volumes = _parse_volume_specs(volume or [], source="--volume", base_dir=Path.cwd())
+    custom_volumes = [
+        *_agent_custom_volumes(
+            selected_agent,
+            agent_cfg,
+            base_dir=workspace_path,
+            replaced_targets=[target for _, target, _ in flag_volumes],
+        ),
+        *flag_volumes,
+    ]
     if spec.write_roots_env and acp_workspace_mount is not None:
         # In ACP mode the workspace is also bound at its own host path, and the
         # editor sends that spelling, so the agent's file sandbox has to allow
@@ -791,8 +862,10 @@ def run(
             info("Using stored Claude OAuth token (from `vp run claude setup-token`)")
 
     llm_cfg = config.get("llm", {})
-    llm_command_extra: list[str] = []
-    if llm_cfg.get("enabled") and spec.llm_env_map:
+    llm_command_extra: list[str] = (
+        provider_launch.arguments(passthrough_args) if provider_launch is not None else []
+    )
+    if not provider_names and llm_cfg.get("enabled") and spec.llm_env_map:
         llm_values = {
             "base_url": str(llm_cfg.get("base_url", "")).strip(),
             "api_key": str(llm_cfg.get("api_key", "")).strip(),
@@ -871,19 +944,25 @@ def run(
     if acp:
         command = list(acp_command or [])
     entrypoint: list[str] | None = None
+    provider_wrapped = bool(provider_names) and selected_agent in _PROVIDER_WRAPPED_AGENTS
+    # Length of the resolved native entrypoint prefix in ``command``; the
+    # provider wrapper below must sit after it, so UID mapping still runs first.
+    native_prefix_len = 0
     if init_commands:
         info(f"Applying {len(init_commands)} init command(s) before startup")
+        init_command = acp_command if acp else spec.command
         try:
             # The init wrapper replaces the image entrypoint, so the launch
             # argv has to be made explicit. In ACP mode that argv is the
             # adapter command, not the interactive one.
             command = manager.resolve_launch_command(
                 image=image,
-                command=acp_command if acp else spec.command,
+                command=init_command,
             )
         except DockerClientError as exc:
             error(str(exc))
             raise typer.Exit(1) from exc
+        native_prefix_len = len(command) - len(init_command or [])
         entrypoint = _init_entrypoint(init_commands)
 
     if ikwid:
@@ -915,6 +994,17 @@ def run(
                 error(str(exc))
                 raise typer.Exit(1) from exc
         command = list(command or []) + passthrough_args
+
+    if provider_wrapped:
+        # Wrap last, after every argument is appended: the real agent argv
+        # travels in the environment, so anything added later would be lost.
+        full_command = list(command or [])
+        wrapped, wrapper_env = _wrap_provider_command(
+            selected_agent,
+            full_command[native_prefix_len:],
+        )
+        command = full_command[:native_prefix_len] + wrapped
+        merged_env.update(wrapper_env)
 
     config_dir = agent_config_dir(selected_agent, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -956,6 +1046,9 @@ def run(
     if herdr_pane:
         _report_herdr_metadata(selected_agent)
     extra_volumes.extend(herdr_volumes)
+    if provider_wrapped:
+        # Mounted, not inlined: keeps the launch argv shell-safe for every image.
+        extra_volumes.append(_provider_bootstrap_volume(selected_agent))
     # setdefault: explicit -e HERDR_* overrides (already in merged_env) win
     for key, value in herdr_env.items():
         merged_env.setdefault(key, value)
@@ -974,6 +1067,20 @@ def run(
             x11_vols, x11_env = _x11_volumes_and_env(display, x11_auth)
             extra_volumes.extend(x11_vols)
             merged_env.update(x11_env)
+
+    # Checked before the proxy is provisioned so a bad target leaves nothing
+    # to roll back; the proxy CA target is reserved up front for the same reason.
+    _check_custom_volume_targets(
+        custom_volumes,
+        [
+            "/workspace",
+            spec.config_mount_path,
+            _PROXY_CA_MOUNT_PATH,
+            *(path for path in (acp_workspace_mount, acp_workspace_alias) if path),
+            *(target for _, target, _ in extra_volumes),
+        ],
+    )
+    extra_volumes.extend(custom_volumes)
 
     if proxy_enabled:
         proxy_image = str(proxy_cfg.get("image", "vibepod/proxy:latest"))
@@ -1016,7 +1123,7 @@ def run(
         _apply_proxy_env(merged_env, proxy_policy_id)
 
         if proxy_ca_dir:
-            extra_volumes.append((str(proxy_ca_dir), "/etc/vibepod-proxy-ca", "ro"))
+            extra_volumes.append((str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, "ro"))
 
     info(f"Starting {selected_agent} with image {image}")
     container_user = None
@@ -1024,6 +1131,8 @@ def run(
         container_user = _host_user()
     launch_labels = dict(herdr_labels)
     launch_labels["vibepod.profile"] = active_profile
+    if provider_names:
+        launch_labels["vibepod.provider"] = ",".join(provider_names)
     if proxy_policy_id is not None:
         launch_labels["vibepod.proxy-policy"] = proxy_policy_id
     auto_remove = bool(config.get("auto_remove", True))

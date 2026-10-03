@@ -367,6 +367,28 @@ def test_run_and_alias_forward_publish_flag(monkeypatch) -> None:
     assert called["passthrough"] == []
 
 
+def test_run_and_alias_forward_volume_flag(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["volume"] = kwargs.get("volume")
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["run", "claude", "-v", "~/data:/data:ro"])
+    assert result.exit_code == 0
+    assert called["volume"] == ["~/data:/data:ro"]
+    assert called["passthrough"] == []
+
+    result = runner.invoke(app, ["claude", "-v", "cache:/cache", "--volume", "/srv:/srv"])
+    assert result.exit_code == 0
+    assert called["agent"] == "claude"
+    assert called["volume"] == ["cache:/cache", "/srv:/srv"]
+    assert called["passthrough"] == []
+
+
 def test_alias_forwards_overlay_flags(monkeypatch) -> None:
     called: dict[str, object] = {}
 
