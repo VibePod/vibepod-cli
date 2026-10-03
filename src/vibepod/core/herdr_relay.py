@@ -15,6 +15,7 @@ import logging
 import os
 import secrets
 import shutil
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -68,6 +69,8 @@ def validate_event(line: bytes, pane_id: str) -> dict[str, Any] | None:
 
 
 def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        return _windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -75,6 +78,28 @@ def _pid_alive(pid: int) -> bool:
     except OSError:  # EPERM: alive, owned by someone else
         return True
     return True
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    # os.kill(pid, 0) terminates the process on Windows, so ask for its exit code instead.
+    if sys.platform != "win32":
+        raise OSError("only available on Windows")
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    process_query_limited_information = 0x1000
+    still_active = 259
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        # Access denied means the process exists but belongs to someone else.
+        return bool(ctypes.get_last_error() == 5)
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def prune_stale_dirs(root: Path) -> None:
