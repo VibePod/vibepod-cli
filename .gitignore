@@ -27,3 +27,10 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Snapcraft local build artifacts
+*.snap
+/parts/
+/stage/
+/prime/
+/.snapcraft/
