@@ -38,7 +38,7 @@ STEP_AGENT = "agent_running"
 STEP_VERIFYING = "verifying"
 STEP_HANDING_OVER = "handing_over"
 
-# How much verify output is sent; the board keeps its head and tail.
+# How much verify output is read and sent, in bytes: its head and tail.
 REPORT_OUTPUT_HEAD = 4_000
 REPORT_OUTPUT_TAIL = 60_000
 SUMMARY_LINES = 40
@@ -309,14 +309,18 @@ def summarize_logs(logs: str) -> str:
     return "\n".join(lines[-SUMMARY_LINES:])[-SUMMARY_CHARS:]
 
 
-def shorten_output(output: str) -> str:
-    if len(output) <= REPORT_OUTPUT_HEAD + REPORT_OUTPUT_TAIL:
-        return output
-    omitted = len(output) - REPORT_OUTPUT_HEAD - REPORT_OUTPUT_TAIL
-    return (
-        f"{output[:REPORT_OUTPUT_HEAD]}\n[… {omitted} characters omitted …]\n"
-        f"{output[-REPORT_OUTPUT_TAIL:]}"
-    )
+def read_output(file: IO[bytes]) -> str:
+    """The head and tail of a command's output file, read without loading all of it: a
+    runaway command can write gigabytes."""
+    size = file.seek(0, os.SEEK_END)
+    file.seek(0)
+    if size <= REPORT_OUTPUT_HEAD + REPORT_OUTPUT_TAIL:
+        return file.read().decode("utf-8", errors="replace")
+    head = file.read(REPORT_OUTPUT_HEAD).decode("utf-8", errors="replace")
+    file.seek(size - REPORT_OUTPUT_TAIL)
+    tail = file.read(REPORT_OUTPUT_TAIL).decode("utf-8", errors="replace")
+    omitted = size - REPORT_OUTPUT_HEAD - REPORT_OUTPUT_TAIL
+    return f"{head}\n[… {omitted} bytes omitted …]\n{tail}"
 
 
 def format_duration(seconds: float) -> str:
@@ -892,14 +896,8 @@ class BoardWorker:
                 _terminate(process)
 
             code, ended = self._wait_for(process.poll, stop, deadline)
-            output.seek(0)
-            text = output.read().decode("utf-8", errors="replace")
-        return VerifyResult(
-            command=command,
-            exit_code=code,
-            output=shorten_output(text),
-            ended=ended,
-        )
+            text = read_output(output)
+        return VerifyResult(command=command, exit_code=code, output=text, ended=ended)
 
     def _pause_for_usage_limit(self, logs: str) -> None:
         wait = float(self.options.usage_limit_wait_seconds)

@@ -1148,6 +1148,25 @@ def test_a_worker_passes_over_at_most_as_many_tasks_as_a_claim_takes() -> None:
 # --- branch names, prompt, lock ------------------------------------------------------
 
 
+def test_only_the_head_and_tail_of_the_verify_output_are_read(monkeypatch) -> None:
+    import tempfile
+
+    from vibepod.core import board_worker
+
+    monkeypatch.setattr(board_worker, "REPORT_OUTPUT_HEAD", 5)
+    monkeypatch.setattr(board_worker, "REPORT_OUTPUT_TAIL", 4)
+    with tempfile.TemporaryFile() as output:
+        output.write(b"short")
+        assert board_worker.read_output(output) == "short"
+        output.write(b" and then a lot more output-TAIL")
+        reads: list[int] = []
+        read = output.read
+        monkeypatch.setattr(output, "read", lambda size=-1: reads.append(size) or read(size))
+
+        assert board_worker.read_output(output) == "short\n[… 28 bytes omitted …]\nTAIL"
+        assert reads == [5, 4]
+
+
 def test_branch_names_follow_the_template() -> None:
     task = {"key": "VP-12", "taskNumber": 12, "githubIssueNumber": 201}
     assert branch_name("issue-{issue}", task) == "issue-201"
