@@ -51,6 +51,8 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Development: development.md
+  - Architecture decisions:
+      - "VP-153: Contemper agent VMs": decisions/vp-153-contemper.md
   - Agents: agents/index.md
   - Profiles: profiles.md
   - Model providers: providers.md
