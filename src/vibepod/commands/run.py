@@ -134,6 +134,15 @@ from vibepod.core.provider_runtime import (
 )
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
+from vibepod.core.sandbox import (
+    SANDBOX_LABEL,
+    SandboxError,
+    check_syd_prerequisites,
+    prepare_syd_sandbox,
+    resolve_sandbox_type,
+    wrap_command,
+    writable_targets,
+)
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, last_error, route_to_stderr, success, warning
 
@@ -562,6 +571,7 @@ def run(
     ] = None,
     passthrough_args: list[str] | None = None,
     provider_names: list[str] | None = None,
+    sandbox: str | None = None,
 ) -> None:
     """Start an agent container.
 
@@ -582,6 +592,15 @@ def run(
     try:
         active_profile = resolve_profile(profile, config)
     except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    try:
+        syd_prerequisites = (
+            check_syd_prerequisites(config)
+            if resolve_sandbox_type(config, sandbox) == "syd"
+            else None
+        )
+    except SandboxError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
     selected_agent_input = agent or str(config.get("default_agent", "claude"))
@@ -1057,6 +1076,31 @@ def run(
         if proxy_ca_dir:
             extra_volumes.append((str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, "ro"))
 
+    if syd_prerequisites is not None:
+        if command is None:
+            # The syd prefix has to sit in front of the agent argv, so the
+            # image's default Cmd is made explicit.
+            try:
+                command = manager.image_cmd(image)
+            except DockerClientError as exc:
+                error(str(exc))
+                raise typer.Exit(1) from exc
+        syd_sandbox = prepare_syd_sandbox(
+            syd_prerequisites,
+            agent=selected_agent,
+            workspace_paths=["/workspace", acp_workspace_mount, acp_workspace_alias],
+            writable_paths=writable_targets(
+                config_mount_path=spec.config_mount_path,
+                env=merged_env,
+                volumes=extra_volumes,
+            ),
+        )
+        # After the native entrypoint prefix: it still runs as root to map the
+        # host UID and drop privileges, which syd would block.
+        command = wrap_command(command, native_prefix_len, syd_sandbox)
+        extra_volumes.extend(syd_sandbox.volumes())
+        info(f"Sandbox: syd (policy {syd_sandbox.policy_path})")
+
     info(f"Starting {selected_agent} with image {image}")
     container_user = None
     if not rootless_podman and spec.run_as_host_user:
@@ -1067,6 +1111,8 @@ def run(
         launch_labels["vibepod.provider"] = ",".join(provider_names)
     if proxy_policy_id is not None:
         launch_labels["vibepod.proxy-policy"] = proxy_policy_id
+    if syd_prerequisites is not None:
+        launch_labels[SANDBOX_LABEL] = "syd"
     auto_remove = bool(config.get("auto_remove", True))
     try:
         container = manager.run_agent(

@@ -207,6 +207,14 @@ def _default_config() -> dict[str, Any]:
             "url": "",
             "token": "",
         },
+        "sandbox": {
+            "type": "none",
+            "syd": {
+                "binary": "",
+                "log_level": "warn",
+                "rules": [],
+            },
+        },
         "aliases": DEFAULT_ALIASES.copy(),
     }
 
@@ -293,6 +301,8 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
         "VP_LLM_MODEL": ("llm.model", str),
         "VP_BOARD_URL": ("board.url", str),
         "VP_BOARD_TOKEN": ("board.token", str),
+        "VP_SANDBOX": ("sandbox.type", str),
+        "VP_SANDBOX_SYD_BINARY": ("sandbox.syd.binary", str),
     }
 
     for env_key, (config_path, converter) in mappings.items():

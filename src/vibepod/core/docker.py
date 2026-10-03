@@ -596,8 +596,11 @@ class DockerManager:
         except DockerException as exc:
             raise DockerClientError(f"Failed to look up container '{name_or_id}': {exc}") from exc
 
-    def resolve_launch_command(self, image: str, command: list[str] | None) -> list[str]:
-        """Resolve the full executable argv for a container start."""
+    def image_cmd(self, image: str) -> list[str]:
+        """Return the image's default Cmd (the argv its entrypoint receives)."""
+        return _normalize_command(self._image_config(image).get("Cmd"))
+
+    def _image_config(self, image: str) -> dict[str, Any]:
         try:
             image_obj = self.client.images.get(image)
         except NotFound as exc:
@@ -610,9 +613,11 @@ class DockerManager:
             raise DockerClientError(f"Failed to inspect image {image}: {exc}") from exc
 
         image_config = image_obj.attrs.get("Config", {}) if hasattr(image_obj, "attrs") else {}
-        if not isinstance(image_config, dict):
-            image_config = {}
+        return image_config if isinstance(image_config, dict) else {}
 
+    def resolve_launch_command(self, image: str, command: list[str] | None) -> list[str]:
+        """Resolve the full executable argv for a container start."""
+        image_config = self._image_config(image)
         image_entrypoint = _normalize_command(image_config.get("Entrypoint"))
         image_cmd = _normalize_command(image_config.get("Cmd"))
         effective_cmd = command if command is not None else image_cmd

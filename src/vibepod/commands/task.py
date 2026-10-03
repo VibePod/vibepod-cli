@@ -65,6 +65,16 @@ from vibepod.core.profiles import resolve_profile
 from vibepod.core.provider_launch import prepare_launch
 from vibepod.core.provider_runtime import WRAPPED_AGENTS, bootstrap_volume, wrap_provider_command
 from vibepod.core.proxy_filter import remove_container_policy
+from vibepod.core.sandbox import (
+    SANDBOX_HELP,
+    SANDBOX_LABEL,
+    SandboxError,
+    check_syd_prerequisites,
+    prepare_syd_sandbox,
+    resolve_sandbox_type,
+    wrap_command,
+    writable_targets,
+)
 from vibepod.core.tasks import (
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
@@ -352,6 +362,10 @@ def task_create_command(
             help="Temporary model provider(s) for this launch (see `vp provider list`)",
         ),
     ] = None,
+    sandbox: Annotated[
+        str | None,
+        typer.Option("--sandbox", help=SANDBOX_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Start an agent task in the background and print its id."""
     task_create(
@@ -369,6 +383,7 @@ def task_create_command(
         ikwid=ikwid,
         profile=profile,
         provider_names=provider,
+        sandbox=sandbox,
         passthrough_args=_context_args(ctx),
     )
 
@@ -436,6 +451,10 @@ def task_run_command(
             help="Temporary model provider(s) for this launch (see `vp provider list`)",
         ),
     ] = None,
+    sandbox: Annotated[
+        str | None,
+        typer.Option("--sandbox", help=SANDBOX_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Deprecated alias for `task create`."""
     task_create(
@@ -453,6 +472,7 @@ def task_run_command(
         ikwid=ikwid,
         profile=profile,
         provider_names=provider,
+        sandbox=sandbox,
         passthrough_args=_context_args(ctx),
         deprecated_alias=True,
     )
@@ -482,6 +502,7 @@ def launch_task(
     ikwid: bool = False,
     profile: str | None = None,
     provider_names: list[str] | None = None,
+    sandbox: str | None = None,
     passthrough_args: list[str] | None = None,
     extra_mounts: list[tuple[str, str, str]] | None = None,
     allow_check_path: Path | None = None,
@@ -499,6 +520,15 @@ def launch_task(
     try:
         active_profile = resolve_profile(profile, config)
     except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    try:
+        syd_prerequisites = (
+            check_syd_prerequisites(config)
+            if resolve_sandbox_type(config, sandbox) == "syd"
+            else None
+        )
+    except SandboxError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
     selected = resolve_agent_name(agent)
@@ -839,6 +869,24 @@ def launch_task(
 
             extra_volumes.append((str(actual_ca_dir), PROXY_CA_MOUNT_PATH, "ro"))
 
+        if syd_prerequisites is not None:
+            syd_sandbox = prepare_syd_sandbox(
+                syd_prerequisites,
+                agent=selected,
+                workspace_paths=["/workspace"],
+                writable_paths=writable_targets(
+                    config_mount_path=spec.config_mount_path,
+                    env=merged_env,
+                    volumes=extra_volumes,
+                ),
+            )
+            # Same slot as the provider wrapper: after the native entrypoint
+            # prefix, which still has to drop privileges outside syd.
+            prefix = 0 if spec.headless_command else native_prefix_len
+            command = wrap_command(command, prefix, syd_sandbox)
+            extra_volumes.extend(syd_sandbox.volumes())
+            info(f"Sandbox: syd (policy {syd_sandbox.policy_path})")
+
         info(f"Starting task on {selected} with image {image}")
         container_user = None
         if not rootless_podman and spec.run_as_host_user:
@@ -849,6 +897,8 @@ def launch_task(
             launch_labels["vibepod.provider"] = ",".join(provider_names)
         if proxy_policy_id is not None:
             launch_labels["vibepod.proxy-policy"] = proxy_policy_id
+        if syd_prerequisites is not None:
+            launch_labels[SANDBOX_LABEL] = "syd"
         try:
             container = manager.run_agent(
                 agent=selected,
@@ -997,6 +1047,7 @@ def task_create(
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
     provider_names: list[str] | None = None,
+    sandbox: str | None = None,
     passthrough_args: list[str] | None = None,
     deprecated_alias: bool = False,
 ) -> None:
@@ -1024,6 +1075,7 @@ def task_create(
         ikwid=ikwid,
         profile=profile,
         provider_names=provider_names,
+        sandbox=sandbox,
         passthrough_args=passthrough_args,
     )
     record = launched.record
