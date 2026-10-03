@@ -310,6 +310,34 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # Hermes is pre-1.0 and its PyPI release line trails upstream main.
         preview=True,
     ),
+    "cursor": AgentSpec(
+        "cursor",
+        "anysphere",
+        DEFAULT_IMAGES["cursor"],
+        "cursor",
+        ["cursor-agent"],
+        "/config",
+        # Cursor derives all user state from HOME: ~/.cursor (cli-config.json,
+        # chats, skills) and, on Linux where it has no keychain store,
+        # ~/.config/cursor/auth.json. The image entrypoint pins the release
+        # channel to "static" in cli-config.json so the background self-update
+        # never downloads packages onto the persisted mount.
+        # No llm_env_map: the CLI only talks to Cursor's own API (--endpoint /
+        # CURSOR_API_ENDPOINT), so there is no OpenAI-compatible base URL to route.
+        {"HOME": "/config"},
+        ikwid_args=["--force"],
+        # `-p/--print` is a boolean flag and the prompt stays positional. Print
+        # mode exits with "Workspace Trust Required" on a directory it has not
+        # seen unless --trust, --yolo or -f is passed, so --trust is part of the
+        # one-shot prefix; the workspace is the directory the user launched from.
+        # It is unconditional because a detached task cannot answer the trust
+        # prompt, and it only trusts the workspace: command approvals are still
+        # enforced unless --ikwid adds --force.
+        headless_prefix=["--trust", "-p"],
+        # Hidden `acp` subcommand on the same binary (Agent Client Protocol
+        # server over stdio).
+        acp_command=["cursor-agent", "acp"],
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

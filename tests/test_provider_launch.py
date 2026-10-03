@@ -69,13 +69,14 @@ def test_claude_provider_environment(registry):
     assert not (registry / "agents").exists()
 
 
-def test_unsupported_agent_rejected_before_key_read(registry, monkeypatch):
+@pytest.mark.parametrize("agent", ["gemini", "cursor"])
+def test_unsupported_agent_rejected_before_key_read(registry, monkeypatch, agent):
     def unexpected(*args):
         raise AssertionError("Credentials must not be read for unsupported adapters")
 
     monkeypatch.setattr(provider_launch, "resolve_key", unexpected)
     with pytest.raises(ValueError, match="not yet supported"):
-        provider_launch.prepare_provider("gemini", ["hosted"], {})
+        provider_launch.prepare_provider(agent, ["hosted"], {})
 
 
 def test_conflicting_route_rejected_without_values(registry):

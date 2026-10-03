@@ -277,7 +277,7 @@ cannot take `--provider` in task mode; the same applies to Pi. Hermes is deliber
 this feature: its runtime prioritizes saved provider settings, ignores
 `OPENAI_BASE_URL`, and restricts keys by endpoint host, so use `hermes setup`
 inside the container (see the [Hermes notes](agents/index.md#hermes-agent-hermes-developer-preview)).
-Gemini, Copilot, Auggie, Agy, Freebuff, Devstral, and dsh have no verified
+Gemini, Copilot, Auggie, Agy, Freebuff, Devstral, dsh, and Cursor have no verified
 custom-endpoint mechanism and are rejected as well.
 
 Qwen, Tau, Jcode, and OpenCode follow the same temporary-launch rules as the

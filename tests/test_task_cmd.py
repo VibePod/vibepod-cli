@@ -127,6 +127,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
     assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
     assert AGENT_SPECS["hermes"].headless_prefix == ["-z"]
+    assert AGENT_SPECS["cursor"].headless_prefix == ["--trust", "-p"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -497,6 +498,30 @@ def test_task_create_qwen_uses_prompt_flag(monkeypatch, tmp_path, tmp_task_store
     task_cmd.task_create(agent="qwen", prompt="run tests", workspace=tmp_path)
 
     assert stub.run_kwargs["command"] == ["qwen", "-p", "run tests"]
+
+
+def test_task_create_cursor_trusts_workspace_and_keeps_prompt_intact(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    """--trust is always passed (a detached task cannot answer the trust prompt).
+
+    Only --ikwid adds --force, the actual command-approval bypass.
+    """
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="cursor", prompt="fix the tests", workspace=tmp_path, ikwid=True)
+
+    assert stub.run_kwargs["command"] == [
+        "cursor-agent",
+        "--force",
+        "--trust",
+        "-p",
+        "fix the tests",
+    ]
 
 
 def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(

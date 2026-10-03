@@ -352,3 +352,19 @@ def test_default_config_includes_hermes_agent(monkeypatch, tmp_path: Path) -> No
     # Unlike dsh, this integration publishes nothing.
     assert hermes["ports"] == []
     assert hermes["init"] == []
+
+
+def test_default_config_includes_cursor_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+
+    cursor = config["agents"]["cursor"]
+
+    assert cursor["enabled"] is True
+    assert cursor["image"] == "vibepod/cursor:latest"
+    assert cursor["auto_pull"] is None
+    assert cursor["env"] == {}
+    assert cursor["volumes"] == []
+    # Unlike dsh, this integration publishes nothing.
+    assert cursor["ports"] == []
+    assert cursor["init"] == []

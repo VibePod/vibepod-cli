@@ -104,6 +104,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "freebuff",
         "qwen",
         "dsh",
+        "cursor",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -3750,6 +3751,19 @@ def test_resolve_acp_command_parses_string_overrides_like_a_shell() -> None:
     # An empty override is "no adapter", not "run the image default".
     assert run_cmd._resolve_acp_command(spec, {"acp_command": ""}) is None
     assert run_cmd._resolve_acp_command(spec, {"acp_command": []}) is None
+
+
+def test_cursor_skill_paths_use_shared_agents_dir() -> None:
+    """Cursor reads ~/.agents/skills, and the image sets HOME to /config."""
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("cursor") == ["/config/.agents/skills"]
+
+
+@pytest.mark.parametrize("workspace", ["/opt/cursor-agent", "/opt/cursor-agent/project"])
+def test_cursor_acp_rejects_installation_overlap(workspace: str) -> None:
+    with pytest.raises(typer.Exit):
+        run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("cursor"))
 
 
 def test_hermes_skill_paths_use_shared_agents_dir() -> None:
