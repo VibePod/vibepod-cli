@@ -1107,7 +1107,7 @@ def test_a_usage_limit_is_detected_when_the_agent_exits_cleanly_without_work(
 
     def works_on_limits(path: Path, prompt: str) -> tuple[int, str]:
         commits_a_feature(path, prompt)
-        return 0, "Added a usage limit reached banner."
+        return 0, result_block(summary="Added a usage limit reached banner.")
 
     worker, _ = work(server, FakeRunner(works_on_limits), repo, task="VP-2")
     assert worker.summary.handed_over == ["VP-2"]
@@ -1248,7 +1248,7 @@ def test_a_worktree_pointing_elsewhere_is_left_alone(
         # Git for Windows hides .git, and Windows refuses to overwrite a hidden file.
         (path / ".git").unlink()
         (path / ".git").write_text("gitdir: /tmp/somewhere-else\n")
-        return 0, "Done."
+        return 0, result_block(summary="Done.")
 
     work(server, FakeRunner(redirects), repo, once=True)
 
@@ -1269,7 +1269,7 @@ def test_other_branches_the_agent_moved_are_restored(
     def moves_main(path: Path, prompt: str) -> tuple[int, str]:
         commits_a_feature(path, prompt)
         git(path, "update-ref", "refs/heads/main", "HEAD")
-        return 0, "Done."
+        return 0, result_block(summary="Done.")
 
     work(server, FakeRunner(moves_main), repo, once=True)
 
@@ -1359,7 +1359,7 @@ def test_a_moved_branch_that_cannot_be_told_from_the_users_work_is_left_and_bloc
         git(path, "update-ref", "refs/heads/main", "HEAD")
         (repo / "staged.txt").write_text("staged by the user\n")
         git(repo, "add", "staged.txt")
-        return 0, "Done."
+        return 0, result_block(summary="Done.")
 
     work(server, FakeRunner(moves_main_while_the_user_stages), repo, once=True)
 
@@ -1379,7 +1379,7 @@ def test_an_agent_that_left_its_branch_blocks_the_task(
     def detaches(path: Path, prompt: str) -> tuple[int, str]:
         commits_a_feature(path, prompt)
         git(path, "checkout", "--quiet", "--detach")
-        return 0, "Done."
+        return 0, result_block(summary="Done.")
 
     work(server, FakeRunner(detaches), repo, once=True)
 
