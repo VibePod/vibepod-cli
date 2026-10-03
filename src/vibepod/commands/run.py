@@ -134,6 +134,7 @@ from vibepod.core.provider_runtime import (
 )
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
+from vibepod.core.sandbox import SANDBOX_HELP, SandboxError, prepare_sandbox, resolve_sandbox
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, last_error, route_to_stderr, success, warning
 
@@ -560,6 +561,10 @@ def run(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    sandbox: Annotated[
+        str | None,
+        typer.Option("--sandbox", help=SANDBOX_HELP, show_default=False),
+    ] = None,
     passthrough_args: list[str] | None = None,
     provider_names: list[str] | None = None,
 ) -> None:
@@ -828,6 +833,16 @@ def run(
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
+    try:
+        sandbox_plan = prepare_sandbox(
+            manager,
+            resolve_sandbox(config, workspace_path, sandbox),
+        )
+    except SandboxError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    for note in sandbox_plan.notes:
+        warning(f"sandbox: {note}")
     agent_userns_mode = "keep-id" if rootless_podman else None
     if rootless_podman:
         merged_env["USER_UID"] = "0"
@@ -966,6 +981,7 @@ def run(
         config,
         no_herdr=no_herdr or acp,
         mount_socket=herdr_socket_mounts,
+        socket_skip_reason=sandbox_plan.socket_skip_reason,
     )
     # Host-side reporting works even when the socket cannot be mounted, so it
     # is gated on the pane, not on the container wiring.
@@ -1057,11 +1073,11 @@ def run(
         if proxy_ca_dir:
             extra_volumes.append((str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, "ro"))
 
-    info(f"Starting {selected_agent} with image {image}")
+    info(f"Starting {selected_agent} with image {image}{sandbox_plan.suffix}")
     container_user = None
     if not rootless_podman and spec.run_as_host_user:
         container_user = _host_user()
-    launch_labels = dict(herdr_labels)
+    launch_labels = {**herdr_labels, **sandbox_plan.labels}
     launch_labels["vibepod.profile"] = active_profile
     if provider_names:
         launch_labels["vibepod.provider"] = ",".join(provider_names)
@@ -1091,6 +1107,8 @@ def run(
             workspace_mount_path=acp_workspace_mount,
             start=not acp,
             tty=not acp,
+            runtime=sandbox_plan.runtime,
+            security_opt=sandbox_plan.security_opt or None,
         )
     except Exception:
         if proxy_policy_id is not None:

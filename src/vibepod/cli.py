@@ -25,6 +25,7 @@ from vibepod.commands import (
 )
 from vibepod.compat import install_python314_http_client_flush_patch
 from vibepod.constants import AGENT_SHORTCUTS, LEGACY_AGENT_IDS, SUPPORTED_AGENTS
+from vibepod.core.sandbox import SANDBOX_HELP
 
 install_python314_http_client_flush_patch()
 
@@ -123,6 +124,10 @@ def run_command(
         list[str] | None,
         typer.Option("--provider", help="Temporarily use a global provider"),
     ] = None,
+    sandbox: Annotated[
+        str | None,
+        typer.Option("--sandbox", help=SANDBOX_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Start an agent container."""
     run.run(
@@ -143,6 +148,7 @@ def run_command(
         acp=acp,
         profile=profile,
         provider_names=provider_names,
+        sandbox=sandbox,
         passthrough_args=_context_args(ctx),
     )
 
@@ -253,6 +259,10 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             list[str] | None,
             typer.Option("--provider", help="Temporarily use a global provider"),
         ] = None,
+        sandbox: Annotated[
+            str | None,
+            typer.Option("--sandbox", help=SANDBOX_HELP, show_default=False),
+        ] = None,
     ) -> None:
         run.run(
             agent=agent_name,
@@ -272,6 +282,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             acp=acp,
             profile=profile,
             provider_names=provider_names,
+            sandbox=sandbox,
             passthrough_args=_context_args(ctx),
         )
 

@@ -34,6 +34,15 @@ Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
 
+## Agent sandbox (gVisor)
+
+`sandbox.mode: gvisor` / `--sandbox` only swaps the agent container's OCI
+runtime; all engine checks live in `src/vibepod/core/sandbox.py` and run before
+any network/proxy is provisioned. On Docker the runtime must carry
+`--network=host` (gVisor netstack cannot reach Docker's 127.0.0.11 DNS on
+`vibepod-network`, google/gvisor#7469); Podman's `/info` lists `runsc` even
+when it is not installed and never reports runtime flags. See `docs/sandbox.md`.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

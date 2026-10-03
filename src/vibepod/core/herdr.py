@@ -452,14 +452,19 @@ def apply_herdr_if_enabled(
     *,
     no_herdr: bool,
     mount_socket: bool = True,
+    socket_skip_reason: str | None = None,
 ) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
     """Wire herdr for this run when inside a herdr pane. Never raises.
 
     Returns (extra_volumes, env). Empty when disabled, not in a pane, or when
     *mount_socket* is False because the container engine cannot bind-mount a
-    host unix socket — the caller still reports pane identity from the host.
+    host unix socket (or *socket_skip_reason*, e.g. a sandbox runtime that
+    blocks host sockets) — the caller still reports pane identity from the host.
     """
     if not pane_reporting_enabled(config, no_herdr=no_herdr):
+        return [], {}
+    if socket_skip_reason is not None:
+        warning(f"herdr: {socket_skip_reason}")
         return [], {}
     if not mount_socket:
         warning(

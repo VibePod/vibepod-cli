@@ -305,6 +305,44 @@ class DockerManager:
         self._rootless_podman = rootless and self.is_podman()
         return self._rootless_podman
 
+    def _engine_info(self) -> dict[str, Any]:
+        try:
+            info = self.client.info()
+        except (APIError, DockerException, AttributeError):
+            return {}
+        return info if isinstance(info, dict) else {}
+
+    def is_rootless_engine(self) -> bool:
+        """Return True for rootless Docker or rootless Podman."""
+        info = self._engine_info()
+        security_options = info.get("SecurityOptions", [])
+        return bool(info.get("Rootless")) or (
+            isinstance(security_options, list)
+            and any(str(option).lower() == "name=rootless" for option in security_options)
+        )
+
+    def selinux_enabled(self) -> bool:
+        """Return True when the engine applies SELinux labels to containers."""
+        security_options = self._engine_info().get("SecurityOptions", [])
+        return isinstance(security_options, list) and any(
+            str(option).lower() == "name=selinux" for option in security_options
+        )
+
+    def runtimes(self) -> dict[str, dict[str, Any]]:
+        """Return the OCI runtimes the engine reports in ``docker info``.
+
+        Docker lists only registered runtimes, with their ``runtimeArgs``.
+        Podman lists every runtime its containers.conf knows about, installed
+        or not, and never reports arguments.
+        """
+        runtimes = self._engine_info().get("Runtimes")
+        if not isinstance(runtimes, dict):
+            return {}
+        return {
+            str(name): (entry if isinstance(entry, dict) else {})
+            for name, entry in runtimes.items()
+        }
+
     def supports_host_socket_mounts(self) -> bool:
         """Return True when a host unix socket can be bind-mounted into a container.
 
@@ -649,6 +687,8 @@ class DockerManager:
         workspace_mount_path: str | None = None,
         start: bool = True,
         tty: bool = True,
+        runtime: str | None = None,
+        security_opt: list[str] | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -680,13 +720,18 @@ class DockerManager:
                 # rejects it) and for ACP's create-without-start ordering, and
                 # because the high-level containers.create/run does not accept
                 # `stdin_once` (the stdin-EOF lifecycle hook).
-                host_config = self.client.api.create_host_config(
-                    binds=volumes,
-                    auto_remove=auto_remove,
-                    network_mode=network,
-                    port_bindings=ports,
-                    extra_hosts={"host.docker.internal": "host-gateway"},
-                )
+                host_config_kwargs: dict[str, Any] = {
+                    "binds": volumes,
+                    "auto_remove": auto_remove,
+                    "network_mode": network,
+                    "port_bindings": ports,
+                    "extra_hosts": {"host.docker.internal": "host-gateway"},
+                }
+                if runtime:
+                    host_config_kwargs["runtime"] = runtime
+                if security_opt:
+                    host_config_kwargs["security_opt"] = security_opt
+                host_config = self.client.api.create_host_config(**host_config_kwargs)
                 # docker-py validates userns_mode against Docker's enum and rejects
                 # Podman's `keep-id`, so set the Docker-compatible HostConfig field
                 # directly for Podman engines.
@@ -754,9 +799,19 @@ class DockerManager:
                 run_kwargs["user"] = user
             if entrypoint:
                 run_kwargs["entrypoint"] = entrypoint
+            if runtime:
+                run_kwargs["runtime"] = runtime
+            if security_opt:
+                run_kwargs["security_opt"] = security_opt
 
             return self.client.containers.run(**run_kwargs)
         except APIError as exc:
+            if runtime:
+                raise DockerClientError(
+                    f"Failed to start container with OCI runtime '{runtime}': {exc}. "
+                    f"Check that '{runtime}' is installed and registered with the "
+                    "container engine (see `vp doctor` and the sandbox docs).",
+                ) from exc
             raise DockerClientError(f"Failed to start container: {exc}") from exc
 
     def stop_agent(self, agent: str, force: bool = False) -> int:

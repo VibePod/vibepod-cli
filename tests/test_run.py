@@ -1120,7 +1120,15 @@ def _run_in_herdr_pane(monkeypatch, workspace: Path, stub) -> dict:
     """Invoke `vp run` as if inside a herdr pane, returning the wiring calls."""
     calls: dict = {}
 
-    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+    def _fake_apply(
+        agent,
+        config_dir,
+        config,
+        *,
+        no_herdr,
+        mount_socket=True,
+        socket_skip_reason=None,
+    ):
         calls["mount_socket"] = mount_socket
         # what apply_herdr_if_enabled returns when the socket cannot be mounted
         return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
@@ -3904,3 +3912,277 @@ def test_run_skips_image_inspection_when_logging_disabled(
     run_cmd.run(agent="claude", workspace=tmp_path, detach=False)
 
     assert inspections["count"] == 0
+
+
+class _GvisorManager(_PortCapturingManager):
+    """Rootful Docker with runsc registered on the host network stack."""
+
+    def __init__(self, runtime_args: list[str] | None = None) -> None:
+        super().__init__()
+        self.runtime_args = ["--network=host"] if runtime_args is None else runtime_args
+
+    def runtimes(self) -> dict:
+        return {
+            "runc": {"path": "runc"},
+            "runsc": {"path": "runsc", "runtimeArgs": self.runtime_args},
+        }
+
+    def is_podman(self) -> bool:
+        return False
+
+    def is_rootless_engine(self) -> bool:
+        return False
+
+    def selinux_enabled(self) -> bool:
+        return False
+
+
+@pytest.fixture
+def _linux_host(monkeypatch):
+    from vibepod.core import sandbox as sandbox_mod
+
+    monkeypatch.setattr(sandbox_mod.sys, "platform", "linux")
+    monkeypatch.delenv("VP_SANDBOX", raising=False)
+
+
+def test_run_default_launch_passes_no_runtime(monkeypatch, _tmp_config_root, _linux_host) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "claude", "-w", str(workspace), "--detach"])
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["runtime"] is None
+    assert stub.run_kwargs["security_opt"] is None
+    assert "vibepod.sandbox" not in stub.run_kwargs["extra_labels"]
+
+
+def test_run_sandbox_flag_launches_agent_under_runsc(
+    monkeypatch,
+    _tmp_config_root,
+    _linux_host,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _GvisorManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "--sandbox", "gvisor"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["runtime"] == "runsc"
+    assert stub.run_kwargs["extra_labels"]["vibepod.sandbox"] == "gvisor"
+    assert "gvisor sandbox (runtime runsc)" in " ".join(result.output.split())
+
+
+def test_run_project_config_enables_sandbox(monkeypatch, _tmp_config_root, _linux_host) -> None:
+    workspace = _tmp_config_root / "workspace"
+    (workspace / ".vibepod").mkdir(parents=True)
+    (workspace / ".vibepod" / "config.yaml").write_text("sandbox:\n  mode: gvisor\n")
+    stub = _GvisorManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "claude", "-w", str(workspace), "--detach"])
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["runtime"] == "runsc"
+
+    # --sandbox none opts a single run back out.
+    stub.run_kwargs = None
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "--sandbox", "none"],
+    )
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["runtime"] is None
+
+
+def test_run_sandbox_rejects_netstack_runtime_before_launch(
+    monkeypatch,
+    _tmp_config_root,
+    _linux_host,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _GvisorManager(runtime_args=[])
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "--sandbox", "gvisor"],
+    )
+
+    assert result.exit_code == 1
+    assert "google/gvisor#7469" in " ".join(result.output.split())
+    assert stub.run_kwargs is None
+
+
+def test_run_sandbox_skips_herdr_socket_without_host_uds(
+    monkeypatch,
+    _tmp_config_root,
+    _linux_host,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _GvisorManager()
+    calls: dict = {}
+
+    def _fake_apply(
+        agent,
+        config_dir,
+        config,
+        *,
+        no_herdr,
+        mount_socket=True,
+        socket_skip_reason=None,
+    ):
+        calls["socket_skip_reason"] = socket_skip_reason
+        return [], {}
+
+    monkeypatch.setattr(run_cmd, "_apply_herdr_if_enabled", _fake_apply)
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "--sandbox", "gvisor"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "--host-uds=open" in calls["socket_skip_reason"]
+
+
+def test_run_rejects_unknown_sandbox(monkeypatch, _tmp_config_root, _linux_host) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _GvisorManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("claude", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "--sandbox", "kata"],
+    )
+
+    assert result.exit_code == 1
+    assert "expected one of: none, gvisor" in result.output
+    assert stub.run_kwargs is None
+
+
+def test_run_agent_passes_runtime_and_security_opt(tmp_path: Path) -> None:
+    captured: dict = {}
+
+    class _Containers:
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return "container"
+
+    manager = object.__new__(DockerManager)
+    manager.client = type("_Client", (), {"containers": _Containers()})()  # type: ignore[assignment]
+
+    manager.run_agent(
+        agent="claude",
+        image="img",
+        workspace=tmp_path,
+        config_dir=tmp_path,
+        config_mount_path="/config",
+        env={},
+        command=None,
+        auto_remove=True,
+        name="n",
+        version="0",
+        runtime="runsc",
+        security_opt=["label=disable"],
+    )
+
+    assert captured["runtime"] == "runsc"
+    assert captured["security_opt"] == ["label=disable"]
+
+
+def test_run_agent_low_level_path_passes_runtime(tmp_path: Path) -> None:
+    client = _KeepIdClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    manager.run_agent(
+        agent="claude",
+        image="img",
+        workspace=tmp_path,
+        config_dir=tmp_path,
+        config_mount_path="/config",
+        env={},
+        command=None,
+        auto_remove=True,
+        name="n",
+        version="0",
+        start=False,
+        runtime="runsc",
+    )
+
+    assert client.api.host_config_kwargs is not None
+    assert client.api.host_config_kwargs["runtime"] == "runsc"
+    assert "security_opt" not in client.api.host_config_kwargs
+
+
+def test_run_agent_explains_runtime_failures(tmp_path: Path) -> None:
+    from vibepod.core.docker import APIError
+
+    class _Containers:
+        def run(self, **kwargs):
+            raise APIError("unknown or invalid runtime name: runsc")
+
+    manager = object.__new__(DockerManager)
+    manager.client = type("_Client", (), {"containers": _Containers()})()  # type: ignore[assignment]
+
+    with pytest.raises(DockerClientError, match="OCI runtime 'runsc'.*vp doctor"):
+        manager.run_agent(
+            agent="claude",
+            image="img",
+            workspace=tmp_path,
+            config_dir=tmp_path,
+            config_mount_path="/config",
+            env={},
+            command=None,
+            auto_remove=True,
+            name="n",
+            version="0",
+            runtime="runsc",
+        )
+
+
+@pytest.mark.parametrize(
+    ("info", "rootless", "selinux", "runtimes"),
+    [
+        ({}, False, False, {}),
+        (
+            {
+                "SecurityOptions": ["name=seccomp", "name=rootless", "name=selinux"],
+                "Runtimes": {"runsc": {"path": "/usr/bin/runsc", "runtimeArgs": ["--x"]}},
+            },
+            True,
+            True,
+            {"runsc": {"path": "/usr/bin/runsc", "runtimeArgs": ["--x"]}},
+        ),
+        ({"Rootless": True, "Runtimes": {"crun": None}}, True, False, {"crun": {}}),
+    ],
+)
+def test_engine_sandbox_probes(info, rootless, selinux, runtimes) -> None:
+    manager = object.__new__(DockerManager)
+    manager.client = _EngineClient(info, {})  # type: ignore[assignment]
+
+    assert manager.is_rootless_engine() is rootless
+    assert manager.selinux_enabled() is selinux
+    assert manager.runtimes() == runtimes
