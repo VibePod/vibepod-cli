@@ -8,16 +8,19 @@
 1. **Claim** the next planned task in the board's work order. Tasks whose
    dependencies are not done, blocked tasks and tasks someone holds are
    skipped. The card moves to In Progress, with the worker as its holder.
-2. **Check out** the task's branch in a git worktree of its own, next to the
-   repository. The repository's own checkout is left alone.
-3. **Run the agent** headless, like `vp task create`, with the task's title,
-   description and acceptance criteria as the prompt. The agent commits its
-   work; anything it leaves uncommitted is committed for it. It ends its run
-   with a short structured result: done, needs input (with its question), or
-   failed (with the reason).
+2. **Check out** the task's branch in a clone of the repository of its own,
+   next to the repository. The clone shares the repository's objects, so it is
+   quick to make; the repository and its checkouts are left alone.
+3. **Run the agent** headless, like `vp task create`, in that clone, with the
+   task's title, description and acceptance criteria as the prompt. The agent
+   commits its work; anything it leaves uncommitted is committed for it. It
+   ends its run with a short structured result: done, needs input (with its
+   question), or failed (with the reason).
 4. **Verify** with an optional command, such as the test suite, run in the
-   worktree.
-5. **Hand over** the task to Review with its branch name, or give it back to
+   clone.
+5. **Bring the branch back** into the repository: only the task's branch, and
+   only forward (see [Safety](#safety)).
+6. **Hand over** the task to Review with its branch name, or give it back to
    Planned (or block it) with a note saying why.
 
 Every run adds a report to its task on the board: the agent's summary, the
@@ -97,14 +100,14 @@ vp board work VP --agent codex --repo ~/src/app --poll 2m
 | `--once` / `--max N` | Exit after one / after `N` tasks. |
 | `--poll 2m` | When no task is left, wait and look again instead of exiting. |
 | `--repo` | The repository to work in. Defaults to the task's local repository path on the board. |
-| `--worktree-dir` | Where task worktrees go. Defaults to `<repo>-worktrees` next to the repository. |
+| `--worktree-dir` | Where the task clones go, one folder per task. Defaults to `<repo>-worktrees` next to the repository. |
 | `--base` | Where new branches start, and what a review diffs the branch against. Defaults to the repository's current branch. |
 | `--branch-template` | The branch name, from `{issue}` (GitHub issue number), `{number}` (task number), `{key}` (`vp-12`) and `{project}` (`vp`). Defaults to `issue-{issue}`; a task without a GitHub issue gets `{key}`, such as `vp-12`. |
-| `--existing continue\|refuse` | When the task's branch or worktree exists, such as from an earlier attempt: continue on it (default) or refuse, which blocks the task. |
-| `--keep-worktree` | Keep the worktree after the hand-over or review; by default it is removed, and the branch stays. |
+| `--existing continue\|refuse` | When the task's branch exists, such as from an earlier attempt: continue on it (default) or refuse, which blocks the task. |
+| `--keep-worktree` | Keep the task's clone after the hand-over or review; by default it is removed, and the branch stays in the repository. |
 | `--profile`, `--provider`, `--ikwid`, `-e/--env`, `--network`, `--no-overlay` | Passed to every agent run, as for `vp task create`. |
 | `--timeout 2h` | Time limit per task (`none` for no limit). |
-| `--verify` | A command that must pass in the worktree before the task moves to Review. In review mode, a failing command sends the task back for rework. |
+| `--verify` | A command that must pass in the task's clone before the task moves to Review. In review mode, a failing command sends the task back for rework. |
 | `--on-fail planned\|blocked` | Where failed and timed-out tasks go: back to Planned, counting a failed attempt (default), or blocked. The board blocks a task after too many failed attempts. |
 | `--max-attempts` | Failed attempts before the board blocks a task. |
 | `--parallel` | Run alongside other workers on the same profile (see below). |
@@ -171,10 +174,10 @@ For each task, a review worker:
 
 1. **Claims** the next task in Review for a review. The card stays in Review;
    the claim names the commit the hand-over put up for review.
-2. **Checks out** exactly that commit, detached, in a worktree of its own
+2. **Checks out** exactly that commit, detached, in a clone of its own
    (`<worktree-dir>/review-<key>-<worker>`), so reviewers of one task never
-   share one. No branch is created or moved. A missing branch or commit
-   blocks the task in Review with the reason.
+   share one. No branch of the repository is created or moved. A missing
+   branch or commit blocks the task in Review with the reason.
 3. **Runs the agent** with a review prompt: the task's title, description and
    acceptance criteria, its history (questions, answers, earlier feedback and
    reviews), and the base to inspect `git diff <base>...HEAD` and the commit
@@ -196,14 +199,15 @@ For each task, a review worker:
     run without a readable result fails the review, and the task stays in
     Review for other reviewers. Every review adds a run report with its
     verdict, summary, feedback and verify output.
-6. **Removes** its worktree, unless `--keep-worktree`. The branch is never
-   touched.
+6. **Removes** its clone, unless `--keep-worktree`. Nothing comes back into
+   the repository: the branch is never touched.
 
-A review must leave the repository as it found it. The agent gets the git
-directory read-only, and if it committed, switched branches, moved refs or
-left changes in its worktree anyway, all of it is thrown away and the review
-fails with that reason. The same check runs again after `--verify`, which runs
-the code under review; files it leaves behind, such as caches, are fine.
+A review changes nothing. The agent gets the clone's git directory read-only,
+and if it committed, switched branches, moved refs or left changes in its
+clone anyway, none of it reaches the repository: it goes with the clone, and
+the review fails with that reason. The same check runs again after `--verify`,
+which runs the code under review; files it leaves behind, such as caches, are
+fine.
 
 When the task moved on during the review, because it was handed over again or
 another reviewer sent it back, the review ends without a verdict. Pause, stop,
@@ -217,23 +221,41 @@ its lease runs out. `--branch-template`, `--existing`, `--on-fail` and
 
 The agent runs in its container; the worker keeps it there:
 
-- Git on your machine never runs hooks or an fsmonitor while the worker uses it, and
-  never looks into nested repositories (submodules) of a worktree, whose configuration
-  the agent could have written; a submodule change is committed only if the agent
-  commits it. The agent container can commit to the repository, but its git
-  configuration, hooks, the
-  worktree's pointers into the repository, and the HEAD, index, pointers and lock of your
-  own checkouts are read-only there. A run that changed them anyway, moved other branches
-  or tags (they are put back), or left its own branch blocks the task for a look instead
-  of being handed over. Branches others move meanwhile are left alone: those of other
-  tasks, and a branch you commit to in your own checkout. The worker never prunes
-  worktrees other than its own.
-- Only the worktree the worker made for a task, in the worktree folder, is reused or
-  removed. A branch checked out anywhere else, such as in your own checkout, is never
-  taken over, even when the worktree folder holds it.
+- Each run gets a clone of the repository of its own, in its own folder in the
+  worktree folder, made with `git clone --shared`: it borrows the repository's
+  objects instead of copying them. The container gets only that clone, and the
+  repository's objects read-only; nothing else of the repository. Whatever the
+  agent does to branches, tags or the git configuration stays in its clone, so
+  workers running side by side, you in your own checkout, and other tools never
+  undo each other's work.
+- After the run, the worker brings only the task's branch back into the
+  repository, with `git fetch <clone> <branch>:<branch>`. The new commits come
+  with it into the repository's own objects, so removing the clone loses
+  nothing. The branch only moves forward: when it moved in the repository during
+  the run, such as by someone else's commit on a branch being reworked, and the
+  run's work does not continue from there, it is left as it is and the task is
+  blocked with the reason; the work stays in the clone. A review never brings
+  anything back.
+- Git on your machine never runs hooks, an fsmonitor or submodules in a clone,
+  and never looks into nested repositories of a clone, whose configuration the
+  agent could have written; a submodule change is committed only if the agent
+  commits it. The clone's git configuration, hooks, `info` and its pointer to the borrowed
+  objects are read-only in the container. A run that changed them anyway, or
+  replaced the clone's git directory, or left its own branch, blocks the task for
+  a look; its clone is kept and nothing of it is brought back.
+- A clone an earlier run left behind, such as after a failed attempt, is worked
+  on again where its branch is where the repository has it, so what the
+  attempt left uncommitted carries on. It is replaced where nothing in it would
+  be lost, and otherwise the task is blocked until you look at it: a clone with
+  commits that are not in the repository, or with changes, is never thrown
+  away. A worktree an earlier version of `vp board work` left in a task's
+  folder is removed when it holds no changes (its branch stays), and otherwise
+  the task is blocked until you remove it yourself.
+- A branch checked out in a worktree of the repository, such as in your own
+  checkout, is never worked on: the task is blocked instead.
 - A repository named by a task on the board must be on the allowed directories list,
   like any `vp task` workspace, before the worker touches it.
-- `--verify` runs on your machine, in the worktree, with the agent's changes: it runs
+- `--verify` runs on your machine, in the clone, with the agent's changes: it runs
   code the agent wrote with your permissions. The board token is left out of its
   environment. Use it in repositories you would run the agent's tests in yourself, or
   make the command run them in a container.

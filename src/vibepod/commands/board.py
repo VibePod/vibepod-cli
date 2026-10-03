@@ -210,7 +210,7 @@ def _say(level: str, message: str) -> None:
 
 def _ensure_allowed(repo: Path) -> None:
     """The repository must be on the allow list, like any `vp task` workspace; the task
-    worktrees made from it inherit its permission."""
+    clones made from it inherit its permission."""
     if is_protected_dir(repo):
         error(f"'{repo}' is a protected directory (home or root); use a project repository.")
         raise typer.Exit(1)
@@ -297,7 +297,7 @@ def board_work(
         Path | None,
         typer.Option(
             "--worktree-dir",
-            help="Where task worktrees go; defaults to <repo>-worktrees next to the repository",
+            help="Where task clones go; defaults to <repo>-worktrees next to the repository",
         ),
     ] = None,
     base: Annotated[
@@ -320,13 +320,12 @@ def board_work(
         ExistingMode | None,
         typer.Option(
             "--existing",
-            help="When the task's branch or worktree exists: continue or refuse  "
-            "[default: continue]",
+            help="When the task's branch exists: continue or refuse  [default: continue]",
         ),
     ] = None,
     keep_worktree: Annotated[
         bool,
-        typer.Option("--keep-worktree", help="Keep worktrees after the hand-over or review"),
+        typer.Option("--keep-worktree", help="Keep task clones after the hand-over or review"),
     ] = False,
     profile: Annotated[
         str | None,
@@ -360,7 +359,7 @@ def board_work(
         str | None,
         typer.Option(
             "--verify",
-            help="Command that must pass in the worktree before the hand-over",
+            help="Command that must pass in the task's clone before the hand-over",
         ),
     ] = None,
     on_fail: Annotated[
@@ -389,12 +388,13 @@ def board_work(
 ) -> None:
     """Claim planned tasks of a board project and let an agent implement each one.
 
-    Each task gets its own branch and worktree. The agent runs headless with the task as
-    its prompt; after an optional --verify command passes, the task moves to Review with
-    its branch. Failed and timed-out tasks go back to Planned (or blocked) with a note.
+    Each task gets its own branch and a clone of the repository to work on it in. The agent
+    runs headless with the task as its prompt; after an optional --verify command passes,
+    the branch comes back into the repository and the task moves to Review with it. Failed
+    and timed-out tasks go back to Planned (or blocked) with a note.
 
     With --mode review the worker claims tasks in Review instead, and the agent judges the
-    work on the branch, in a worktree of its own, without changing it: approve, or send it
+    work on the branch, in a clone of its own, without changing it: approve, or send it
     back for rework with feedback. A failing --verify command always sends it back.
     """
     reviewing = mode == WorkMode.REVIEW
