@@ -922,6 +922,8 @@ def test_a_worktree_pointing_elsewhere_is_left_alone(
     board.add_task("Redirected")
 
     def redirects(path: Path, prompt: str) -> tuple[int, str]:
+        # Git for Windows hides .git, and Windows refuses to overwrite a hidden file.
+        (path / ".git").unlink()
         (path / ".git").write_text("gitdir: /tmp/somewhere-else\n")
         return 0, "Done."
 
