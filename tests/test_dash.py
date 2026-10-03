@@ -805,7 +805,7 @@ def test_details_drops_unset_fields_and_stringifies() -> None:
         task=42,
     )
     assert built == {
-        "workspace": "/work/proj",
+        "workspace": str(Path("/work/proj")),
         "image": "vibepod/claude:latest",
         "task": "42",
     }
@@ -833,7 +833,7 @@ def test_report_carries_the_run_details(dash_server: Any) -> None:
     assert payload["data"]["image"] == "vibepod/claude:latest"
     assert payload["data"]["profile"] == "work"
     assert payload["data"]["container"] == "vibepod-claude-ab12cd34"
-    assert payload["data"]["workspace"] == "/work/proj"
+    assert payload["data"]["workspace"] == str(Path("/work/proj"))
 
 
 def test_report_omits_an_empty_data_block(dash_server: Any) -> None:
