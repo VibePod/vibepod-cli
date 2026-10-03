@@ -2301,6 +2301,66 @@ def test_a_review_stops_before_its_unrenewed_lease_runs_out(
     assert board.card("VP-1")["column"] == "review"
 
 
+def test_a_stop_that_comes_while_the_verdict_is_retried_gives_the_review_up(
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    from vibepod.core import board_worker
+
+    monkeypatch.setattr(board_worker, "DELIVERY_ATTEMPTS", 8)
+    sha = handed_over(board, repo)
+    board.failures = {"POST /api/board/card-1/review": 6}
+    beats: list[dict[str, Any]] = []
+
+    def stop_while_retrying(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") == "handing_over":
+            beats.append(beat)
+        return [{"type": "stop"}] if len(beats) > 1 else []
+
+    board.on_heartbeat = stop_while_retrying
+
+    worker, _ = review(server, FakeRunner(says("approve", summary="Good.")), repo, poll_seconds=30)
+
+    sent = [body["verdict"] for body in board.requests("POST", "/api/board/card-1/review")]
+    assert sent[0] == "approve" and set(sent[1:]) <= {"approve", "released"}
+    assert sent[-1] == "released"
+    assert board.reviews[0]["verdict"] == "released"
+    assert board.approvers("VP-1") == []
+    assert board.runs[0]["outcome"] == "cancelled"
+    assert worker.summary.approved == []
+    assert worker.summary.ended_because == "Stopped from the board"
+    assert board.requests("POST", "/api/board/card-1/review")[-1] == {
+        "assignee": REVIEWER,
+        "verdict": "released",
+        "headSha": sha,
+        "note": "The worker was stopped from the board",
+    }
+
+
+def test_a_kept_verdict_becomes_a_release_when_the_worker_is_stopped(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+    board.failures = {"POST /api/board/card-1/review": 5}
+
+    def stop_once_kept(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        kept = len(board.requests("POST", "/api/board/card-1/review")) == 5
+        return [{"type": "stop"}] if kept and beat.get("status") == "idle" else []
+
+    board.on_heartbeat = stop_once_kept
+
+    review(server, FakeRunner(says("approve", summary="Good.")), repo, once=True)
+
+    verdicts = [body["verdict"] for body in board.requests("POST", "/api/board/card-1/review")]
+    assert verdicts == ["approve"] * 5 + ["released"]
+    assert board.reviews[0]["verdict"] == "released"
+    assert board.card("VP-1")["column"] == "review"
+
+
 def test_a_timed_out_review_fails(board: FakeBoard, server: FakeBoardServer, repo: Path) -> None:
     handed_over(board, repo)
     runner = FakeRunner(polls=None)
