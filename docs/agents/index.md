@@ -21,6 +21,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
 | `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
 | `hermes` | Nous Research | `vp h` | `vibepod/hermes:latest` |
+| `junie` | JetBrains | `vp ju` | `vibepod/junie:latest` |
 
 Alias note: `vp run vibe` resolves to `vp run devstral`, `vp run qwen-cli`
 resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
@@ -158,7 +159,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `devstral`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`, `junie`). The CLI also supports the aliases `vibe` (→ `devstral`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -290,6 +291,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `qwen` | `--approval-mode=yolo` |
 | `dsh` | Not supported |
 | `hermes` | `--yolo` |
+| `junie` | `--brave` |
 
 Example:
 
@@ -414,6 +416,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `qwen` | `qwen -p "<prompt>"` |
 | `dsh` | `dsh --profile headless "<prompt>"` |
 | `hermes` | `hermes -z "<prompt>"` |
+| `junie` | `junie --task "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
@@ -503,7 +506,7 @@ claude --resume 39bf1a93-ea1f-4b0a-a894-0a662e5a1d4e
 ```
 
 When VibePod recognizes such a hint in the session output (supported for
-Claude, Codex, Pi, Copilot, Jcode, and Freebuff), it prints the equivalent
+Claude, Codex, Pi, Copilot, Jcode, Freebuff, Hermes, and Junie), it prints the equivalent
 VibePod command after the agent exits:
 
 ```text
@@ -1129,6 +1132,74 @@ already mounted.
 vp run qwen --ikwid
 vp task create qwen "fix the failing test" --ikwid
 ```
+
+### Junie (JetBrains)
+
+```bash
+vp run junie   # or: vp ju
+```
+
+Junie is JetBrains' LLM-agnostic coding agent. The image ships the official
+Linux release bundle (launcher, JetBrains Runtime and application jar) under
+`/opt/junie`. All state lives under `$JUNIE_HOME`, which VibePod points at
+`/config/.junie` on the persisted mount
+(`~/.config/vibepod/agents/junie/.junie/` on the host):
+
+| Path in container | Contents |
+|---|---|
+| `/config/.junie/settings.json` | CLI settings (selected model, UI preferences) |
+| `/config/.junie/secure_credentials.json` | Junie account tokens and BYOK API keys (there is no Secret Service in the container, so Junie uses this file) |
+| `/config/.junie/config.json` | User-level configuration |
+| `/config/.junie/mcp/mcp.json` | Global MCP server configuration |
+| `/config/.junie/skills/` | User-level skills |
+| `/config/.junie/sessions/` | Session history (resume with `junie --session-id <id>`) |
+
+**Authentication.** Start `vp run junie` and log in with your JetBrains
+account from the TUI, or use an API key. Generate a Junie API key on
+[junie.jetbrains.com/cli](https://junie.jetbrains.com/cli) and pass it as an
+environment variable. This also works in task mode, where there is no TUI:
+
+```yaml
+agents:
+  junie:
+    env:
+      JUNIE_API_KEY: ...
+```
+
+Or per run: `vp run junie -e JUNIE_API_KEY=...`. For bring-your-own-key, Junie
+reads `JUNIE_ANTHROPIC_API_KEY`, `JUNIE_OPENAI_API_KEY`, `JUNIE_GOOGLE_API_KEY`,
+`JUNIE_GROK_API_KEY` and `JUNIE_OPENROUTER_API_KEY`, plus
+`JUNIE_LITELLM_URL`/`JUNIE_LITELLM_API_KEY` for a LiteLLM proxy. Select the
+provider with `JUNIE_LLM_PROVIDER` (or `--provider`) and the model with
+`JUNIE_MODEL` (or `--model`). VibePod's global `llm` settings are not mapped for
+Junie, because `--model` only accepts names from Junie's built-in list or from
+custom model profiles.
+
+**Proxy and TLS.** Junie honors `HTTP_PROXY`/`HTTPS_PROXY`, but its bundled
+Java runtime ignores `SSL_CERT_FILE`. When the VibePod proxy is enabled, the
+image entrypoint imports the mounted mitmproxy CA into the runtime's trust
+store before starting Junie, so HTTPS calls pass through `vibepod-proxy`.
+
+**Non-interactive mode.** `--task` runs a single task and exits, both with
+`vp run` and task mode:
+
+```bash
+vp run junie -- --task "explain this repo"
+vp task create junie "Summarize the README"
+```
+
+**Auto-approval.** `--ikwid` appends `--brave` (Brave Mode). Junie accepts the
+flag in non-interactive runs too, so `vp task create junie --ikwid` works.
+
+**Skills.** Junie reads user-level skills from `$JUNIE_HOME/skills/`, so skills
+installed via `vp skills` are mounted at `/config/.junie/skills/<id>`. Junie
+reads `.agents/skills/` only inside the project (`<workspace>/.agents/skills/`),
+not in the home directory.
+
+**ACP.** `vp run junie --acp` starts `junie --acp=true`.
+
+VibePod sets `JUNIE_SKIP_UPDATE_CHECK=true` so the release pinned in the image
+does not update itself at runtime.
 
 ## Hermes Agent (`hermes`) — developer preview
 

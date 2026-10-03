@@ -23,6 +23,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_QWEN",
         "VP_IMAGE_DSH",
         "VP_IMAGE_HERMES",
+        "VP_IMAGE_JUNIE",
         "VP_DATASETTE_IMAGE",
         "VP_PROXY_IMAGE",
     ):
@@ -45,6 +46,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["qwen"] == "vibepod/qwen:latest"
     assert images["dsh"] == "vibepod/dsh:latest"
     assert images["hermes"] == "vibepod/hermes:latest"
+    assert images["junie"] == "vibepod/junie:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -111,3 +113,22 @@ def test_hermes_image_override(monkeypatch) -> None:
     images = get_default_images()
 
     assert images["hermes"] == "example/hermes:dev"
+
+
+def test_junie_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_JUNIE", "example/junie:dev")
+
+    images = get_default_images()
+
+    assert images["junie"] == "example/junie:dev"
+
+
+def test_default_images_ignore_unrelated_host_overrides(monkeypatch) -> None:
+    """Every agent override is cleared before the registry-defaults check."""
+    from vibepod.constants import IMAGE_OVERRIDE_ENV_KEYS
+
+    for key in IMAGE_OVERRIDE_ENV_KEYS:
+        monkeypatch.setenv(key, "example/host-override:dev")
+    monkeypatch.setenv("VP_IMAGE_NAMESPACE", "example")
+
+    test_default_images_match_documented_registry_defaults(monkeypatch)

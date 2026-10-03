@@ -310,6 +310,35 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # Hermes is pre-1.0 and its PyPI release line trails upstream main.
         preview=True,
     ),
+    "junie": AgentSpec(
+        "junie",
+        "jetbrains",
+        DEFAULT_IMAGES["junie"],
+        "junie",
+        ["junie"],
+        "/config",
+        # Junie resolves its home from $JUNIE_HOME, falling back to ~/.junie
+        # (utils/JuniePaths.kt): settings, sessions, skills, MCP config and,
+        # without a Secret Service, credentials in secure_credentials.json.
+        # Setting it explicitly keeps state on the /config mount even when the
+        # image entrypoint maps the host UID onto an existing passwd entry.
+        # JUNIE_SKIP_UPDATE_CHECK: the image pins a release, so Junie must not
+        # stage self-updates under ~/.local/share/junie.
+        {"HOME": "/config", "JUNIE_HOME": "/config/.junie", "JUNIE_SKIP_UPDATE_CHECK": "true"},
+        # Brave Mode auto-approves actions. Upstream documents it as
+        # interactive-only; non-interactive runs accept and ignore it, so the
+        # same flag is safe for `vp task`.
+        ikwid_args=["--brave"],
+        # No global LLM wiring: Junie only takes models from its built-in
+        # list or custom model profiles, and validates --model before its
+        # LiteLLM model discovery finishes, so arbitrary OpenAI-compatible
+        # model names fail at startup. BYOK/LiteLLM is configured natively.
+        # `--task` (instead of the positional task) keeps a prompt starting
+        # with "-" from being parsed as an option; the task yields
+        # `junie --brave --task "<prompt>"`.
+        headless_prefix=["--task"],
+        acp_command=["junie", "--acp=true"],
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

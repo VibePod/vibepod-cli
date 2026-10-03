@@ -34,6 +34,7 @@ SUPPORTED_AGENTS = (
     "qwen",
     "dsh",
     "hermes",
+    "junie",
 )
 
 AGENT_SHORTCUTS: dict[str, str] = {
@@ -51,6 +52,7 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "q": "qwen",
     "ds": "dsh",
     "h": "hermes",
+    "ju": "junie",
 }
 
 AGENT_ALIASES: dict[str, str] = {
@@ -80,6 +82,7 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_QWEN",
     "VP_IMAGE_DSH",
     "VP_IMAGE_HERMES",
+    "VP_IMAGE_JUNIE",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
     "VP_SKILLS_ENGINE_IMAGE",
@@ -162,6 +165,10 @@ def get_default_images() -> dict[str, str]:
         "hermes": os.environ.get(
             "VP_IMAGE_HERMES",
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/hermes:latest",
+        ),
+        "junie": os.environ.get(
+            "VP_IMAGE_JUNIE",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/junie:latest",
         ),
         "datasette": os.environ.get(
             "VP_DATASETTE_IMAGE",

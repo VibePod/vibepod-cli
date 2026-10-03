@@ -19,6 +19,7 @@ Some agents configure local models through their own native mechanism instead:
 - **tau** — custom providers via `catalog.toml`, see [Tau](agents/index.md#tau-hugging-face)
 - **jcode** — supports Ollama, LM Studio, and custom OpenAI-compatible endpoints via `config.toml`, see [Jcode](agents/index.md#jcode-1jehuang)
 - **qwen** — any OpenAI-compatible endpoint via `OPENAI_BASE_URL` / `OPENAI_MODEL`, see [Qwen Code](agents/index.md#qwen-code-qwen)
+- **junie** — bring-your-own-key providers and LiteLLM proxies via `JUNIE_*` env vars, see [Junie](agents/index.md#junie-jetbrains)
 
 ## Quick start with Ollama
 

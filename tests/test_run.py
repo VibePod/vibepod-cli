@@ -104,6 +104,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "freebuff",
         "qwen",
         "dsh",
+        "junie",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -332,6 +333,29 @@ def test_skills_mounts_for_jcode_use_agents_skills_path(
 
     assert run_cmd._skills_mounts_for_agent("jcode", tmp_path) == [
         (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro"),
+    ]
+
+
+def test_skills_mounts_for_junie_use_junie_home_skills_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    skill_dir = local_root / "installed" / "example"
+    skill_dir.mkdir(parents=True)
+    user_root.mkdir()
+    (local_root / "skills-lock.json").write_text(
+        json.dumps({"skills": {"example": {"path": "installed/example"}}}),
+        encoding="utf-8",
+    )
+    (user_root / "skills-lock.json").write_text(json.dumps({"skills": {}}), encoding="utf-8")
+
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+
+    assert run_cmd._skills_mounts_for_agent("junie", tmp_path) == [
+        (str(skill_dir.resolve()), "/config/.junie/skills/example", "ro"),
     ]
 
 

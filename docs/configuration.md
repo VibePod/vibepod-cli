@@ -56,7 +56,8 @@ agents:
     overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
     # acp_command: ACP adapter command for `vp run <agent> --acp` (editor
     # integration via the Agent Client Protocol). Defaults exist for claude,
-    # gemini, qwen, codex, opencode, copilot, auggie, jcode and devstral;
+    # gemini, qwen, codex, opencode, copilot, auggie, jcode, devstral, hermes
+    # and junie;
     # override with a list, or a string parsed with shell quoting rules. Not
     # present by default — just add the key to override.
     # acp_command: ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
@@ -173,6 +174,14 @@ agents:
     ports: []
     init: []
 
+  junie:
+    enabled: true
+    image: vibepod/junie:latest
+    env: {}
+    volumes: []
+    ports: []
+    init: []
+
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
   enabled: false
@@ -244,6 +253,7 @@ Each agent image can be overridden individually:
 | `VP_IMAGE_QWEN`          | qwen                                |
 | `VP_IMAGE_DSH`           | dsh                                 |
 | `VP_IMAGE_HERMES`        | hermes                              |
+| `VP_IMAGE_JUNIE`         | junie                               |
 | `VP_DATASETTE_IMAGE`     | datasette (logs UI)                 |
 | `VP_PROXY_IMAGE`         | proxy                               |
 | `VP_SKILLS_ENGINE_IMAGE` | skills-engine (used by `vp skills`) |
