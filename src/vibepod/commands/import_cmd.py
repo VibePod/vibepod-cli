@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -19,6 +20,7 @@ from vibepod.core.agent_import import (
     ImportPlan,
     agent_import_entries,
     apply_import,
+    env_root_overrides,
     host_path_warnings,
     plan_import,
     scan_host,
@@ -143,8 +145,15 @@ def _running_containers(agent: str, profile: str) -> list[str]:
         return []
 
 
-def _scan_and_report(source_home: Path) -> None:
-    found = scan_host(source_home)
+def _entry_path(source_root: Path, relative: str, overrides: dict[str, Path]) -> Path:
+    for root, path in overrides.items():
+        if relative == root or relative.startswith(f"{root}/"):
+            return path / relative[len(root) :].lstrip("/")
+    return source_root / relative
+
+
+def _scan_and_report(source_home: Path, *, use_env: bool) -> None:
+    found = scan_host(source_home, os.environ if use_env else None)
     if not found:
         warning(f"No supported agent configuration found under {source_home}.")
         return
@@ -214,7 +223,7 @@ def import_config(
     source_home = (home or Path.home()).expanduser()
 
     if agent is None:
-        _scan_and_report(source_home)
+        _scan_and_report(source_home, use_env=home is None)
         return
 
     resolved = resolve_agent_name(agent)
@@ -277,6 +286,11 @@ def import_config(
     # A profile source is a single directory, so unmapped files are looked for
     # in it directly rather than under the host dotdirs the table names.
     unclassified_roots = (AgentRoot("", ""),) if from_profile else None
+    # An agent's own relocation variable (VIBE_HOME) only applies to the real
+    # home; --home and --from-profile name the layout explicitly.
+    overrides = (
+        env_root_overrides(resolved, os.environ) if home is None and from_profile is None else {}
+    )
     plan = plan_import(
         resolved,
         source_root,
@@ -284,10 +298,12 @@ def import_config(
         categories,
         entries=entries,
         unclassified_roots=unclassified_roots,
+        root_overrides=overrides,
     )
     if plan.is_empty and not plan.skipped and not plan.unclassified:
         checked = ", ".join(
-            str(source_root / entry.source) for entry in agent_import_entries(resolved)
+            str(_entry_path(source_root, entry.source, overrides))
+            for entry in agent_import_entries(resolved)
         )
         error(f"No {resolved} configuration found. Checked: {checked}")
         raise typer.Exit(code=1)

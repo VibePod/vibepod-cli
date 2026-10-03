@@ -57,7 +57,7 @@ needs `--with-credentials` as well.
 | `claude`   | `~/.claude`                                            |
 | `gemini`   | `~/.gemini`                                            |
 | `opencode` | `~/.config/opencode`, `~/.local/share/opencode`        |
-| `devstral` | `~/.config/mistral`                                    |
+| `devstral` | `~/.vibe` (or `$VIBE_HOME`)                            |
 | `auggie`   | `~/.augment`                                           |
 | `copilot`  | `~/.copilot`                                           |
 | `codex`    | `~/.codex`                                             |
@@ -76,6 +76,11 @@ shared `~/.agents/skills` directory, so their import copies it too (category
 config mount, so it is not imported for Freebuff.
 
 Use `--home PATH` when your agent config lives under a different home.
+
+Mistral Vibe honours `VIBE_HOME`; when it is set, `vp import devstral` reads
+from that directory instead of `~/.vibe` (unless `--home` is given). Vibe's git
+worktrees under `~/.vibe/worktrees` are never imported, and MCP OAuth tokens it
+keeps in the OS keyring cannot be copied: log in again inside the pod.
 
 ## Profiles
 

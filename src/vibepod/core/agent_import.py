@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
@@ -140,7 +141,33 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ImportEntry(".gemini/.env", ".gemini/.env", "credentials"),
         ImportEntry(".gemini", ".gemini", "settings"),
     ),
-    "devstral": (ImportEntry(".config/mistral", ".config/mistral", "settings"),),
+    # Mistral Vibe keeps everything under ~/.vibe ($VIBE_HOME); MCP servers are
+    # [[mcp_servers]] tables in config.toml. The image does not set VIBE_HOME,
+    # so with HOME=/config it reads /config/.vibe.
+    "devstral": (
+        ImportEntry(
+            ".vibe/config.toml",
+            ".vibe/config.toml",
+            "settings",
+            note="Also holds the MCP servers ([[mcp_servers]]).",
+        ),
+        ImportEntry(".vibe/AGENTS.md", ".vibe/AGENTS.md", "memory"),
+        ImportEntry(".vibe/hooks.toml", ".vibe/hooks.toml", "hooks"),
+        ImportEntry(".vibe/agents", ".vibe/agents", "skills"),
+        ImportEntry(".vibe/prompts", ".vibe/prompts", "skills"),
+        ImportEntry(".vibe/skills", ".vibe/skills", "skills"),
+        ImportEntry(".vibe/tools", ".vibe/tools", "skills"),
+        ImportEntry(".vibe/logs", ".vibe/logs", "sessions"),
+        ImportEntry(".vibe/plans", ".vibe/plans", "sessions"),
+        ImportEntry(".vibe/shell-tool", ".vibe/shell-tool", "sessions"),
+        ImportEntry(".vibe/vibehistory", ".vibe/vibehistory", "sessions"),
+        ImportEntry(
+            ".vibe/.env",
+            ".vibe/.env",
+            "credentials",
+            note="API keys; MCP OAuth tokens live in the OS keyring and are not copied.",
+        ),
+    ),
     "auggie": (
         ImportEntry(".augment/session.json", ".augment/session.json", "credentials"),
         ImportEntry(".augment", ".augment", "settings"),
@@ -236,6 +263,8 @@ class AgentRoot:
     source: str
     dest: str
     exclude: tuple[str, ...] = ()
+    #: Host environment variable that relocates this directory (an absolute path).
+    env: str | None = None
 
 
 #: The agent-specific directories under the source home. Generic parents such
@@ -248,7 +277,10 @@ AGENT_ROOTS: dict[str, tuple[AgentRoot, ...]] = {
     ),
     "codex": (AgentRoot(".codex", ".codex"),),
     "gemini": (AgentRoot(".gemini", ".gemini"),),
-    "devstral": (AgentRoot(".config/mistral", ".config/mistral"),),
+    # Vibe's git worktrees live in ~/.vibe/worktrees; they are checkouts, not config.
+    "devstral": (
+        AgentRoot(".vibe", ".vibe", exclude=("worktrees", "worktrees/*"), env="VIBE_HOME"),
+    ),
     "auggie": (AgentRoot(".augment", ".augment"),),
     "copilot": (AgentRoot(".copilot", ".copilot"),),
     "pi": (AgentRoot(".pi", ".pi"),),
@@ -268,6 +300,21 @@ def agent_roots(agent: str) -> tuple[AgentRoot, ...]:
     if agent not in AGENT_ROOTS:
         raise ValueError(f"Unsupported agent: {agent}")
     return AGENT_ROOTS[agent]
+
+
+def env_root_overrides(agent: str, environ: Mapping[str, str]) -> dict[str, Path]:
+    """Host directories that *environ* moves *agent*'s roots to, keyed by root source.
+
+    Only meaningful for an import from the user's own home: ``--home`` and
+    profile sources keep the default layout.
+    """
+    overrides: dict[str, Path] = {}
+    for root in agent_roots(agent):
+        value = environ.get(root.env) if root.env else None
+        if value:
+            # Resolved the way the agent resolves it (Vibe: expanduser().resolve()).
+            overrides[root.source] = Path(value).expanduser().resolve()
+    return overrides
 
 
 def agent_import_entries(agent: str) -> tuple[ImportEntry, ...]:
@@ -385,6 +432,7 @@ def plan_import(
     categories: frozenset[Category] | set[Category],
     entries: tuple[ImportEntry, ...] | None = None,
     unclassified_roots: tuple[AgentRoot, ...] | None = None,
+    root_overrides: Mapping[str, Path] | None = None,
 ) -> ImportPlan:
     """Resolve *agent*'s entries under *source_root* into a concrete plan.
 
@@ -392,6 +440,8 @@ def plan_import(
     which is how a profile-to-profile copy reuses the same classification;
     *unclassified_roots* overrides where unmapped files are looked for, which a
     profile copy needs because its entries no longer name the host dotdirs.
+    *root_overrides* maps a root's source to the directory it really lives in
+    (see ``env_root_overrides``).
     """
     resolved_entries = entries if entries is not None else agent_import_entries(agent)
     files: list[PlannedFile] = []
@@ -421,7 +471,8 @@ def plan_import(
     def locate(relative: str) -> tuple[Path, Path]:
         anchor = _anchor(relative, roots)
         if anchor not in anchor_dirs:
-            anchor_dirs[anchor] = _source_dir(source_root, anchor)
+            override = (root_overrides or {}).get(anchor)
+            anchor_dirs[anchor] = override or _source_dir(source_root, anchor)
         rest = relative[len(anchor) :].lstrip("/") if anchor else relative
         return anchor_dirs[anchor] / rest, anchor_dirs[anchor]
 
@@ -559,14 +610,19 @@ _HOST_PATH_RE = re.compile(
 )
 
 
-def scan_host(home: Path) -> dict[str, list[Path]]:
-    """Map each agent to the source roots that exist and hold files under *home*."""
+def scan_host(home: Path, environ: Mapping[str, str] | None = None) -> dict[str, list[Path]]:
+    """Map each agent to the source roots that exist and hold files under *home*.
+
+    With *environ*, a root an agent's environment variable relocates is looked
+    for there instead.
+    """
     found: dict[str, list[Path]] = {}
     for agent in IMPORT_SPECS:
+        overrides = env_root_overrides(agent, environ) if environ is not None else {}
         roots: list[Path] = []
         for root in agent_roots(agent):
-            candidate = home / root.source
-            if _iter_files(_source_dir(home, root.source)):
+            candidate = overrides.get(root.source, home / root.source)
+            if _iter_files(overrides.get(root.source) or _source_dir(home, root.source)):
                 roots.append(candidate)
         if roots:
             found[agent] = roots

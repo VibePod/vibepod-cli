@@ -206,6 +206,43 @@ def test_dry_run_warns_when_nothing_would_be_imported(config_root: Path, tmp_pat
     assert "--with-other" in output
 
 
+def test_vibe_home_is_honoured_for_the_default_home(
+    config_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    custom = tmp_path / "custom-vibe"
+    custom.mkdir()
+    (custom / "config.toml").write_text('active_model = "devstral"')
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("VIBE_HOME", str(custom))
+
+    result = runner.invoke(app, ["import", "devstral"])
+
+    assert result.exit_code == 0, result.output
+    imported = config_root / "agents" / "devstral" / ".vibe" / "config.toml"
+    assert imported.read_text() == 'active_model = "devstral"'
+
+
+def test_explicit_home_ignores_vibe_home(
+    config_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    (home / ".vibe").mkdir(parents=True)
+    (home / ".vibe" / "config.toml").write_text("from-home")
+    custom = tmp_path / "custom-vibe"
+    custom.mkdir()
+    (custom / "config.toml").write_text("from-vibe-home")
+    monkeypatch.setenv("VIBE_HOME", str(custom))
+
+    result = runner.invoke(app, ["import", "devstral", "--home", str(home)])
+
+    assert result.exit_code == 0, result.output
+    imported = config_root / "agents" / "devstral" / ".vibe" / "config.toml"
+    assert imported.read_text() == "from-home"
+
+
 def test_bare_import_scans_the_host(config_root: Path, host_home: Path) -> None:
     result = runner.invoke(app, ["import", "--home", str(host_home)])
     assert result.exit_code == 0, result.output

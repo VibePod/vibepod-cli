@@ -19,6 +19,7 @@ from vibepod.core.agent_import import (
     ImportConflictError,
     agent_import_entries,
     apply_import,
+    env_root_overrides,
     host_path_warnings,
     plan_import,
     scan_host,
@@ -134,7 +135,7 @@ _KNOWN_CREDENTIALS: dict[str, tuple[str, ...]] = {
     "opencode": (".local/share/opencode/auth.json",),
     "codex": (".codex/auth.json",),
     "gemini": (".gemini/oauth_creds.json", ".gemini/mcp-oauth-tokens.json", ".gemini/.env"),
-    "devstral": (".config/mistral/.env",),
+    "devstral": (".vibe/.env",),
     "auggie": (".augment/session.json",),
     "copilot": (".copilot/config.json",),
     "pi": (".pi/agent/auth.json",),
@@ -256,6 +257,62 @@ def test_shared_skills_alone_do_not_count_as_an_installation(tmp_path: Path) -> 
     _write(home / ".agents" / "skills" / "review" / "SKILL.md", "")
 
     assert scan_host(home) == {}
+
+
+def test_vibe_config_is_read_from_its_home_directory(tmp_path: Path) -> None:
+    """Mistral Vibe keeps its config in ~/.vibe, which the pod reads as /config/.vibe."""
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".vibe" / "config.toml", "[[mcp_servers]]\n")
+    _write(home / ".vibe" / "AGENTS.md")
+    _write(home / ".vibe" / "hooks.toml")
+    _write(home / ".vibe" / "agents" / "redteam.toml")
+    _write(home / ".vibe" / "prompts" / "redteam.md")
+    _write(home / ".vibe" / "skills" / "review" / "SKILL.md")
+    _write(home / ".vibe" / "logs" / "session" / "s1.json")
+    _write(home / ".vibe" / ".env", "MISTRAL_API_KEY=x")
+    _write(home / ".vibe" / "trusted_folders.toml")
+    _write(home / ".vibe" / "worktrees" / "repo-1" / "feature" / "main.py")
+    _write(home / ".config" / "mistral" / "config.toml")
+
+    plan = plan_import("devstral", home, dest, DEFAULT_CATEGORIES)
+
+    assert sorted((f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files) == [
+        ("hooks", ".vibe/hooks.toml"),
+        ("memory", ".vibe/AGENTS.md"),
+        ("settings", ".vibe/config.toml"),
+        ("skills", ".vibe/agents/redteam.toml"),
+        ("skills", ".vibe/prompts/redteam.md"),
+        ("skills", ".vibe/skills/review/SKILL.md"),
+    ]
+    assert sorted(s.reason for s in plan.skipped) == [
+        "category 'credentials' not selected (--with-credentials)",
+        "category 'sessions' not selected (--with-sessions)",
+    ]
+    assert [p.relative_to(home).as_posix() for p in plan.unclassified] == [
+        ".vibe/trusted_folders.toml",
+    ]
+    assert scan_host(home) == {"devstral": [home / ".vibe"]}
+
+
+def test_vibe_home_relocates_the_vibe_directory(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    custom = tmp_path / "custom-vibe"
+    _write(custom / "config.toml")
+    _write(custom / "prompts" / "mine.md")
+    home.mkdir()
+
+    overrides = env_root_overrides("devstral", {"VIBE_HOME": str(custom)})
+    plan = plan_import("devstral", home, dest, DEFAULT_CATEGORIES, root_overrides=overrides)
+
+    assert overrides == {".vibe": custom.resolve()}
+    assert sorted(f.dest.relative_to(dest).as_posix() for f in plan.files) == [
+        ".vibe/config.toml",
+        ".vibe/prompts/mine.md",
+    ]
+    assert scan_host(home) == {}
+    assert scan_host(home, {"VIBE_HOME": str(custom)}) == {"devstral": [custom.resolve()]}
+    assert env_root_overrides("devstral", {}) == {}
+    assert env_root_overrides("claude", {"VIBE_HOME": str(custom)}) == {}
 
 
 def test_pi_models_live_under_the_agent_dir(tmp_path: Path) -> None:
