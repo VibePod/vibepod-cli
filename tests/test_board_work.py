@@ -2456,3 +2456,35 @@ def test_git_on_the_host_does_not_look_into_nested_repositories(repo: Path) -> N
     assert sha == git(repo, "rev-parse", "HEAD")
     assert git(repo, "show", "HEAD:notes.txt") == "left by the agent"
     assert worktrees.commit_all(repo, "Nothing") is None
+
+
+def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) -> None:
+    sha = git(repo, "rev-parse", "main")
+    branches = worktrees.branch_refs(repo)
+
+    path = worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a@b", sha)
+
+    assert path == (tmp_path / "trees" / "review-vp-1-a-b").resolve()
+    assert worktrees.current_branch(path) is None
+    assert git(path, "rev-parse", "HEAD") == sha
+    (path / "left.txt").write_text("left\n")
+    # A review worktree left behind is replaced, and no branch is ever made.
+    again = worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a@b", sha)
+    assert again == path and not (path / "left.txt").exists()
+    assert worktrees.branch_refs(repo) == branches
+    (tmp_path / "trees" / "taken").mkdir()
+    (tmp_path / "trees" / "taken" / "file").write_text("mine\n")
+    with pytest.raises(worktrees.GitError, match="in use"):
+        worktrees.prepare_review_worktree(repo, tmp_path / "trees", "taken", sha)
+
+    git(path, "checkout", "--quiet", "-b", "agent-branch")
+    (path / "README.md").write_text("changed\n")
+    worktrees.discard_changes(path, sha)
+    assert worktrees.current_branch(path) is None
+    assert git(path, "status", "--porcelain") == ""
+    assert worktrees.commit_exists(repo, sha)
+    assert not worktrees.commit_exists(repo, "0" * 40)
+
+    mounts = worktrees.agent_mounts(repo, path, read_only=True)
+    git_dir = (repo / ".git").resolve()
+    assert mounts[0] == (str(git_dir), str(git_dir), "ro")
