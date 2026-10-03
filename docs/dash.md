@@ -31,7 +31,12 @@ dash:
   is copied into the agent's config dir and registered
 - the CLI itself reports the container's start and stop, so **every** agent
   appears on the board even without hooks
-- `vp stop`, `vp task cancel` and a finished task mark the card done
+- `vp stop`, `vp task cancel` and a finished task mark the card done (or
+  error, for a failed or timed-out task). `vp task create` leaves a small
+  background watcher on the host that waits for the task's container to exit
+  and reports it right away; if that watcher could not run, the next
+  `vp task list` / `status` reports it instead. Whichever path gets there
+  first, a run's finish is reported once.
 
 Built-in hook reporting ships for **claude**, **codex** and **copilot**. The
 hooks need only `curl` inside the image.

@@ -879,3 +879,190 @@ def test_report_omits_an_empty_data_block(dash_server: Any) -> None:
     assert target is not None
     assert dash.report(target, "idle", data=dash.details(profile=None))
     assert "data" not in dash_server.received[0][0]
+
+
+# -- finish reported once, when the task ends ----------------------------------
+
+
+def test_a_runs_finish_is_reported_only_once(dash_server: Any) -> None:
+    target = dash.make_target(
+        "claude",
+        Path("/work/proj"),
+        {"dash": {"url": server_url(dash_server)}},
+    )
+    assert target is not None
+
+    assert dash.report_finished(target, "done", event="container.stop") is True
+    assert dash.report_finished(target, "error", event="task.finished") is False
+
+    assert [payload["state"] for payload, _ in dash_server.received] == ["done"]
+
+
+def test_finishes_of_two_runs_sharing_a_pinned_card_both_report(
+    dash_server: Any,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VPDASH_AGENT_ID", "pinned")
+    config = {"dash": {"url": server_url(dash_server)}}
+    first = dash.make_target("claude", Path("/work/proj"), config)
+    second = dash.make_target("claude", Path("/work/proj"), config)
+    assert first is not None and second is not None
+
+    assert dash.report_finished(first, "done") is True
+    assert dash.report_finished(second, "done") is True
+
+
+class _ExitingTaskContainer:
+    """A task container whose `docker wait` returns once the agent exited."""
+
+    def __init__(self, labels: dict[str, str], exit_code: int = 0) -> None:
+        self.labels = labels
+        self.status = "running"
+        self.attrs: dict[str, Any] = {"State": {"Status": "running"}}
+        self.exit_code = exit_code
+        self.waited: list[dict[str, Any]] = []
+
+    def wait(self, **kwargs: Any) -> dict[str, Any]:
+        self.waited.append(kwargs)
+        self.exit()
+        return {"StatusCode": self.exit_code}
+
+    def exit(self) -> None:
+        self.status = "exited"
+        self.attrs = {
+            "State": {
+                "Status": "exited",
+                "ExitCode": self.exit_code,
+                "FinishedAt": "2026-10-03T10:00:00Z",
+            },
+        }
+
+    def reload(self) -> None:
+        pass
+
+    def stop(self, timeout: int = 10) -> None:
+        self.exit_code = 137
+        self.exit()
+
+
+def _task_with_dash_container(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+    exit_code: int = 0,
+) -> tuple[Any, Any, _ExitingTaskContainer]:
+    from vibepod.commands import task as task_cmd
+    from vibepod.core.tasks import TaskStore
+
+    config = {"dash": {"url": server_url(dash_server)}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    container = _ExitingTaskContainer(dash.launch_labels(target), exit_code)
+
+    store = TaskStore(tmp_path / "tasks.db")
+    record = store.create(
+        agent="claude",
+        prompt="do it",
+        workspace="/work/proj",
+        container_id="cid",
+        container_name="vibepod-task-cid",
+        image="vibepod/claude:latest",
+        vibepod_version="0.0.0",
+    )
+
+    class _Manager:
+        def get_container(self, name_or_id: str) -> _ExitingTaskContainer:
+            assert name_or_id == "cid"
+            return container
+
+    monkeypatch.setattr(task_cmd, "_task_store", lambda: store)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    return store, record, container
+
+
+@pytest.mark.parametrize(("exit_code", "state"), [(0, "done"), (3, "error")])
+def test_the_exit_watcher_reports_a_task_when_its_container_exits(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+    exit_code: int,
+    state: str,
+) -> None:
+    from vibepod.commands import task as task_cmd
+
+    store, record, container = _task_with_dash_container(
+        tmp_path,
+        monkeypatch,
+        dash_server,
+        exit_code,
+    )
+
+    task_cmd._watch_task_exit(record.id, sleep=lambda seconds: None)
+
+    assert container.waited == [{"condition": "not-running", "timeout": None}]
+    assert store.get(record.id).status == ("completed" if exit_code == 0 else "failed")
+    [(payload, _)] = dash_server.received
+    assert payload["state"] == state
+    assert payload["event"] == "task.finished"
+
+
+def test_a_watched_task_is_not_reported_again_by_later_syncs_or_stop(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+) -> None:
+    from vibepod.commands import stop as stop_module
+    from vibepod.commands import task as task_cmd
+
+    store, record, container = _task_with_dash_container(tmp_path, monkeypatch, dash_server)
+    monkeypatch.setattr(stop_module, "get_config", task_cmd.get_config)
+    task_cmd._watch_task_exit(record.id, sleep=lambda seconds: None)
+
+    # The lazy path, as `vp task list` runs it on a record it has not seen
+    # finish (e.g. a second, racing watcher), and a later `vp stop`.
+    stale = store.update(record.id, status="running")
+    assert stale is not None
+    task_cmd._record_with_container_state(store, stale, container.attrs["State"], container)
+    stop_module._release_agent_entries([container])
+
+    assert len(dash_server.received) == 1
+
+
+def test_a_timed_out_task_is_reported_as_timed_out_not_as_its_exit(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+) -> None:
+    from vibepod.commands import task as task_cmd
+
+    store, record, container = _task_with_dash_container(tmp_path, monkeypatch, dash_server)
+    container.wait = lambda **kwargs: {"StatusCode": 137}  # type: ignore[method-assign]
+
+    task_cmd._enforce_task_timeout(record.id, 1, sleep=lambda seconds: None)
+    task_cmd._watch_task_exit(record.id, sleep=lambda seconds: None)
+
+    [(payload, _)] = dash_server.received
+    assert payload["state"] == "error"
+    assert payload["message"] == "task timed out"
+
+
+def test_the_exit_watcher_leaves_a_task_without_a_container_to_the_lazy_sync(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+) -> None:
+    from vibepod.commands import task as task_cmd
+    from vibepod.core.docker import DockerClientError
+
+    store, record, _ = _task_with_dash_container(tmp_path, monkeypatch, dash_server)
+
+    class _Gone:
+        def get_container(self, name_or_id: str) -> Any:
+            raise DockerClientError("gone")
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Gone())
+    task_cmd._watch_task_exit(record.id, sleep=lambda seconds: None)
+
+    assert store.get(record.id).status == "running"
+    assert dash_server.received == []
