@@ -263,7 +263,11 @@ def test_rejected_send_is_not_counted(tmp_path: Path) -> None:
 def test_thread_forwards_and_close_drains_and_removes_dir(tmp_path: Path) -> None:
     recorder = _Recorder()
     relay_obj = HerdrEventRelay(
-        PANE, recorder, agent="claude", root=tmp_path / "relay", interval=0.01
+        PANE,
+        recorder,
+        agent="claude",
+        root=tmp_path / "relay",
+        interval=0.01,
     )
     relay_obj.prepare()
     relay_obj.start()
@@ -283,7 +287,11 @@ def test_thread_forwards_and_close_drains_and_removes_dir(tmp_path: Path) -> Non
 def test_close_drains_lines_written_after_the_last_tick(tmp_path: Path) -> None:
     recorder = _Recorder()
     relay_obj = HerdrEventRelay(
-        PANE, recorder, agent="claude", root=tmp_path / "relay", interval=60
+        PANE,
+        recorder,
+        agent="claude",
+        root=tmp_path / "relay",
+        interval=60,
     )
     relay_obj.prepare()
     relay_obj.start()
@@ -295,7 +303,11 @@ def test_close_drains_lines_written_after_the_last_tick(tmp_path: Path) -> None:
 
 def test_close_soft_fails_when_the_final_drain_fails(monkeypatch, tmp_path: Path) -> None:
     relay_obj = HerdrEventRelay(
-        PANE, _Recorder(), agent="claude", root=tmp_path / "relay", interval=60
+        PANE,
+        _Recorder(),
+        agent="claude",
+        root=tmp_path / "relay",
+        interval=60,
     )
     relay_obj.prepare()
     relay_obj.start()
