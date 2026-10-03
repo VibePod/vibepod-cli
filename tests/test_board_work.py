@@ -2724,6 +2724,60 @@ def test_vp_board_work_rejects_agents_without_headless_mode(monkeypatch, tmp_pat
     assert "cannot run headless" in result.output
 
 
+def test_vp_board_work_reviews_under_a_reviewer_name(
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    sha = handed_over(board, repo)
+    runner = FakeRunner(says("approve", summary="Good."))
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VP_BOARD_URL", server.url)
+    monkeypatch.setenv("VP_BOARD_TOKEN", TOKEN)
+    monkeypatch.setattr(board_cmd, "DockerAgentRunner", lambda agent, **kwargs: runner)
+    monkeypatch.setattr(board_cmd, "is_dir_allowed", lambda path: True)
+    monkeypatch.setattr(board_cmd.socket, "gethostname", lambda: "laptop.local")
+
+    result = CliRunner().invoke(
+        app,
+        ["board", "work", "VP", "--agent", "claude", "--mode", "review", "--repo", str(repo)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert board.workers["worker-1"]["name"] == "claude-review@laptop"
+    assert board.workers["worker-1"]["mode"] == "review"
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert (verdict["verdict"], verdict["headSha"]) == ("approve", sha)
+    assert "Approved 1 task(s), sent 0 back for rework" in result.output
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        ["--branch-template", "feature-{key}"],
+        ["--existing", "refuse"],
+        ["--on-fail", "blocked"],
+        ["--max-attempts", "2"],
+    ],
+)
+def test_vp_board_work_refuses_implementation_options_in_review_mode(
+    monkeypatch, tmp_path: Path, option: list[str]
+) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VP_BOARD_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("VP_BOARD_TOKEN", TOKEN)
+
+    result = CliRunner().invoke(
+        app,
+        ["board", "work", "VP", "--agent", "claude", "--mode", "review", *option],
+    )
+
+    assert result.exit_code == 1
+    assert f"{option[0]} cannot be used with --mode review" in result.output
+
+
 def test_host_git_ignores_a_repository_named_in_the_environment(
     monkeypatch,
     repo: Path,
