@@ -2032,6 +2032,36 @@ def test_a_review_that_moves_other_refs_has_them_restored_and_fails(
     assert git(repo, "rev-parse", "issue-7") == sha
 
 
+def test_a_verify_command_that_commits_or_redirects_git_fails_the_review(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    sha = handed_over(board, repo)
+    handed_over(board, repo, "Second")
+    commits = python(
+        "import subprocess as s; open('cache.txt', 'w').write('x');"
+        " s.run(['git', 'checkout', '-q', 'issue-7']);"
+        " s.run(['git', 'commit', '-qam', 'Sneaky', '--allow-empty'])",
+    )
+    redirects = python("import os; os.remove('.git'); open('.git', 'w').write('gitdir: /x')")
+
+    review(server, FakeRunner(says("approve", summary="Good.")), repo, verify=commits, once=True)
+    review(server, FakeRunner(says("approve", summary="Good.")), repo, verify=redirects, once=True)
+
+    [first] = board.requests("POST", "/api/board/card-1/review")
+    assert first["verdict"] == "failed"
+    assert first["note"].startswith(
+        "The verify command switched to the branch issue-7 and committed in the review worktree",
+    )
+    assert git(repo, "rev-parse", "issue-7") == sha
+    [second] = board.requests("POST", "/api/board/card-2/review")
+    assert second["verdict"] == "failed"
+    assert "changed the worktree's git metadata" in second["note"]
+    # Kept for a look: git does not run in it again.
+    assert review_path(repo, "vp-2").exists()
+
+
 def test_needs_input_blocks_the_task_in_review_with_the_question(
     board: FakeBoard,
     server: FakeBoardServer,

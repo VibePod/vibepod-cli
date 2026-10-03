@@ -1675,8 +1675,18 @@ class BoardWorker:
         if self.options.verify:
             self._set("working", step=STEP_VERIFYING)
             result.verify = self._verify(path, deadline)
+            # The verify command ran the code under review, which may have changed what the
+            # review must not: checked again before git on the host goes on.
             with self._keepalive():
-                self._check_refs(repo, refs, checked_out, "The verify command")
+                self._check_review(
+                    repo,
+                    path,
+                    result,
+                    pointers,
+                    refs,
+                    checked_out,
+                    "The verify command",
+                )
             if self._review_ended_early(result.verify.ended, result):
                 return
             if result.verify.exit_code != 0:
@@ -1738,11 +1748,13 @@ class BoardWorker:
         pointers: dict[str, str],
         refs: dict[str, str],
         checked_out: dict[str, Path],
+        who: str = "The agent",
     ) -> None:
         """The review must leave the repository as it found it. What the agent committed,
         switched to or left changed in the worktree is thrown away, refs it moved are put
         back, and the review fails. Nothing of git runs in a worktree whose pointers into
-        the git directory changed."""
+        the git directory changed. Checked again after the verify command, which runs the
+        code under review, and may leave files behind, such as caches, but nothing else."""
         assert result.commit is not None
         try:
             worktrees.verify_pointers(path, pointers)
@@ -1750,7 +1762,7 @@ class BoardWorker:
             result.keep_worktree = True
             reason = f"{exc}; the worktree at {path} needs a look"
             try:
-                self._check_refs(repo, refs, checked_out, "The agent")
+                self._check_refs(repo, refs, checked_out, who)
             except ReviewProblem as problem:
                 reason += f". {problem}"
             raise ReviewProblem(reason) from exc
@@ -1760,7 +1772,7 @@ class BoardWorker:
             changed.append(f"switched to the branch {on}")
         if worktrees.git(path, "rev-parse", "HEAD") != result.commit:
             changed.append("committed")
-        if worktrees.has_changes(path):
+        if who == "The agent" and worktrees.has_changes(path):
             changed.append("left uncommitted changes")
         if changed:
             worktrees.discard_changes(path, result.commit)
@@ -1769,16 +1781,16 @@ class BoardWorker:
                 # A branch the agent made for its commits; nobody else knows it.
                 worktrees.git(repo, "update-ref", "-d", created)
         try:
-            self._check_refs(repo, refs, checked_out, "The agent")
+            self._check_refs(repo, refs, checked_out, who)
         except ReviewProblem as problem:
             if not changed:
                 raise
             raise ReviewProblem(
-                f"The agent {_and(changed)} in the review worktree; threw that away. {problem}",
+                f"{who} {_and(changed)} in the review worktree; threw that away. {problem}",
             ) from problem
         if changed:
             raise ReviewProblem(
-                f"The agent {_and(changed)} in the review worktree, which a review must not "
+                f"{who} {_and(changed)} in the review worktree, which a review must not "
                 "do; threw that away",
             )
 
