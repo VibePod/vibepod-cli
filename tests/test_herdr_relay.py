@@ -10,6 +10,7 @@ import os
 import shutil
 import socket as socket_module
 import subprocess
+import sys
 import tempfile
 import threading
 from collections.abc import Iterator
@@ -234,7 +235,7 @@ def test_close_before_prepare_is_harmless(tmp_path: Path) -> None:
 def test_prepare_prunes_dirs_of_dead_runs(tmp_path: Path) -> None:
     root = tmp_path / "relay"
     root.mkdir()
-    dead = subprocess.Popen(["true"])
+    dead = subprocess.Popen([sys.executable, "-c", ""])
     dead.wait()
     stale = root / f"{dead.pid}-deadbeef"
     stale.mkdir()
@@ -350,6 +351,14 @@ def test_apply_wires_events_file_when_socket_cannot_be_mounted(
 # --- in-container reporters -------------------------------------------------------------
 
 
+def _node_env() -> dict[str, str]:
+    """The minimal environment node needs; on Windows it can't start without SYSTEMROOT."""
+    env = {"PATH": os.environ["PATH"]}
+    if "SYSTEMROOT" in os.environ:
+        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    return env
+
+
 def _need_node() -> None:
     if shutil.which("node") is None:
         pytest.skip("node not available")
@@ -367,7 +376,7 @@ def test_claude_hook_appends_to_events_file_without_socket(tmp_path: Path) -> No
     events_file = tmp_path / "herdr-events.jsonl"
     script = config_dir / "hooks" / "herdr-agent-state.sh"
     env = {
-        "PATH": os.environ["PATH"],
+        **_node_env(),
         "HERDR_EVENTS_FILE": str(events_file),
         "HERDR_PANE_ID": PANE,
         "CLAUDE_CONFIG_DIR": str(config_dir),
@@ -417,7 +426,7 @@ def test_reporter_prefers_socket_when_both_are_set(tmp_path: Path, sock_dir: Pat
         text=True,
         timeout=15,
         env={
-            "PATH": os.environ["PATH"],
+            **_node_env(),
             "HERDR_SOCKET_PATH": str(sock_dir / "herdr.sock"),
             "HERDR_EVENTS_FILE": str(events_file),
             "HERDR_PANE_ID": PANE,
@@ -449,7 +458,7 @@ def test_opencode_plugin_appends_to_events_file(tmp_path: Path) -> None:
         text=True,
         timeout=15,
         env={
-            "PATH": os.environ["PATH"],
+            **_node_env(),
             "HERDR_EVENTS_FILE": str(events_file),
             "HERDR_PANE_ID": PANE,
         },
