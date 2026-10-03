@@ -44,6 +44,13 @@ log_level: info
 # Disable colour output
 no_color: false
 
+# Relabel VibePod's own bind mounts for SELinux (default: false)
+# Only has an effect on an SELinux-enforcing Linux host. Adds the `z` option to
+# the workspace and ~/.config/vibepod mounts so containers may access them.
+# This PERMANENTLY changes the SELinux label of those host directories; see
+# SELinux in the quickstart before enabling it.
+selinux_relabel: false
+
 agents:
   claude:
     enabled: true
@@ -209,6 +216,7 @@ These variables override the corresponding config keys without editing any file:
 | `VP_AUTO_CLEAN`        | `auto_clean`        | `VP_AUTO_CLEAN=false`                    |
 | `VP_LOG_LEVEL`         | `log_level`         | `VP_LOG_LEVEL=debug`                     |
 | `VP_NO_COLOR`          | `no_color`          | `VP_NO_COLOR=true`                       |
+| `VP_SELINUX_RELABEL`   | `selinux_relabel`   | `VP_SELINUX_RELABEL=true`                |
 | `VP_DATASETTE_PORT`    | `logging.ui_port`   | `VP_DATASETTE_PORT=9001`                 |
 | `VP_PROXY_ENABLED`     | `proxy.enabled`     | `VP_PROXY_ENABLED=false`                 |
 | `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow`             |
@@ -344,7 +352,7 @@ agents:
 
 - **SOURCE** is either a host path or a Docker named volume. Host paths may be absolute, start with `~`, or be relative. In config, relative paths resolve against the workspace. The host path must already exist: VibePod rejects a missing one rather than letting Docker create it as a root-owned directory. A source without a `/` (like `pip-cache`) is a named volume.
 - **TARGET** must be an absolute container path. It cannot be `/`, and it cannot be a path VibePod already mounts (`/workspace`, the agent config directory, `/etc/vibepod-proxy-ca`, and so on). A path nested inside one of those, such as `/workspace/data`, is allowed.
-- **MODE** is `rw` (default) or `ro`. It can be combined with the SELinux relabel options `z`/`Z`, e.g. `ro,z`. VibePod never relabels these volumes itself: add `z` (shared) or `Z` (private) only when the path is not also used by host services — see [SELinux](quickstart.md#selinux).
+- **MODE** is `rw` (default) or `ro`. It can be combined with the SELinux relabel options `z`/`Z`, e.g. `ro,z`. VibePod never relabels these volumes itself, even with `selinux_relabel` enabled: add `z` (shared) or `Z` (private) only when the path is not also used by host services — see [SELinux](quickstart.md#selinux).
 
 The list applies to both `vp run` and `vp task` containers. Like other agent keys, a project-level `volumes` list replaces the global one for that agent.
 

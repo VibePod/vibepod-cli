@@ -92,18 +92,38 @@ export DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.P
 
 ### SELinux
 
-On an SELinux-enforcing Linux host (Fedora, RHEL, …) VibePod adds the shared
-`z` relabel option to the bind mounts it owns: the workspace, the agent config
-directories, everything else under `~/.config/vibepod` (proxy CA and database,
-logs, skills) and a project's `.vibepod/skills`. Relabeling changes the host
-files' SELinux label to `container_file_t` persistently, so the workspace stays
-relabeled after the container exits.
+On an SELinux-enforcing Linux host (Fedora, RHEL, …) a bind mount keeps its
+host label, which containers may not access: the agent can find its workspace
+unwritable and the proxy can fail with `Permission denied`. VibePod does not
+relabel anything by default. Instead, each `vp run` / `vp task create` on an
+enforcing host prints a hint, and you can opt in to relabeling in
+`~/.config/vibepod/config.yaml`:
 
-VibePod does **not** relabel:
+```yaml
+selinux_relabel: true
+```
+
+or for one command with `VP_SELINUX_RELABEL=true vp run …`
+(`VP_SELINUX_RELABEL=false` turns it off again whatever the config says).
+
+!!! warning "Relabeling is permanent"
+    With `selinux_relabel` enabled VibePod adds the shared `z` option to the
+    bind mounts it owns, and the container engine changes the SELinux label of
+    those host files to `container_file_t`. The new label stays after the
+    container exits and VibePod cannot undo it (`restorecon -R <dir>` restores
+    the policy default). A host service that reads the same files — say a web
+    server serving a workspace under `/var/www` — may lose access to them.
+    Only enable it when your workspaces are used by you, not by host services.
+
+When enabled, VibePod relabels the workspace, the agent config directories,
+everything else under `~/.config/vibepod` (proxy CA and database, logs,
+skills) and a project's `.vibepod/skills`, and prints the relabeled host paths
+when it starts a container. It still never relabels:
 
 - a workspace that is your home directory, one of its ancestors, or a system
   directory such as `/`, `/tmp`, `/usr`, `/etc` or `/var` — it prints a warning
   instead and the agent may be unable to access it; pick a project directory;
+- anything under system trees such as `/etc` or `/usr`;
 - your own `agents.<agent>.volumes` / `-v` mounts — add `z`/`Z` to their mode
   yourself (see [Mounting volumes](configuration.md#mounting-volumes));
 - host-owned files such as the herdr binary and socket or the X11 socket.
