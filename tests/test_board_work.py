@@ -2023,6 +2023,22 @@ def test_windows_git_paths_are_translated_for_the_linux_container(
     assert (task.path / ".git").read_text() == own_pointer
 
 
+def test_the_users_checkout_is_not_taken_over_from_a_worktree_folder_around_it(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    git(repo, "checkout", "--quiet", "-b", "vp-1")
+    elsewhere = tmp_path / "elsewhere"
+    git(repo, "worktree", "add", "--quiet", "-b", "vp-2", str(elsewhere))
+
+    # The worktree folder holds the user's checkout, and a worktree it did not make.
+    with pytest.raises(worktrees.GitError, match="not working in someone else's checkout"):
+        worktrees.prepare_worktree(repo, tmp_path, "vp-1", "main")
+    with pytest.raises(worktrees.GitError, match="not working in someone else's checkout"):
+        worktrees.prepare_worktree(repo, tmp_path, "vp-2", "main")
+    assert worktrees.current_branch(repo) == "vp-1"
+
+
 def test_worktree_helpers_prepare_and_clean_up(repo: Path, tmp_path: Path) -> None:
     fresh = worktrees.prepare_worktree(repo, tmp_path / "trees", "vp-9", "main")
     assert fresh.continued is False

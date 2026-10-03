@@ -114,8 +114,9 @@ The agent runs in its container; the worker keeps it there:
   (they are put back), or left its own branch blocks the task for a look instead of
   being handed over. Branches others move meanwhile are left alone: those of other
   tasks, and a branch you commit to in your own checkout.
-- Only worktrees in the worktree folder are reused or removed. A branch checked out
-  anywhere else, such as in your own worktree, is never taken over.
+- Only the worktree the worker made for a task, in the worktree folder, is reused or
+  removed. A branch checked out anywhere else, such as in your own checkout, is never
+  taken over, even when the worktree folder holds it.
 - A repository named by a task on the board must be on the allowed directories list,
   like any `vp task` workspace, before the worker touches it.
 - `--verify` runs on your machine, in the worktree, with the agent's changes: it runs

@@ -164,7 +164,8 @@ def prepare_worktree(
     """Checks the task's branch out in its own worktree, branching from `base` when the
     branch is new. `existing` decides what happens to a branch or worktree left by an earlier
     run: `continue` works on in it, `refuse` raises `BranchExistsError`. A branch checked out
-    outside the worktree folder, such as in the user's own worktree, is never taken over."""
+    anywhere but the task's own folder in the worktree folder, such as in the user's own
+    checkout, is never taken over, even when the worktree folder holds that checkout."""
     if not is_valid_branch_name(repo, branch):
         raise GitError(f"Invalid branch name: {branch}")
     git(repo, "worktree", "prune")
@@ -174,10 +175,12 @@ def prepare_worktree(
         if existing != "continue":
             where = f" in {checked_out}" if checked_out else ""
             raise BranchExistsError(f"Branch {branch} already exists{where}")
-        if checked_out is not None and not _inside(checked_out, worktrees_dir):
+        if checked_out is not None and (
+            checked_out == repo.resolve() or checked_out != _task_path(worktrees_dir, branch)
+        ):
             raise GitError(
-                f"Branch {branch} is checked out in {checked_out}, outside {worktrees_dir}; "
-                "not working in someone else's checkout",
+                f"Branch {branch} is checked out in {checked_out}, not in the worker's "
+                f"{_task_path(worktrees_dir, branch)}; not working in someone else's checkout",
             )
         path = checked_out or _add(repo, worktrees_dir, branch)
         return Worktree(
@@ -191,8 +194,13 @@ def prepare_worktree(
     return Worktree(path=path, branch=branch, start=base_commit, base=base_commit, continued=False)
 
 
+def _task_path(worktrees_dir: Path, branch: str) -> Path:
+    """Where the worker checks the branch out."""
+    return (worktrees_dir / worktree_folder(branch)).resolve()
+
+
 def _add(repo: Path, worktrees_dir: Path, branch: str, start: str | None = None) -> Path:
-    path = (worktrees_dir / worktree_folder(branch)).resolve()
+    path = _task_path(worktrees_dir, branch)
     if path.exists() and any(path.iterdir()):
         raise GitError(f"Worktree folder is in use: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
