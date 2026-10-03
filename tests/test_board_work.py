@@ -1173,6 +1173,37 @@ def test_stopping_a_verify_command_kills_its_whole_group(monkeypatch, tmp_path: 
     assert not state.exists() or state.read_text().split()[2] == "Z"
 
 
+def test_stopping_a_verify_command_on_windows_ends_its_whole_tree(monkeypatch) -> None:
+    from vibepod.core import board_worker
+
+    class Process:
+        pid = 4242
+        killed = False
+
+        def terminate(self) -> None:
+            pass
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 1
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(board_worker.sys, "platform", "win32")
+    monkeypatch.setattr(
+        board_worker.subprocess,
+        "run",
+        lambda args, **kwargs: calls.append(args),
+    )
+    process = Process()
+
+    board_worker._terminate(process)  # type: ignore[arg-type]
+
+    assert calls == [["taskkill", "/F", "/T", "/PID", "4242"]]
+    assert process.killed
+
+
 def test_host_git_never_runs_repository_hooks(
     board: FakeBoard,
     server: FakeBoardServer,

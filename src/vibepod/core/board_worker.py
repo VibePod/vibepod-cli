@@ -1184,12 +1184,20 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
     """Stops a verify command and everything it started: politely first, then for good,
     since test runners leave children behind that outlive their shell."""
     if sys.platform == "win32":
-        with contextlib.suppress(OSError):
-            process.terminate()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            process.wait(timeout=TERMINATE_GRACE_SECONDS)
+        # Ending the shell leaves what it started running: taskkill ends the whole tree.
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=TERMINATE_GRACE_SECONDS,
+                check=False,
+            )
         with contextlib.suppress(OSError):
             process.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=TERMINATE_GRACE_SECONDS)
         return
     with contextlib.suppress(OSError):
         os.killpg(process.pid, signal.SIGTERM)
