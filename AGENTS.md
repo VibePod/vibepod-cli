@@ -42,8 +42,8 @@ and `mypy` are pre-commit gated.
 ## Snap releases
 
 `snap/snapcraft.yaml` adopts its version from `pyproject.toml`;
-`.github/workflows/snap.yml` validates the installed classic snap before
-release uploads. Store setup and the confinement rationale live in
+`.github/workflows/snap.yml` validates the installed classic snap against Docker
+and rootless Podman before release uploads. Store setup and the confinement rationale live in
 `docs/snap.md`. Keep publication notices accurate until Store setup succeeds.
 
 ## Maintaining this file
