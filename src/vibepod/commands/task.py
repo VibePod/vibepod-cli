@@ -31,9 +31,9 @@ from vibepod.core.agents import (
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config, get_config_root
 from vibepod.core.dash import AGENT_ID_LABEL as DASH_ID_LABEL
-from vibepod.core.dash import AGENT_LABEL as DASH_AGENT_LABEL
 from vibepod.core.dash import apply_dash_if_enabled, target_from_labels
 from vibepod.core.dash import details as dash_details
+from vibepod.core.dash import launch_labels as dash_launch_labels
 from vibepod.core.dash import report as dash_report
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.herdr import (
@@ -927,8 +927,7 @@ def task_create(
         if proxy_policy_id is not None:
             launch_labels["vibepod.proxy-policy"] = proxy_policy_id
         if dash_target is not None:
-            launch_labels[DASH_AGENT_LABEL] = dash_target.agent
-            launch_labels[DASH_ID_LABEL] = dash_target.agent_id
+            launch_labels.update(dash_launch_labels(dash_target))
         try:
             container = manager.run_agent(
                 agent=selected,

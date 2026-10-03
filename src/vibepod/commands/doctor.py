@@ -888,7 +888,8 @@ def dash_doctor(
         console.print("Deep-dive one agent with `vp doctor dash <agent>`")
         return
 
-    target = dash_core.make_target(agent, workspace_path, config)
+    # A fixed run id: repeated probes land on one card instead of a new one each.
+    target = dash_core.make_target(agent, workspace_path, config, run_id="doctor")
     assert target is not None  # a URL was resolved above
     cfg_dir = agent_config_dir(agent, active_profile)
     spec = get_agent_spec(agent)

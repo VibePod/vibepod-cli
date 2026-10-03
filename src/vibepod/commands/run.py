@@ -31,16 +31,13 @@ from vibepod.core.agents import (
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config
 from vibepod.core.dash import (
-    AGENT_ID_LABEL as _DASH_ID_LABEL,
-)
-from vibepod.core.dash import (
-    AGENT_LABEL as _DASH_AGENT_LABEL,
-)
-from vibepod.core.dash import (
     apply_dash_if_enabled as _apply_dash_if_enabled,
 )
 from vibepod.core.dash import (
     details as _dash_details,
+)
+from vibepod.core.dash import (
+    launch_labels as _dash_launch_labels,
 )
 from vibepod.core.dash import (
     report as _dash_report,
@@ -1160,8 +1157,7 @@ def run(
     launch_labels["vibepod.profile"] = active_profile
     if dash_target is not None:
         # `vp stop` reads these back to mark the agent finished on the board.
-        launch_labels[_DASH_AGENT_LABEL] = dash_target.agent
-        launch_labels[_DASH_ID_LABEL] = dash_target.agent_id
+        launch_labels.update(_dash_launch_labels(dash_target))
     if provider_names:
         launch_labels["vibepod.provider"] = ",".join(provider_names)
     if proxy_policy_id is not None:
