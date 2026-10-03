@@ -35,6 +35,7 @@ from vibepod.core.dash import apply_dash_if_enabled, target_from_labels
 from vibepod.core.dash import details as dash_details
 from vibepod.core.dash import launch_labels as dash_launch_labels
 from vibepod.core.dash import report as dash_report
+from vibepod.core.dash import report_finished as dash_report_finished
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.herdr import (
     PANE_LABEL,
@@ -175,16 +176,21 @@ def _record_with_container_state(
         )
         or record
     )
-    # Only reached the first time a task crosses into a terminal status (the
-    # unchanged-record shortcut above returns early on every later sync), so
-    # the dashboard sees exactly one finish report.
+    # The exit watcher started by `vp task create` normally gets here first;
+    # this is the fallback when it could not run (host asleep, process killed).
+    # Whichever path reports, the claim in report_finished keeps it to one.
     if container is not None and updated.status in TERMINAL_TASK_STATUSES:
         _report_dash_finished(container, updated)
     return updated
 
 
-def _report_dash_finished(container: Any, record: TaskRecord, message: str | None = None) -> None:
-    """Mark a finished task done on the dashboard, when one is configured."""
+def _report_dash_finished(
+    container: Any,
+    record: TaskRecord,
+    message: str | None = None,
+    state: str | None = None,
+) -> None:
+    """Mark a finished task done on the dashboard, once, when one is configured."""
     labels = getattr(container, "labels", {}) or {}
     if not labels.get(DASH_ID_LABEL):
         return
@@ -192,9 +198,9 @@ def _report_dash_finished(container: Any, record: TaskRecord, message: str | Non
     if target is None:
         return
     detail = f" (exit {record.exit_code})" if record.exit_code is not None else ""
-    dash_report(
+    dash_report_finished(
         target,
-        "error" if record.status == TASK_STATUS_FAILED else "done",
+        state or ("error" if record.status == TASK_STATUS_FAILED else "done"),
         event="task.finished",
         message=message or f"task {record.status}{detail}",
         cwd=record.workspace,
@@ -245,23 +251,83 @@ def _parse_task_timeout(value: str) -> int | None:
     return amount * multiplier
 
 
-def _start_timeout_watcher(task_id: str, timeout_seconds: int) -> None:
+def _spawn_detached(args: list[str]) -> None:
+    """Start ``vp <args>`` in the background, outliving this process."""
+    kwargs: dict[str, Any] = {}
+    if os.name == "nt":
+        # No sessions on Windows: detach from the console instead, so closing
+        # the terminal does not take the watcher down with it.
+        kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+            subprocess,
+            "CREATE_NEW_PROCESS_GROUP",
+            0,
+        )
+    else:
+        kwargs["start_new_session"] = True
     subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "vibepod.cli",
-            "task",
-            "_watch-timeout",
-            task_id,
-            str(timeout_seconds),
-        ],
+        [sys.executable, "-m", "vibepod.cli", *args],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
         close_fds=True,
+        **kwargs,
     )
+
+
+def _start_timeout_watcher(task_id: str, timeout_seconds: int) -> None:
+    _spawn_detached(["task", "_watch-timeout", task_id, str(timeout_seconds)])
+
+
+def _start_exit_watcher(task_id: str) -> None:
+    _spawn_detached(["task", "_watch-exit", task_id])
+
+
+#: How often to re-check a container that the wait left still starting.
+_EXIT_WATCH_POLL_SECONDS = 1.0
+#: Give up on a container that never leaves ``created``/``restarting``; the
+#: lazy sync from `vp task list` still reports it eventually.
+_EXIT_WATCH_MAX_POLLS = 600
+
+
+def _watch_task_exit(
+    task_id: str,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Block until the task's container exits, then record and report it.
+
+    Runs host-side in the background (see `_start_exit_watcher`), so a
+    finished task reaches the dashboard when it ends rather than on the next
+    `vp task list`. Works the same on every host OS: it only talks to the
+    Docker API. Never raises; on any failure the lazy sync remains.
+    """
+    store = _task_store()
+    record = store.get(task_id)
+    if record is None or record.status in TERMINAL_TASK_STATUSES:
+        return
+    try:
+        container = DockerManager().get_container(record.container_id)
+    except DockerClientError:
+        return
+    for _ in range(_EXIT_WATCH_MAX_POLLS):
+        try:
+            # "not-running" answers at once for an already exited container,
+            # unlike "next-exit"; no timeout, a task may run for hours.
+            container.wait(condition="not-running", timeout=None)
+            container.reload()
+        except Exception:  # docker SDK raises APIError / DockerException / requests errors
+            return
+        state = container.attrs.get("State", {}) or {}
+        if not isinstance(state, dict):
+            state = {}
+        current = store.get(task_id)
+        if current is None:
+            return
+        current = _record_with_container_state(store, current, state, container)
+        if current.status in TERMINAL_TASK_STATUSES:
+            return
+        # Still created or restarting: "not-running" returned early.
+        sleep(_EXIT_WATCH_POLL_SECONDS)
 
 
 def _enforce_task_timeout(
@@ -299,18 +365,20 @@ def _enforce_task_timeout(
     if record.status in TERMINAL_TASK_STATUSES:
         return
 
+    # Claimed before the stop, or the exit watcher would see the container go
+    # down first and report a bare exit code instead of the timeout.
+    _report_dash_finished(container, record, message="task timed out", state="error")
     try:
         container.stop(timeout=10)
     except Exception as exc:  # docker SDK raises APIError / DockerException
         warning(f"Failed to stop timed-out task {record.id[:12]}: {exc}")
-    timed_out = store.update(
+    store.update(
         record.id,
         status=TASK_STATUS_FAILED,
         exit_code=record.exit_code,
         started_at=record.started_at,
         finished_at=_utcnow(),
     )
-    _report_dash_finished(container, timed_out or record, message="task timed out")
 
 
 @app.command("_watch-timeout", hidden=True)
@@ -320,6 +388,14 @@ def task_watch_timeout(
 ) -> None:
     """Internal helper launched by `vp task create --timeout`."""
     _enforce_task_timeout(task_id, timeout_seconds)
+
+
+@app.command("_watch-exit", hidden=True)
+def task_watch_exit(
+    task_id: Annotated[str, typer.Argument(help="Task id to watch")],
+) -> None:
+    """Internal helper launched by `vp task create` to report the task's end."""
+    _watch_task_exit(task_id)
 
 
 @app.command(
@@ -1046,6 +1122,13 @@ def task_create(
             ),
         )
 
+    if dash_target is not None:
+        try:
+            _start_exit_watcher(record.id)
+        except OSError as exc:
+            # Not fatal: `vp task list` / `status` still report the finish.
+            warning(f"dash: could not watch the task for its exit: {exc}")
+
     success(f"Task started: {record.id}")
     info(f"  container: {container.name}")
     if timeout_seconds is None:
@@ -1259,6 +1342,8 @@ def task_cancel(
         info(f"Task {record.id[:12]} already finished with status: {record.status}")
         return
 
+    # Before the stop, so the exit watcher cannot report a bare exit first.
+    _report_dash_finished(container, record, message="task cancelled", state="done")
     if getattr(container, "status", "") in {"running", "restarting", "paused"}:
         try:
             container.stop(timeout=10)

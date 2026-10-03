@@ -42,6 +42,9 @@ from vibepod.core.dash import (
 from vibepod.core.dash import (
     report as _dash_report,
 )
+from vibepod.core.dash import (
+    report_finished as _dash_report_finished,
+)
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.herdr import (
     PANE_LABEL as _HERDR_PANE_LABEL,
@@ -1309,7 +1312,12 @@ def run(
                 _release_herdr_agent(selected_agent)
                 _clear_herdr_metadata(selected_agent)
             if dash_target is not None:
-                _dash_report(dash_target, "done", event="container.stop", cwd=workspace_path)
+                _dash_report_finished(
+                    dash_target,
+                    "done",
+                    event="container.stop",
+                    cwd=workspace_path,
+                )
             raise typer.Exit(1)
         success(f"Started {container.name}")
         return
@@ -1370,7 +1378,7 @@ def run(
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
         if dash_target is not None:
-            _dash_report(
+            _dash_report_finished(
                 dash_target,
                 "error" if exit_reason == "error" else "done",
                 event="container.stop",

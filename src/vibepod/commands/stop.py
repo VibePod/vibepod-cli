@@ -11,7 +11,7 @@ from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
 from vibepod.core.agents import resolve_agent_name
 from vibepod.core.config import get_config
 from vibepod.core.dash import AGENT_ID_LABEL as DASH_ID_LABEL
-from vibepod.core.dash import report as dash_report
+from vibepod.core.dash import report_finished as dash_report_finished
 from vibepod.core.dash import target_from_labels
 from vibepod.core.docker import DockerClientError, DockerManager
 from vibepod.core.herdr import PANE_LABEL, release_agent
@@ -117,4 +117,9 @@ def _report_dash_stopped(containers: Iterable[Any]) -> None:
             config = get_config()
         target = target_from_labels(labels, config)
         if target is not None:
-            dash_report(target, "done", event="container.stop", message="stopped by vp stop")
+            dash_report_finished(
+                target,
+                "done",
+                event="container.stop",
+                message="stopped by vp stop",
+            )

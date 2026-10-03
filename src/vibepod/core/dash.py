@@ -18,6 +18,7 @@ import json
 import os
 import secrets
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from vibepod.core.codex_hooks import register as register_codex_lifecycle_hooks
+from vibepod.core.config import get_config_root
 from vibepod.core.hooksync import sync_integration_files
 from vibepod.utils.console import info, warning
 
@@ -79,7 +81,7 @@ class DashTarget:
     agent_id: str
     name: str
     #: Identifies this one run, also when the card id is pinned with
-    #: ``VPDASH_AGENT_ID``.
+    #: ``VPDASH_AGENT_ID``; keys the at-most-once finish report.
     run_id: str = ""
 
 
@@ -510,3 +512,55 @@ def target_from_labels(labels: dict[str, str], config: dict[str, Any]) -> DashTa
         name="",
         run_id=labels.get(RUN_ID_LABEL, ""),
     )
+
+
+#: Finish markers older than this are pruned; a run never lasts that long.
+_FINISH_MARKER_MAX_AGE = 30 * 24 * 60 * 60
+
+
+def _finish_marker_dir() -> Path:
+    return get_config_root() / "dash" / "finished"
+
+
+def claim_finish(target: DashTarget) -> bool:
+    """True the first time a run's finish is claimed, False ever after.
+
+    A run can end through several paths at once — the task exit watcher, the
+    lazy `vp task list` sync, `vp task cancel`, `vp stop`, the timeout
+    watcher, the foreground `vp run` — each in its own process. The claim is
+    an exclusively created marker file, atomic on every host OS, so exactly
+    one of them reports. Never raises: when the marker cannot be written the
+    finish is reported anyway rather than lost.
+    """
+    key = target.run_id or target.agent_id
+    try:
+        directory = _finish_marker_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        _prune_finish_markers(directory)
+        fd = os.open(directory / key, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+    os.close(fd)
+    return True
+
+
+def _prune_finish_markers(directory: Path) -> None:
+    cutoff = time.time() - _FINISH_MARKER_MAX_AGE
+    for marker in directory.iterdir():
+        try:
+            if marker.stat().st_mtime < cutoff:
+                marker.unlink()
+        except OSError:
+            continue
+
+
+def report_finished(target: DashTarget, state: str, **kwargs: Any) -> bool:
+    """Report a run's final *state* unless another path already did.
+
+    Returns True only when this call sent the report.
+    """
+    if not claim_finish(target):
+        return False
+    return report(target, state, **kwargs)
