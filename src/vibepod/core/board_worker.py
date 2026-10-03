@@ -361,6 +361,7 @@ def _commit_message(task: dict[str, Any], subject: str | None = None) -> str:
 
 
 Say = Callable[[str, str], None]
+Write = Callable[[], object]
 
 
 def _print(level: str, message: str) -> None:
@@ -409,8 +410,9 @@ class BoardWorker:
         # Tasks whose run was cancelled from the board: planned again, but passed over by
         # this worker so it does not restart what it was told to stop.
         self.passed_over: deque[str] = deque(maxlen=PASS_OVER_LIMIT)
-        # Board writes that kept failing, tried again on every round of the loop.
-        self.undelivered: list[tuple[str, Callable[[], object]]] = []
+        # Board writes that kept failing, tried again on every round of the loop, each with
+        # the write that replaces it once the worker was stopped, if any.
+        self.undelivered: list[tuple[str, Write, tuple[str, Write] | None]] = []
         self._heartbeat_lock = threading.Lock()
         # Why the agent of the current task could not be stopped, if it could not.
         self.stop_failed: str | None = None
@@ -1020,11 +1022,19 @@ class BoardWorker:
         card_ref = str(card["id"])
         branch, note = result.branch, self._handover_note(result)
         if result.outcome == "done":
+            stopped = "The worker was stopped from the board"
             delivered = self._deliver(
                 f"Handing {key} over",
                 lambda: self.client.hand_over(card_ref, self.options.name, branch, note),
+                instead=(
+                    f"Giving {key} back",
+                    lambda: self.client.release(card_ref, self.options.name, "released", stopped),
+                ),
             )
-            if delivered is True:
+            if delivered is False:
+                # A stop or cancel came while the hand-over was tried again: it still wins.
+                self._ended_early(self._interruption(None) or "stop", result)
+            elif delivered is True:
                 self.summary.handed_over.append(key)
                 self.say("success", f"Handed {key} over to Review on branch {result.branch}")
             elif isinstance(delivered, BoardApiError) and (
@@ -1080,12 +1090,23 @@ class BoardWorker:
         self.cancel_reason = None
         self._set("idle")
 
-    def _deliver(self, what: str, write: Callable[[], object]) -> bool | BoardApiError | None:
+    def _deliver(
+        self,
+        what: str,
+        write: Write,
+        instead: tuple[str, Write] | None = None,
+    ) -> bool | BoardApiError | None:
         """A board write that must not get lost: tried again while the board is unreachable
         or failing, then kept for the next round of the loop. Says True once it went through,
-        the error when the board refused it, and None when it is kept for later."""
+        the error when the board refused it, and None when it is kept for later.
+
+        A write with one to make `instead` is given up once a stop or cancel comes between
+        its tries, which says False, and is replaced by that one if the worker is stopped
+        while it is kept."""
         delay = 1.0
         for attempt in range(DELIVERY_ATTEMPTS):
+            if attempt and instead is not None and self._interruption(None) is not None:
+                return False
             try:
                 write()
                 return True
@@ -1095,7 +1116,7 @@ class BoardWorker:
                     return exc
                 if attempt == DELIVERY_ATTEMPTS - 1:
                     self.say("warning", f"{what} failed ({exc.message}); trying again later")
-                    self.undelivered.append((what, write))
+                    self.undelivered.append((what, write, instead))
                     return None
                 self.say("warning", f"{what} failed ({exc.message}); retrying")
                 self._idle_wait(delay)
@@ -1104,13 +1125,15 @@ class BoardWorker:
 
     def _redeliver(self) -> None:
         pending, self.undelivered = self.undelivered, []
-        for what, write in pending:
+        for what, write, instead in pending:
+            if instead is not None and self.stop_requested:
+                (what, write), instead = instead, None
             try:
                 write()
                 self.say("info", f"{what}: delivered")
             except BoardApiError as exc:
                 if _transient(exc):
-                    self.undelivered.append((what, write))
+                    self.undelivered.append((what, write, instead))
                 else:
                     self.say("warning", f"{what}: {exc.message}")
 

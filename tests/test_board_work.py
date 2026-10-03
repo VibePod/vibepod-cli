@@ -905,6 +905,63 @@ def test_a_run_stops_before_its_unrenewed_claim_runs_out(
     assert board.card("VP-1")["column"] == "planned"
 
 
+def test_a_stop_that_comes_while_the_hand_over_is_retried_gives_the_task_back(
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    from vibepod.core import board_worker
+
+    monkeypatch.setattr(board_worker, "DELIVERY_ATTEMPTS", 8)
+    board.add_task("Stopped while handing over")
+    board.failures = {"POST /api/board/card-1/handover": 6}
+    beats: list[dict[str, Any]] = []
+
+    def stop_while_retrying(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") == "handing_over":
+            beats.append(beat)
+        # The first comes before the hand-over, the next ones between its tries.
+        return [{"type": "stop"}] if len(beats) > 1 else []
+
+    board.on_heartbeat = stop_while_retrying
+
+    worker, _ = work(server, FakeRunner(), repo, poll_seconds=30)
+
+    assert len(beats) > 1
+    assert board.card("VP-1")["column"] == "planned"
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "released"
+    assert board.runs[0]["outcome"] == "cancelled"
+    assert worker.summary.handed_over == []
+    assert worker.summary.ended_because == "Stopped from the board"
+
+
+def test_a_kept_hand_over_becomes_a_release_when_the_worker_is_stopped(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Handed over late")
+    board.failures = {"POST /api/board/card-1/handover": 5}
+
+    def stop_once_kept(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        kept = len(board.requests("POST", "/api/board/card-1/handover")) == 5
+        return [{"type": "stop"}] if kept and beat.get("status") == "idle" else []
+
+    board.on_heartbeat = stop_once_kept
+
+    work(server, FakeRunner(), repo, once=True)
+
+    assert len(board.requests("POST", "/api/board/card-1/handover")) == 5
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert (release["outcome"], release["note"]) == (
+        "released",
+        "The worker was stopped from the board",
+    )
+    assert board.card("VP-1")["column"] == "planned"
+
+
 def test_a_refused_hand_over_blocks_the_task_instead_of_leaving_it_claimed(
     board: FakeBoard,
     server: FakeBoardServer,
