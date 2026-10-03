@@ -353,10 +353,15 @@ The list applies to both `vp run` and `vp task` containers. Like other agent key
     (for example `~/.ssh`) into the agent container. Review the `volumes`
     of a project you did not write before running an agent in it.
 
-`vp run` (and the agent alias commands) also accept a repeatable `-v/--volume` flag with the same syntax. Unlike `--publish`, the flag **adds** to the configured list. A flag entry replaces only the configured entry mounted at the same container path. Relative flag paths resolve against the current directory:
+`vp run` (and the agent alias commands) also accept a repeatable `-v/--volume` flag with the same syntax. Unlike `--publish`, the flag **adds** to the configured list. A flag entry replaces only the configured entry mounted at the same container path. Relative flag paths resolve against the current directory. A single absolute POSIX host path is shorthand for `HOST_PATH:HOST_PATH` with read-write access (also supported in config). Relative paths, `~` paths, and named volumes require an explicit destination; use an explicit mapping to set a mode:
 
 ```bash
-vp run claude -v ~/datasets:/datasets:ro -v pip-cache:/root/.cache/pip
+# Same path on the host and in the container:
+vp run claude --volume /my/path
+# Equivalent explicit mapping:
+vp run claude --volume /my/path:/my/path
+# Mix shorthand and explicit mappings:
+vp run claude -v /my/path -v ~/datasets:/datasets:ro -v pip-cache:/root/.cache/pip
 ```
 
 ## The built-in proxy
