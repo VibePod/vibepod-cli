@@ -1179,9 +1179,11 @@ Node with `--use-system-ca` plus `NODE_EXTRA_CA_CERTS`, so requests route
 through `vibepod-proxy` with the mounted mitmproxy CA.
 
 **Non-interactive mode.** Print mode works with both `vp run` and task mode.
-It refuses a workspace it has not been told to trust, so task mode passes
-`--trust` (interactive runs ask once per workspace and remember the answer in
-the config mount):
+It refuses a workspace it has not been told to trust, so task mode always
+passes `--trust`, with or without `--ikwid`: a detached task cannot answer
+Cursor's workspace-trust prompt (interactive runs ask once per workspace and
+remember the answer in the config mount). `--trust` only marks the workspace as
+trusted; it does not skip command approvals, which is what `--ikwid` is for:
 
 ```bash
 vp run cursor -- --trust -p "explain this repo"
