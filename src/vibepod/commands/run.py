@@ -1030,7 +1030,11 @@ def run(
     # state from an events file instead (detached runs have nobody to relay).
     herdr_relay = None
     if not herdr_socket_mounts and not detach:
-        herdr_relay = _create_herdr_event_relay(config, no_herdr=no_herdr or acp)
+        herdr_relay = _create_herdr_event_relay(
+            selected_agent,
+            config,
+            no_herdr=no_herdr or acp,
+        )
     if herdr_relay is not None:
         try:
             herdr_relay.prepare()

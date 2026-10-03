@@ -387,7 +387,12 @@ def forward_event(params: dict[str, Any]) -> bool:
     return ok
 
 
-def create_event_relay(config: dict[str, Any], *, no_herdr: bool) -> HerdrEventRelay | None:
+def create_event_relay(
+    agent: str,
+    config: dict[str, Any],
+    *,
+    no_herdr: bool,
+) -> HerdrEventRelay | None:
     """Relay for an attached run whose engine cannot mount the herdr socket.
 
     None when this run does not report to a herdr pane. Nothing touches the
@@ -398,7 +403,7 @@ def create_event_relay(config: dict[str, Any], *, no_herdr: bool) -> HerdrEventR
     pane = os.environ.get("HERDR_PANE_ID")
     if not pane or not pane_reporting_enabled(config, no_herdr=no_herdr):
         return None
-    return HerdrEventRelay(pane, forward_event)
+    return HerdrEventRelay(pane, forward_event, agent=agent)
 
 
 def report_pane_metadata(agent: str) -> bool:
