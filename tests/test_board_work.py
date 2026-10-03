@@ -2159,8 +2159,8 @@ def test_another_reviewers_rework_cancels_the_review_without_a_verdict(
     board.required_approvals = 2
     sha = handed_over(board, repo)
 
-    def other_reviewer_sends_it_back(beat: dict[str, Any]) -> list[dict[str, Any]]:
-        if beat.get("step") == "agent_running" and board.card("VP-1")["column"] == "review":
+    def other_reviewer_sends_it_back() -> list[dict[str, Any]]:
+        if board.card("VP-1")["column"] == "review":
             board._claim_review({"assignee": "codex-review", "mode": "review"})
             board._submit_review(
                 "card-1",
@@ -2168,7 +2168,7 @@ def test_another_reviewers_rework_cancels_the_review_without_a_verdict(
             )
         return []
 
-    board.on_heartbeat = other_reviewer_sends_it_back
+    board.on_heartbeat = once_the_agent_runs(other_reviewer_sends_it_back)
     runner = FakeRunner(polls=None)
 
     worker, _ = review(server, runner, repo)
@@ -2193,12 +2193,12 @@ def test_a_review_cancelled_from_the_board_ends_without_a_verdict(
 ) -> None:
     handed_over(board, repo)
 
-    def cancel(beat: dict[str, Any]) -> list[dict[str, Any]]:
-        if beat.get("step") == "agent_running" and board.reviews[0]["open"]:
+    def cancelled() -> list[dict[str, Any]]:
+        if board.reviews[0]["open"]:
             board._cancel_review("card-1", "review-1", {"reason": "Not now"})
         return []
 
-    board.on_heartbeat = cancel
+    board.on_heartbeat = once_the_agent_runs(cancelled)
     runner = FakeRunner(polls=None)
 
     review(server, runner, repo)
@@ -2215,16 +2215,58 @@ def test_a_stop_gives_the_review_up_and_ends_the_worker(
     repo: Path,
 ) -> None:
     handed_over(board, repo)
-    board.on_heartbeat = lambda beat: (
-        [{"type": "stop"}] if beat.get("step") == "agent_running" else []
-    )
+    board.on_heartbeat = once_the_agent_runs(lambda: [{"type": "stop"}])
+    runner = FakeRunner(polls=None)
 
-    worker, _ = review(server, FakeRunner(polls=None), repo, poll_seconds=30)
+    worker, _ = review(server, runner, repo, poll_seconds=30)
 
+    assert runner.runs[0].stopped is True
     [verdict] = board.requests("POST", "/api/board/card-1/review")
     assert verdict["verdict"] == "released"
     assert board.runs[0]["outcome"] == "cancelled"
     assert worker.summary.ended_because == "Stopped from the board"
+
+
+def test_a_review_cancelled_while_preparing_never_starts_the_agent(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+
+    def cancel_while_preparing(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") == "preparing_workspace" and board.reviews[0]["open"]:
+            board._cancel_review("card-1", "review-1", {"reason": "Not now"})
+        return []
+
+    board.on_heartbeat = cancel_while_preparing
+    runner = FakeRunner()
+
+    review(server, runner, repo)
+
+    assert runner.starts == []
+    assert board.requests("POST", "/api/board/card-1/review") == []
+    assert board.runs[0]["outcome"] == "cancelled"
+    assert not review_path(repo).exists()
+
+
+def test_a_review_stops_before_its_unrenewed_lease_runs_out(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    sha = handed_over(board, repo)
+    board.failures = {"POST /api/workers/worker-1/heartbeat": 10**6}
+    runner = FakeRunner(polls=None)
+
+    review(server, runner, repo, once=True, lease_seconds=120)
+
+    assert runner.runs[0].stopped is True
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert (verdict["verdict"], verdict["headSha"]) == ("released", sha)
+    assert verdict["note"].startswith("The review could not be renewed for")
+    assert board.runs[0]["outcome"] == "failed"
+    assert board.card("VP-1")["column"] == "review"
 
 
 def test_a_timed_out_review_fails(board: FakeBoard, server: FakeBoardServer, repo: Path) -> None:

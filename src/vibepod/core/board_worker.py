@@ -1522,7 +1522,7 @@ class BoardWorker:
         self.cancel_reason = None
         self.stop_failed = None
         started_at = self.now()
-        started = self.clock()
+        started = self.renewed = self.clock()
         self._set("working", step=STEP_PREPARING)
         result = ReviewResult(
             branch=str(card.get("branchName") or "") or None,
@@ -1639,6 +1639,10 @@ class BoardWorker:
             pointers = worktrees.pointers(path)
             refs = worktrees.branch_refs(repo)
             checked_out = worktrees.checkouts(repo)
+            # A stop or cancel that came while the worktree was prepared ends the review
+            # before the agent starts.
+            if self._review_ended_early(self._interruption(deadline) or "exit", result):
+                return
             run = self.runner.start(
                 build_review_prompt(task, result.branch, result.commit, base, base_commit, earlier),
                 path,
@@ -1807,6 +1811,15 @@ class BoardWorker:
             # The review already ended on the board, such as after another reviewer's rework
             # verdict: there is no verdict left to give.
             result.outcome, result.reason, result.verdict = "cancelled", self.cancel_reason, None
+        elif ended == "lease":
+            # The review lapses on the board soon, and another reviewer may take it: given
+            # up while it still can be.
+            unrenewed = format_duration(self.clock() - (self.renewed or 0))
+            result.outcome, result.reason, result.verdict = (
+                "failed",
+                f"The review could not be renewed for {unrenewed}; stopped before it runs out",
+                "released",
+            )
         elif ended == "timeout":
             self._review_failed(
                 result,
@@ -1838,6 +1851,9 @@ class BoardWorker:
         if self.stop_failed is not None:
             # The agent may still be running: the review stays held until its lease runs out.
             result.verdict = None
+        if result.verdict in {"failed", "released"} and not result.note:
+            # A review given up says why, as a task given back does.
+            result.note = result.reason
         verdict, note, head_sha = result.verdict, result.note, result.head_sha
         delivered: bool | BoardApiError | None = None
         if verdict is not None:
