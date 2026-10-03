@@ -286,6 +286,19 @@ def test_close_drains_lines_written_after_the_last_tick(tmp_path: Path) -> None:
     assert not relay_obj.host_dir.exists()
 
 
+def test_close_soft_fails_when_the_final_drain_fails(monkeypatch, tmp_path: Path) -> None:
+    relay_obj = HerdrEventRelay(PANE, _Recorder(), root=tmp_path / "relay", interval=60)
+    relay_obj.prepare()
+    relay_obj.start()
+
+    def _fail() -> list[bytes]:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(relay_obj, "_read_lines", _fail)
+    relay_obj.close()
+    assert not relay_obj.host_dir.exists()
+
+
 def test_close_before_prepare_is_harmless(tmp_path: Path) -> None:
     HerdrEventRelay(PANE, _Recorder(), root=tmp_path / "relay").close()
 
