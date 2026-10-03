@@ -227,12 +227,44 @@ def test_an_unresolvable_host_explains_itself(capsys) -> None:
     assert "dash.container_url" in out
 
 
-def test_agent_id_is_stable_per_workspace() -> None:
-    first = dash.agent_id("claude", Path("/work/proj"), "box")
-    assert first == dash.agent_id("claude", Path("/work/proj"), "box")
-    assert first != dash.agent_id("claude", Path("/work/other"), "box")
-    assert first != dash.agent_id("codex", Path("/work/proj"), "box")
-    assert first != dash.agent_id("claude", Path("/work/proj"), "laptop")
+def test_agent_id_is_derived_from_the_run() -> None:
+    first = dash.agent_id("claude", Path("/work/proj"), "box", "run1")
+    assert first == dash.agent_id("claude", Path("/work/proj"), "box", "run1")
+    assert first != dash.agent_id("claude", Path("/work/proj"), "box", "run2")
+    assert first != dash.agent_id("claude", Path("/work/other"), "box", "run1")
+    assert first != dash.agent_id("codex", Path("/work/proj"), "box", "run1")
+    assert first != dash.agent_id("claude", Path("/work/proj"), "laptop", "run1")
+
+
+def test_each_run_of_the_same_agent_and_checkout_gets_its_own_card() -> None:
+    first = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
+    second = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
+    assert first is not None and second is not None
+    assert first.run_id and second.run_id
+    assert first.run_id != second.run_id
+    assert first.agent_id != second.agent_id
+    # Same title, though: the board still shows which agent and project it is.
+    assert first.name == second.name
+
+
+def test_a_given_run_id_reuses_its_card() -> None:
+    first = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG, run_id="doctor")
+    again = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG, run_id="doctor")
+    assert first is not None and again is not None
+    assert first.agent_id == again.agent_id
+
+
+def test_launch_labels_let_other_commands_find_the_runs_card() -> None:
+    target = dash.make_target("codex", Path("/work/proj"), DASH_CONFIG)
+    assert target is not None
+
+    rebuilt = dash.target_from_labels(dash.launch_labels(target), DASH_CONFIG)
+    assert rebuilt is not None
+    assert (rebuilt.agent, rebuilt.agent_id, rebuilt.run_id) == (
+        target.agent,
+        target.agent_id,
+        target.run_id,
+    )
 
 
 def test_agent_identity_can_be_overridden(monkeypatch) -> None:
@@ -241,6 +273,11 @@ def test_agent_identity_can_be_overridden(monkeypatch) -> None:
     target = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
     assert target is not None
     assert (target.agent_id, target.name) == ("mine", "my agent")
+    # Pinned runs still tell themselves apart.
+    again = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
+    assert again is not None
+    assert again.agent_id == "mine"
+    assert again.run_id != target.run_id
 
 
 def test_display_name_marks_vibepod_runs() -> None:

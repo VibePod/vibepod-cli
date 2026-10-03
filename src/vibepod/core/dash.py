@@ -16,6 +16,7 @@ import hashlib
 import importlib.resources
 import json
 import os
+import secrets
 import socket
 import urllib.error
 import urllib.parse
@@ -43,6 +44,7 @@ HOOK_LOG_NAME = "dash-hook.log"
 #: mark the agent finished from any terminal.
 AGENT_ID_LABEL = "vibepod.dash.agent-id"
 AGENT_LABEL = "vibepod.dash.agent"
+RUN_ID_LABEL = "vibepod.dash.run-id"
 REQUEST_TIMEOUT = 3
 
 #: agent -> list of (path relative to resources, dest relative to the
@@ -76,6 +78,9 @@ class DashTarget:
     agent: str
     agent_id: str
     name: str
+    #: Identifies this one run, also when the card id is pinned with
+    #: ``VPDASH_AGENT_ID``.
+    run_id: str = ""
 
 
 def _dash_section(config: dict[str, Any]) -> dict[str, Any]:
@@ -187,14 +192,21 @@ def usable_host_url(url: str) -> str:
     return resolved
 
 
-def agent_id(agent: str, workspace: Path, host: str) -> str:
-    """Stable dashboard id for *agent* working in *workspace* on *host*.
+def new_run_id() -> str:
+    """A fresh id for one run (one container's lifetime)."""
+    return secrets.token_hex(8)
 
-    Deterministic on purpose: re-running an agent in the same checkout updates
-    the card it had before instead of stacking up a new one every session.
-    Override with ``VPDASH_AGENT_ID`` when you want one card per run.
+
+def agent_id(agent: str, workspace: Path, host: str, run_id: str) -> str:
+    """Dashboard card id for one run of *agent* in *workspace* on *host*.
+
+    Every run gets its own card: two sessions of the same agent in the same
+    checkout must not share one, or the first to finish would mark the other
+    done. The id reaches every reporter — the in-container hooks through
+    ``VPDASH_AGENT_ID``, `vp stop` and `vp task` through the container's
+    labels. Pin it with ``VPDASH_AGENT_ID`` to have runs share a card again.
     """
-    seed = f"{host}|{agent}|{workspace}"
+    seed = f"{host}|{agent}|{workspace}|{run_id}"
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
 
@@ -203,12 +215,22 @@ def display_name(agent: str, workspace: Path) -> str:
     return f"vp:{agent} · {workspace.name or workspace}"
 
 
-def make_target(agent: str, workspace: Path, config: dict[str, Any]) -> DashTarget | None:
-    """Build the target for this run, or None when no dashboard is configured."""
+def make_target(
+    agent: str,
+    workspace: Path,
+    config: dict[str, Any],
+    *,
+    run_id: str | None = None,
+) -> DashTarget | None:
+    """Build the target for a new run, or None when no dashboard is configured.
+
+    *run_id* defaults to a fresh one, i.e. a new card.
+    """
     url = resolve_url(config)
     if url is None:
         return None
     host = os.environ.get("VPDASH_HOST") or socket.gethostname()
+    run_id = run_id or new_run_id()
     return DashTarget(
         # Container side first: it is derived from what was configured, not
         # from the loopback URL the host side may fall back to.
@@ -216,9 +238,19 @@ def make_target(agent: str, workspace: Path, config: dict[str, Any]) -> DashTarg
         container_url=resolve_container_url(config, url),
         token=resolve_token(config),
         agent=agent,
-        agent_id=os.environ.get("VPDASH_AGENT_ID") or agent_id(agent, workspace, host),
+        agent_id=os.environ.get("VPDASH_AGENT_ID") or agent_id(agent, workspace, host, run_id),
         name=os.environ.get("VPDASH_AGENT_NAME") or display_name(agent, workspace),
+        run_id=run_id,
     )
+
+
+def launch_labels(target: DashTarget) -> dict[str, str]:
+    """Container labels that let `vp stop` / `vp task` rebuild *target*."""
+    return {
+        AGENT_LABEL: target.agent,
+        AGENT_ID_LABEL: target.agent_id,
+        RUN_ID_LABEL: target.run_id,
+    }
 
 
 def container_env(target: DashTarget, config_mount_path: str) -> dict[str, str]:
@@ -476,4 +508,5 @@ def target_from_labels(labels: dict[str, str], config: dict[str, Any]) -> DashTa
         agent=agent,
         agent_id=dash_agent_id,
         name="",
+        run_id=labels.get(RUN_ID_LABEL, ""),
     )

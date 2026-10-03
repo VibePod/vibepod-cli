@@ -25,7 +25,7 @@ dash:
 
 ## What VibePod wires up
 
-- `VPDASH_*` environment is injected into the container, including a stable
+- `VPDASH_*` environment is injected into the container, including the run's
   agent id and the display name `vp:<agent> · <project>`
 - for agents with lifecycle hooks, a VibePod-managed reporter plus hook script
   is copied into the agent's config dir and registered
@@ -132,11 +132,17 @@ container on that one — its compose file reads `VIBEPOD_NETWORK`.
 
 ## Identity on the board
 
-One card per agent *and* workspace: the id is derived from host, agent and
-workspace path, so re-running an agent in the same checkout updates the card it
-had before instead of stacking up a new one. Override it per run with
-`VPDASH_AGENT_ID` (one card per run) or rename the card with
-`VPDASH_AGENT_NAME`.
+One card per run: every `vp run` and `vp task create` gets a fresh card id,
+derived from host, agent, workspace path and a random per-run id. Two sessions
+of the same agent in the same checkout therefore show up as two cards, and one
+finishing never marks the other done. The id reaches the in-container hooks as
+`VPDASH_AGENT_ID` and is stored on the container as the `vibepod.dash.agent-id`
+and `vibepod.dash.run-id` labels, which is how `vp stop` and `vp task` find the
+card again. Both cards carry the same `vp:<agent> · <project>` title.
+
+Set `VPDASH_AGENT_ID` to pin the id yourself — e.g. to have every run in a
+checkout update one card, as long as you never run two at once — or rename the
+card with `VPDASH_AGENT_NAME`.
 
 ## Opting out
 
