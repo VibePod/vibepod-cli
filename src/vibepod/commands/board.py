@@ -21,6 +21,7 @@ from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protec
 from vibepod.core.board_client import BoardApiError, BoardClient, resolve_board_settings
 from vibepod.core.board_worker import (
     DEFAULT_BRANCH_TEMPLATE,
+    AgentStopError,
     BoardWorker,
     FileProfileLock,
     RunnerError,
@@ -89,7 +90,12 @@ class DockerAgentRun:
         try:
             self.launched.container.stop(timeout=10)
         except Exception as exc:  # docker SDK raises APIError / DockerException
-            warning(f"Failed to stop task {self.record.id[:12]}: {exc}")
+            if self._may_be_running():
+                # Not recorded as cancelled: the timeout watcher keeps trying to stop it.
+                raise AgentStopError(
+                    f"Task {self.record.id[:12]} could not be stopped and may still be "
+                    f"running: {exc}",
+                ) from exc
         self.launched.store.update(
             self.record.id,
             status=TASK_STATUS_CANCELLED,
@@ -97,6 +103,17 @@ class DockerAgentRun:
             started_at=self.record.started_at,
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
+
+    def _may_be_running(self) -> bool:
+        container = self.launched.container
+        try:
+            container.reload()
+        except docker.errors.NotFound:
+            return False
+        except Exception:  # docker SDK raises APIError / DockerException
+            return True
+        state = container.attrs.get("State", {}) or {}
+        return not isinstance(state, dict) or state.get("Status") not in {"exited", "dead"}
 
     def logs(self) -> str:
         try:
@@ -458,5 +475,7 @@ def board_work(
             signal.signal(sig, handler)
 
     info(f"Handed over {len(summary.handed_over)} task(s), gave back {len(summary.returned)}.")
-    if summary.ended_because.startswith("The agent could not be started"):
+    if summary.ended_because.startswith(
+        ("The agent could not be started", "The agent could not be stopped"),
+    ):
         raise typer.Exit(1)

@@ -102,6 +102,11 @@ class RunnerError(Exception):
     the same way, so the worker gives the task back and stops."""
 
 
+class AgentStopError(RunnerError):
+    """The agent could not be stopped and may still be working in the worktree. Its task
+    stays claimed until the lease runs out instead of going to another worker meanwhile."""
+
+
 class WorkerError(Exception):
     """The worker cannot go on, such as a named task that cannot be claimed."""
 
@@ -394,6 +399,8 @@ class BoardWorker:
         # Board writes that kept failing, tried again on every round of the loop.
         self.undelivered: list[tuple[str, Callable[[], object]]] = []
         self._heartbeat_lock = threading.Lock()
+        # Why the agent of the current task could not be stopped, if it could not.
+        self.stop_failed: str | None = None
 
     # --- lifecycle ------------------------------------------------------------------
 
@@ -619,15 +626,23 @@ class BoardWorker:
                     return code, self._interruption(None) or "exit"
                 ended = self._interruption(deadline)
                 if ended is not None:
-                    stop()
+                    self._stop(stop)
                     return None, ended
                 self._heartbeat()
                 # Quick commands finish without a full poll interval of waiting.
                 self.sleep(min(self.poll_seconds, 0.1 * 2 ** min(waited, 5)))
                 waited += 1
         except BaseException:
-            with contextlib.suppress(Exception):
-                stop()
+            if self.stop_failed is None:
+                with contextlib.suppress(Exception):
+                    self._stop(stop)
+            raise
+
+    def _stop(self, stop: Callable[[], None]) -> None:
+        try:
+            stop()
+        except AgentStopError as exc:
+            self.stop_failed = str(exc)
             raise
 
     @contextlib.contextmanager
@@ -666,6 +681,7 @@ class BoardWorker:
         key = str(task.get("key") or task["id"])
         self.task = task
         self.cancel_reason = None
+        self.stop_failed = None
         started_at = self.now()
         started = self.clock()
         self._set("working", step=STEP_PREPARING)
@@ -696,6 +712,10 @@ class BoardWorker:
                 raise TaskProblem(str(exc)) from exc
         except TaskProblem as problem:
             result.outcome, result.reason, result.release = "failed", str(problem), "blocked"
+        except AgentStopError as exc:
+            result.outcome, result.reason, result.release = "failed", str(exc), None
+            self.stop_requested = True
+            self.summary.ended_because = f"The agent could not be stopped: {exc}"
         except RunnerError as exc:
             result.outcome, result.reason, result.release = "failed", str(exc), "released"
             self.stop_requested = True
@@ -941,6 +961,10 @@ class BoardWorker:
             # release, whatever the run came to.
             if result.outcome == "done":
                 result.outcome, result.reason = "cancelled", self.cancel_reason
+            result.release = None
+        if self.stop_failed is not None:
+            # The agent may still be writing to the worktree: the claim stays until its lease
+            # runs out, so that no other worker starts on the task meanwhile.
             result.release = None
         card_ref = str(card["id"])
         branch, note = result.branch, self._handover_note(result)

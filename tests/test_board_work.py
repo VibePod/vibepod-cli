@@ -20,6 +20,7 @@ from vibepod.commands import board as board_cmd
 from vibepod.core import worktrees
 from vibepod.core.board_client import BoardApiError, BoardClient, resolve_board_settings
 from vibepod.core.board_worker import (
+    AgentStopError,
     BoardWorker,
     FileProfileLock,
     RunnerError,
@@ -560,6 +561,47 @@ def test_a_timed_out_agent_is_stopped_and_the_task_returned(
     assert board.runs[0]["outcome"] == "timed_out"
     # Heartbeats kept the claim alive while the agent ran.
     assert sum(beat.get("step") == "agent_running" for beat in board.heartbeats) >= 4
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_an_agent_that_cannot_be_stopped_keeps_its_claim(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    interrupted: bool,
+) -> None:
+    board.add_task("Unstoppable")
+
+    class Unstoppable(FakeRunner):
+        def start(self, prompt: str, workspace: Path, **kwargs: Any) -> FakeRun:
+            run = super().start(prompt, workspace, **kwargs)
+            polls = 0
+
+            def poll() -> int | None:
+                nonlocal polls
+                polls += 1
+                if interrupted and polls == 3:
+                    raise KeyboardInterrupt
+                return None
+
+            def stop() -> None:
+                raise AgentStopError("Task abc could not be stopped and may still be running")
+
+            run.poll = poll  # type: ignore[method-assign]
+            run.stop = stop  # type: ignore[method-assign]
+            return run
+
+    if interrupted:
+        with pytest.raises(KeyboardInterrupt):
+            work(server, Unstoppable(polls=None), repo, timeout_seconds=60, once=True)
+    else:
+        worker, _ = work(server, Unstoppable(polls=None), repo, timeout_seconds=60, poll_seconds=30)
+        assert worker.summary.ended_because.startswith("The agent could not be stopped")
+
+    assert board.requests("POST", "/api/board/card-1/release") == []
+    assert board.card("VP-1")["column"] == "in_progress"
+    assert board.card("VP-1")["assignee"] == "claude@laptop"
+    assert board.runs[0]["outcome"] == ("cancelled" if interrupted else "failed")
 
 
 def test_a_task_without_a_repository_is_blocked(board: FakeBoard, server: FakeBoardServer) -> None:
@@ -1563,6 +1605,49 @@ def test_the_docker_runner_backs_the_time_limit_and_tells_hiccups_from_exits(
 
     manager.container.reload = gone  # type: ignore[method-assign]
     assert run.poll() == 1
+
+
+def test_the_docker_runner_says_when_the_agent_could_not_be_stopped(
+    monkeypatch,
+    tmp_path: Path,
+    repo: Path,
+) -> None:
+    import docker.errors
+
+    from vibepod.commands import task as task_cmd
+    from vibepod.core.tasks import TaskStore
+
+    manager = _Manager()
+    store = TaskStore(tmp_path / "tasks.db")
+    monkeypatch.setattr(
+        task_cmd,
+        "get_config",
+        lambda: {"agents": {"claude": {"env": {}, "init": []}}, "proxy": {"enabled": False}},
+    )
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: manager)
+    monkeypatch.setattr(task_cmd, "is_dir_allowed", lambda path: True)
+    monkeypatch.setattr(task_cmd, "_task_store", lambda: store)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    run = board_cmd.DockerAgentRunner("claude").start(
+        "Do it",
+        worktree,
+        mounts=[],
+        allow_check_path=repo,
+    )
+
+    def refuses(timeout: int = 10) -> None:
+        raise docker.errors.APIError("engine busy")
+
+    manager.container.stop = refuses  # type: ignore[method-assign]
+    with pytest.raises(AgentStopError, match="could not be stopped and may still be running"):
+        run.stop()
+    assert store.get(run.task_id).status != "cancelled"
+
+    # Stopped after all, such as by its own time limit: nothing is left running.
+    manager.container.attrs["State"] = {"Status": "exited", "ExitCode": 137}
+    run.stop()
+    assert store.get(run.task_id).status == "cancelled"
 
 
 def test_the_docker_runner_turns_launch_failures_into_runner_errors(
