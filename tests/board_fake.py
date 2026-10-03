@@ -326,7 +326,9 @@ class FakeBoard:
         if verdict is not None:
             review["verdict"] = verdict
         self.event(
-            review["ideaId"], "review_ended", f"Review by {review['reviewer']} ended: {reason}"
+            review["ideaId"],
+            "review_ended",
+            f"Review by {review['reviewer']} ended: {reason}",
         )
 
     def _end_other_reviews(self, task_id: str, keep: dict[str, Any], reason: str) -> None:
@@ -353,11 +355,11 @@ class FakeBoard:
             return 400, {"error": f"headSha is required: the review is of {review['headSha']}"}
         if sha and sha != review["headSha"]:
             return 409, {
-                "error": f"Task {task['key']} is reviewed at another commit: the branch moved on"
+                "error": f"Task {task['key']} is reviewed at another commit: the branch moved on",
             }
         if review["headSha"] != card.get("headSha") or card["column"] != "review":
             return 409, {
-                "error": f"Task {task['key']} was handed over again since the review started"
+                "error": f"Task {task['key']} was handed over again since the review started",
             }
         ending = verdict in ("failed", "released")
         if not ending and card.get("blockedReason"):
