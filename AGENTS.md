@@ -42,6 +42,15 @@ Docker (default, `core/docker.py`) and microsandbox microVMs driven through the
 A new Docker-only launch feature must be rejected or skipped explicitly on the
 microsandbox path (see `_check_microsandbox_launch`); `vp task` is Docker-only.
 
+## Agent sandbox (gVisor)
+
+`sandbox.mode: gvisor` / `--sandbox` only swaps the agent container's OCI
+runtime; all engine checks live in `src/vibepod/core/sandbox.py` and run before
+any network/proxy is provisioned. On Docker the runtime must carry
+`--network=host` (gVisor netstack cannot reach Docker's 127.0.0.11 DNS on
+`vibepod-network`, google/gvisor#7469); Podman's `/info` lists `runsc` even
+when it is not installed and never reports runtime flags. See `docs/sandbox.md`.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

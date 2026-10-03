@@ -31,6 +31,10 @@ inside its panes.
 - `herdr: false` in `.vibepod/config.yaml` or the global config — disable
   entirely
 
+In the [gVisor sandbox](sandbox.md) the socket is only mounted when the
+runtime allows host unix sockets (`--host-uds=open`, Docker only); otherwise
+VibePod reports pane identity from the host without live agent state.
+
 ## Custom agents
 
 The file injection is data-driven. To wire an agent without built-in support

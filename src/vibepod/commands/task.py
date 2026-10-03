@@ -66,6 +66,7 @@ from vibepod.core.profiles import resolve_profile
 from vibepod.core.provider_launch import prepare_launch
 from vibepod.core.provider_runtime import WRAPPED_AGENTS, bootstrap_volume, wrap_provider_command
 from vibepod.core.proxy_filter import remove_container_policy
+from vibepod.core.sandbox import SANDBOX_HELP, SandboxError, prepare_sandbox, resolve_sandbox
 from vibepod.core.tasks import (
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
@@ -353,6 +354,10 @@ def task_create_command(
             help="Temporary model provider(s) for this launch (see `vp provider list`)",
         ),
     ] = None,
+    sandbox: Annotated[
+        str | None,
+        typer.Option("--sandbox", help=SANDBOX_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Start an agent task in the background and print its id."""
     task_create(
@@ -370,6 +375,7 @@ def task_create_command(
         ikwid=ikwid,
         profile=profile,
         provider_names=provider,
+        sandbox=sandbox,
         passthrough_args=_context_args(ctx),
     )
 
@@ -437,6 +443,10 @@ def task_run_command(
             help="Temporary model provider(s) for this launch (see `vp provider list`)",
         ),
     ] = None,
+    sandbox: Annotated[
+        str | None,
+        typer.Option("--sandbox", help=SANDBOX_HELP, show_default=False),
+    ] = None,
 ) -> None:
     """Deprecated alias for `task create`."""
     task_create(
@@ -454,6 +464,7 @@ def task_run_command(
         ikwid=ikwid,
         profile=profile,
         provider_names=provider,
+        sandbox=sandbox,
         passthrough_args=_context_args(ctx),
         deprecated_alias=True,
     )
@@ -483,6 +494,7 @@ def launch_task(
     ikwid: bool = False,
     profile: str | None = None,
     provider_names: list[str] | None = None,
+    sandbox: str | None = None,
     passthrough_args: list[str] | None = None,
     extra_mounts: list[tuple[str, str, str]] | None = None,
     allow_check_path: Path | None = None,
@@ -664,6 +676,13 @@ def launch_task(
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
+    try:
+        sandbox_plan = prepare_sandbox(manager, resolve_sandbox(config, workspace_path, sandbox))
+    except SandboxError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    for note in sandbox_plan.notes:
+        warning(f"sandbox: {note}")
     agent_userns_mode = "keep-id" if rootless_podman else None
     if rootless_podman:
         merged_env["USER_UID"] = "0"
@@ -765,6 +784,7 @@ def launch_task(
         config,
         no_herdr=no_herdr,
         mount_socket=bool(socket_mount_probe()) if callable(socket_mount_probe) else True,
+        socket_skip_reason=sandbox_plan.socket_skip_reason,
     )
     extra_volumes.extend(herdr_volumes)
     extra_volumes.extend(extra_mounts or [])
@@ -847,11 +867,11 @@ def launch_task(
 
             extra_volumes.append((str(actual_ca_dir), PROXY_CA_MOUNT_PATH, "ro"))
 
-        info(f"Starting task on {selected} with image {image}")
+        info(f"Starting task on {selected} with image {image}{sandbox_plan.suffix}")
         container_user = None
         if not rootless_podman and spec.run_as_host_user:
             container_user = host_user()
-        launch_labels = dict(herdr_labels)
+        launch_labels = {**herdr_labels, **sandbox_plan.labels}
         launch_labels["vibepod.profile"] = active_profile
         if provider_names:
             launch_labels["vibepod.provider"] = ",".join(provider_names)
@@ -877,6 +897,8 @@ def launch_task(
                 entrypoint=entrypoint,
                 userns_mode=agent_userns_mode,
                 extra_labels=launch_labels,
+                runtime=sandbox_plan.runtime,
+                security_opt=sandbox_plan.security_opt or None,
             )
         except Exception:
             if proxy_policy_id is not None:
@@ -1005,6 +1027,7 @@ def task_create(
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
     provider_names: list[str] | None = None,
+    sandbox: str | None = None,
     passthrough_args: list[str] | None = None,
     deprecated_alias: bool = False,
 ) -> None:
@@ -1032,6 +1055,7 @@ def task_create(
         ikwid=ikwid,
         profile=profile,
         provider_names=provider_names,
+        sandbox=sandbox,
         passthrough_args=passthrough_args,
     )
     record = launched.record

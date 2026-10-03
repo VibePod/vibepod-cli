@@ -784,3 +784,68 @@ def microsandbox_doctor() -> None:
         error(f"{failures} problem(s) found")
         raise typer.Exit(1)
     success("microsandbox is ready for `vp run`")
+@app.command("sandbox")
+def sandbox_doctor(
+    workspace: Annotated[
+        Path,
+        typer.Option("-w", "--workspace", help="Workspace whose sandbox setting to show"),
+    ] = Path("."),
+) -> None:
+    """Check whether the gVisor (runsc) agent sandbox can run on this engine.
+
+    Shows the sandbox the workspace would launch with and validates the gVisor
+    prerequisites (Linux host, rootful engine, registered runtime and its flags)
+    even when the sandbox is not enabled.
+    """
+    from vibepod.core.docker import DockerClientError, DockerManager
+    from vibepod.core.sandbox import (
+        SandboxError,
+        SandboxSettings,
+        prepare_sandbox,
+        resolve_sandbox,
+        runtime_flag,
+    )
+
+    workspace_path = workspace.expanduser().resolve()
+    try:
+        settings = resolve_sandbox(get_config(), workspace_path)
+    except SandboxError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+    console.print(f"  configured sandbox: {settings.mode}")
+    console.print(f"  gVisor runtime:     {settings.runtime}")
+
+    try:
+        manager = DockerManager()
+    except DockerClientError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+    engine = "Podman" if manager.is_podman() else "Docker"
+    console.print(f"  engine:             {engine}")
+    entry = manager.runtimes().get(settings.runtime)
+    if entry is not None:
+        args = [str(arg) for arg in (entry.get("runtimeArgs") or [])]
+        console.print(f"  runtime path:       {entry.get('path') or entry.get('runtimeType', '?')}")
+        if not manager.is_podman():
+            console.print(f"  runtime args:       {' '.join(args) or '(none)'}")
+            console.print(f"  network:            {runtime_flag(args, 'network') or 'sandbox'}")
+            console.print(f"  host-uds:           {runtime_flag(args, 'host-uds') or 'none'}")
+
+    try:
+        plan = prepare_sandbox(manager, SandboxSettings(mode="gvisor", runtime=settings.runtime))
+    except SandboxError as exc:
+        error(f"gVisor sandbox unavailable: {exc}")
+        raise typer.Exit(1) from exc
+    for note in plan.notes:
+        warning(f"  {note}")
+    if plan.socket_skip_reason:
+        info("  herdr: live agent state is unavailable inside the sandbox (no --host-uds=open)")
+    if plan.security_opt:
+        info(f"  SELinux is enabled; sandboxed agents run with {', '.join(plan.security_opt)}")
+    if engine == "Podman":
+        info(
+            "  Podman reports runtimes whether or not they are installed; "
+            "a missing runsc binary only shows up when a sandboxed agent starts.",
+        )
+    success(f"gVisor sandbox prerequisites look good (runtime '{settings.runtime}').")

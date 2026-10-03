@@ -224,7 +224,15 @@ def test_task_create_skips_herdr_socket_mount_on_vm_backed_engine(
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
     calls: dict = {}
 
-    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+    def _fake_apply(
+        agent,
+        config_dir,
+        config,
+        *,
+        no_herdr,
+        mount_socket=True,
+        socket_skip_reason=None,
+    ):
         calls["mount_socket"] = mount_socket
         return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
 
@@ -257,7 +265,15 @@ def test_task_create_mounts_herdr_socket_on_native_engine(
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
     calls: dict = {}
 
-    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+    def _fake_apply(
+        agent,
+        config_dir,
+        config,
+        *,
+        no_herdr,
+        mount_socket=True,
+        socket_skip_reason=None,
+    ):
         calls["mount_socket"] = mount_socket
         return ([], {}) if not mount_socket else ([("/s.sock", "/herdr/herdr.sock", "rw")], {})
 
@@ -290,7 +306,15 @@ def test_task_create_lacks_herdr_report_when_disabled(
     monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
     calls: dict = {}
 
-    def _fake_apply(agent, config_dir, config, *, no_herdr, mount_socket=True):
+    def _fake_apply(
+        agent,
+        config_dir,
+        config,
+        *,
+        no_herdr,
+        mount_socket=True,
+        socket_skip_reason=None,
+    ):
         calls["mount_socket"] = mount_socket
         return ([], {})
 
@@ -1778,3 +1802,69 @@ def test_task_create_survives_missing_image_metadata(
     assert rows[0].image_tag == "latest"
     assert rows[0].image_hash is None
     assert rows[0].agent_version is None
+
+
+class _GvisorDockerManager(_CapturingDockerManager):
+    def runtimes(self) -> dict:
+        return {"runsc": {"path": "runsc", "runtimeArgs": ["--network=host"]}}
+
+    def is_podman(self) -> bool:
+        return False
+
+    def is_rootless_engine(self) -> bool:
+        return False
+
+    def selinux_enabled(self) -> bool:
+        return True
+
+
+def test_task_create_sandbox_runs_agent_under_runsc(monkeypatch, tmp_path, tmp_task_store) -> None:
+    from vibepod.core import sandbox as sandbox_mod
+
+    monkeypatch.setattr(sandbox_mod.sys, "platform", "linux")
+    monkeypatch.delenv("VP_SANDBOX", raising=False)
+    stub = _GvisorDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="go", workspace=tmp_path, sandbox="gvisor")
+
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["runtime"] == "runsc"
+    assert stub.run_kwargs["security_opt"] == ["label=disable"]
+    assert stub.run_kwargs["extra_labels"]["vibepod.sandbox"] == "gvisor"
+
+
+def test_task_create_default_has_no_sandbox(monkeypatch, tmp_path, tmp_task_store) -> None:
+    monkeypatch.delenv("VP_SANDBOX", raising=False)
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="claude", prompt="go", workspace=tmp_path)
+
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["runtime"] is None
+
+
+def test_task_create_sandbox_error_aborts_before_launch(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    capsys,
+) -> None:
+    from vibepod.core import sandbox as sandbox_mod
+
+    monkeypatch.setattr(sandbox_mod.sys, "platform", "darwin")
+    stub = _GvisorDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    with pytest.raises(typer.Exit) as exc:
+        task_cmd.task_create(agent="claude", prompt="go", workspace=tmp_path, sandbox="gvisor")
+
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    assert tmp_task_store.list() == []
+    output = capsys.readouterr()
+    assert "Linux host" in " ".join((output.out + output.err).split())

@@ -203,6 +203,12 @@ def _default_config() -> dict[str, Any]:
             "memory": None,
             "args": [],
         },
+        "sandbox": {
+            "mode": "none",
+            "gvisor": {
+                "runtime": "runsc",
+            },
+        },
         "llm": {
             "enabled": False,
             "base_url": "",
@@ -295,6 +301,7 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
         "VP_DATASETTE_PORT": ("logging.ui_port", int),
         "VP_PROXY_ENABLED": ("proxy.enabled", lambda x: x.lower() == "true"),
         "VP_PROXY_FILTER_MODE": ("proxy.filter.mode", str),
+        "VP_SANDBOX": ("sandbox.mode", str),
         "VP_LLM_ENABLED": ("llm.enabled", lambda x: x.lower() == "true"),
         "VP_LLM_BASE_URL": ("llm.base_url", str),
         "VP_LLM_API_KEY": ("llm.api_key", str),

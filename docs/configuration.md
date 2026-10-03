@@ -183,6 +183,12 @@ microsandbox:
   cpus: null # vCPUs per microVM (null: msb default)
   memory: null # memory per microVM, e.g. 4G (null: msb default)
   args: [] # extra `msb run` flags
+# Opt-in agent sandbox (see Agent sandbox: gVisor). Linux hosts with a rootful
+# engine only; the default runs agents under the engine's normal runtime.
+sandbox:
+  mode: none # none | gvisor (shorthand: `sandbox: gvisor`)
+  gvisor:
+    runtime: runsc # Name the OCI runtime is registered under in Docker/Podman
 
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
@@ -229,6 +235,7 @@ These variables override the corresponding config keys without editing any file:
 | `VP_DATASETTE_PORT`    | `logging.ui_port`   | `VP_DATASETTE_PORT=9001`                 |
 | `VP_PROXY_ENABLED`     | `proxy.enabled`     | `VP_PROXY_ENABLED=false`                 |
 | `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow`             |
+| `VP_SANDBOX`           | `sandbox.mode`      | `VP_SANDBOX=gvisor`                      |
 | `VP_LLM_ENABLED`       | `llm.enabled`       | `VP_LLM_ENABLED=true`                    |
 | `VP_LLM_BASE_URL`      | `llm.base_url`      | `VP_LLM_BASE_URL=http://localhost:11434` |
 | `VP_LLM_API_KEY`       | `llm.api_key`       | `VP_LLM_API_KEY=ollama`                  |
