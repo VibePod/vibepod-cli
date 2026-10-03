@@ -365,6 +365,14 @@ that:
   Graphify honor that variable, so a hook or skill registered once is there
   on every later run and in every project.
 
+!!! warning "One overlay Dockerfile per agent"
+    VibePod builds exactly one fragment per agent: `.vibepod/overlay/<agent>/Dockerfile`
+    if it exists, otherwise the shared `.vibepod/overlay/Dockerfile`. The two do
+    not stack — once `claude/Dockerfile` exists, the shared file is ignored for
+    Claude. The RTK example below uses the shared file and the Graphify example
+    the per-agent one; to install both, put both into the same file as shown in
+    [RTK and Graphify together](#rtk-and-graphify-together).
+
 Run the registration **inside a session** so the files belong to your user:
 Claude Code's bash mode executes a line starting with `!` in the container as
 the agent user. `agents.<agent>.init` can automate it, but the init wrapper
@@ -499,6 +507,49 @@ Then, in the agent:
 ```text
 /graphify .
 ```
+
+## RTK and Graphify together
+
+Because the per-agent fragment replaces the shared one, a Claude image with
+both tools needs both installs in `.vibepod/overlay/claude/Dockerfile`, with
+the Graphify `requirements.txt` next to it:
+
+```text
+.vibepod/overlay/
+├── Dockerfile            # optional: RTK only, for every other agent
+└── claude/
+    ├── Dockerfile        # RTK + Graphify for Claude
+    └── requirements.txt  # hashed Graphify dependencies
+```
+
+```dockerfile
+# .vibepod/overlay/claude/Dockerfile — no FROM line
+# RTK
+ADD https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-x86_64-unknown-linux-musl.tar.gz /tmp/rtk-x86_64.tar.gz
+ADD https://github.com/rtk-ai/rtk/releases/download/v0.48.0/rtk-aarch64-unknown-linux-gnu.tar.gz /tmp/rtk-aarch64.tar.gz
+RUN arch="$(uname -m)" \
+    && case "$arch" in \
+         x86_64)  sum=e4e650fa1677c0de2f6839a6040d7b17f312d32f163c402b75af70e9e5af1a91 ;; \
+         aarch64) sum=5ed65486a96077bd6bba7c87fdc9d0e4a1918d19619be3c87380888389a30c7c ;; \
+         *) echo "no RTK build for $arch" >&2; exit 1 ;; \
+       esac \
+    && echo "$sum  /tmp/rtk-$arch.tar.gz" | sha256sum -c - \
+    && tar -xzf "/tmp/rtk-$arch.tar.gz" -C /usr/local/bin rtk \
+    && chmod 755 /usr/local/bin/rtk \
+    && rm /tmp/rtk-*.tar.gz
+
+# Graphify
+COPY requirements.txt /tmp/graphify-requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/graphify \
+    && /opt/graphify/bin/pip install --no-cache-dir --require-hashes \
+         -r /tmp/graphify-requirements.txt \
+    && ln -s /opt/graphify/bin/graphify /usr/local/bin/graphify
+```
+
+Keep the shared `.vibepod/overlay/Dockerfile` only if other agents should get
+RTK too; Claude no longer reads it, so the RTK lines live in both files.
 
 ## Verifying the wiring
 
