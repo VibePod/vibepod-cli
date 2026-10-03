@@ -1879,16 +1879,50 @@ class BoardWorker:
         verdict, note, head_sha = result.verdict, result.note, result.head_sha
         delivered: bool | BoardApiError | None = None
         if verdict is not None:
+            stopped = "The worker was stopped from the board"
+            sending = verdict
+            judging = sending in {"approve", "rework", "needs_input"}
             delivered = self._deliver(
                 f"Sending the review of {key}",
                 lambda: self.client.submit_review(
                     str(card["id"]),
                     self.options.name,
-                    verdict,
+                    sending,
                     head_sha,
                     note,
                 ),
+                instead=(
+                    (
+                        f"Giving the review of {key} up",
+                        lambda: self.client.submit_review(
+                            str(card["id"]),
+                            self.options.name,
+                            "released",
+                            head_sha,
+                            stopped,
+                        ),
+                    )
+                    if judging
+                    else None
+                ),
             )
+        if delivered is False:
+            # A stop or cancel came while the verdict was tried again: it still wins.
+            self._review_ended_early(self._interruption(None) or "stop", result)
+            result.note = result.reason
+            given_up, reason = result.verdict, result.note
+            if given_up is not None:
+                delivered = self._deliver(
+                    f"Giving the review of {key} up",
+                    lambda: self.client.submit_review(
+                        str(card["id"]),
+                        self.options.name,
+                        given_up,
+                        head_sha,
+                        reason,
+                    ),
+                )
+            verdict = given_up
         if isinstance(delivered, BoardApiError) and (
             delivered.is_conflict or delivered.is_not_found
         ):
