@@ -362,13 +362,13 @@ def test_legacy_devstral_config_merges_as_vibe(monkeypatch, tmp_path: Path) -> N
     (config_root / "config.yaml").write_text(
         "default_agent: devstral\n"
         "agents:\n  devstral:\n    image: custom/legacy:latest\n"
-        "    env:\n      LEGACY: preserved\n      SHARED: global\n"
+        "    env:\n      LEGACY: preserved\n      SHARED: global\n",
     )
     project = tmp_path / ".vibepod"
     project.mkdir()
     (project / "config.yaml").write_text(
         "agents:\n  devstral:\n    env:\n      SHARED: project\n"
-        "  vibe:\n    image: custom/vibe:latest\n"
+        "  vibe:\n    image: custom/vibe:latest\n",
     )
     config = get_config()
     assert "devstral" not in config["agents"]
