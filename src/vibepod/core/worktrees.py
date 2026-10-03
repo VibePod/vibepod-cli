@@ -247,6 +247,8 @@ def prepare_review_worktree(repo: Path, worktrees_dir: Path, name: str, commit: 
     created, checked out or moved, so several reviewers of one task each get one. A review
     worktree an earlier run left at the same place in the worktree folder is replaced."""
     path = (worktrees_dir / worktree_folder(name)).resolve()
+    if path == repo.resolve():
+        raise GitError(f"Not replacing {path}: it is the repository's own checkout")
     if path in worktree_paths(repo):
         if not _inside(path, worktrees_dir):
             raise GitError(f"Not replacing {path}: it is outside {worktrees_dir}")

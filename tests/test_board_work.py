@@ -3259,6 +3259,8 @@ def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) 
     (tmp_path / "trees" / "taken" / "file").write_text("mine\n")
     with pytest.raises(worktrees.GitError, match="in use"):
         worktrees.prepare_review_worktree(repo, tmp_path / "trees", "taken", sha)
+    with pytest.raises(worktrees.GitError, match="own checkout"):
+        worktrees.prepare_review_worktree(repo, repo.parent, repo.name, sha)
 
     git(path, "checkout", "--quiet", "-b", "agent-branch")
     (path / "README.md").write_text("changed\n")
