@@ -722,14 +722,20 @@ class BoardWorker:
             raise TaskProblem(
                 "No repository to work in: pass --repo, or set the task's local repository path",
             )
-        # Checked before git runs in it: the path may come from the board.
+        # Checked before git runs in it, since the path may come from the board, and again
+        # for the repository it belongs to, which may be a parent the user did not allow.
         resolved = path.resolve()
-        if self.allow_repo is not None and not self.allow_repo(resolved):
+        self._check_allowed(resolved)
+        root = worktrees.repository_root(resolved)
+        if root != resolved:
+            self._check_allowed(root)
+        return root
+
+    def _check_allowed(self, path: Path) -> None:
+        if self.allow_repo is not None and not self.allow_repo(path):
             raise TaskProblem(
-                f"Repository {resolved} is not allowed for agents: run "
-                f"`vp config allow-dir {resolved}`",
+                f"Repository {path} is not allowed for agents: run `vp config allow-dir {path}`",
             )
-        return worktrees.repository_root(resolved)
 
     def _worktree_dir(self, repo: Path) -> Path:
         return self.options.worktree_dir or repo.parent / f"{repo.name}-worktrees"

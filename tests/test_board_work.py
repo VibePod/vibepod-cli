@@ -1015,6 +1015,26 @@ def test_a_repository_that_is_not_allowed_is_never_touched(
     assert not (repo.parent / "app-worktrees").exists()
 
 
+def test_an_allowed_folder_inside_a_repository_does_not_allow_the_repository(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    (repo / "docs").mkdir()
+    board.add_task("Inside a larger repository", repositoryLocalPath=str(repo / "docs"))
+    runner = FakeRunner()
+    allowed = (repo / "docs").resolve()
+
+    work(server, runner, None, allow_repo=lambda path: path == allowed, once=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert f"Repository {repo.resolve()} is not allowed for agents" in release["note"]
+    assert git(repo, "branch", "--list", "vp-1") == ""
+    assert not (repo.parent / "app-worktrees").exists()
+
+
 def test_a_continued_branch_that_already_holds_the_work_is_handed_over(
     board: FakeBoard,
     server: FakeBoardServer,
