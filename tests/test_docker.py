@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import socket
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from vibepod.core import docker as docker_mod
 from vibepod.core.docker import (
     APIError,
     DockerClientError,
@@ -21,6 +23,7 @@ from vibepod.core.docker import (
     NotFound,
     _discover_podman_socket,
     _parse_image_name,
+    bind_mode,
 )
 
 requires_af_unix = pytest.mark.skipif(
@@ -154,6 +157,278 @@ def test_run_agent_podman_branch_honors_start_false(tmp_path: Path) -> None:
     assert kwargs["working_dir"] == str(tmp_path / "workspace")
     binds = client.api.host_config_kwargs["binds"]
     assert f"{tmp_path / 'workspace'}:{tmp_path / 'workspace'}:rw" in binds
+
+
+# ---------------------------------------------------------------------------
+# SELinux bind relabeling
+# ---------------------------------------------------------------------------
+
+
+# Windows host paths carry no `/`, so bind_mode never relabels them (and no
+# Windows host has SELinux to begin with).
+posix_paths = pytest.mark.skipif(
+    os.name == "nt",
+    reason="SELinux relabeling only applies to POSIX host paths",
+)
+
+
+def _enforcing_selinux(monkeypatch, tmp_path: Path, *, relabel: bool = True) -> None:
+    enforce = tmp_path / "enforce"
+    enforce.write_text("1\n")
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+    if relabel:
+        monkeypatch.setenv("VP_SELINUX_RELABEL", "true")
+
+
+def test_bind_mode_follows_enforce_file(monkeypatch, tmp_path: Path) -> None:
+    enforce = tmp_path / "enforce"
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "true")
+
+    # No SELinux on the host at all.
+    assert bind_mode("/home/u/project") == "rw"
+
+    enforce.write_text("0\n")
+    assert bind_mode("/home/u/project") == "rw"
+
+    enforce.write_text("1\n")
+    assert bind_mode("/home/u/project") == "rw,z"
+    assert bind_mode("/home/u/.config/vibepod/proxy", "ro") == "ro,z"
+
+
+@posix_paths
+def test_bind_mode_does_not_relabel_by_default_and_hints_once(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path, relabel=False)
+
+    assert bind_mode("/home/u/project") == "rw"
+    assert bind_mode("/home/u/.config/vibepod/proxy", "ro") == "ro"
+    docker_mod.report_selinux_relabel()
+    docker_mod.report_selinux_relabel()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("SELinux is enforcing") == 1
+    assert "VP_SELINUX_RELABEL=true" in captured.err
+    assert "permanently" in captured.err
+
+
+@posix_paths
+def test_bind_mode_follows_selinux_relabel_config_and_env(monkeypatch, tmp_path: Path) -> None:
+    config_root = tmp_path / "config"
+    config_root.mkdir()
+    monkeypatch.setenv("VP_CONFIG_DIR", str(config_root))
+    monkeypatch.chdir(tmp_path)
+    _enforcing_selinux(monkeypatch, tmp_path, relabel=False)
+
+    (config_root / "config.yaml").write_text("selinux_relabel: true\n")
+    assert bind_mode("/home/u/project") == "rw,z"
+    # The env var overrides the config key in both directions.
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "false")
+    assert bind_mode("/home/u/project") == "rw"
+
+    (config_root / "config.yaml").write_text("selinux_relabel: false\n")
+    assert bind_mode("/home/u/project") == "rw"
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "true")
+    assert bind_mode("/home/u/project") == "rw,z"
+
+
+@pytest.mark.parametrize("relabel", ["true", "false"])
+def test_selinux_relabel_is_inert_without_enforcing_selinux(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+    relabel: str,
+) -> None:
+    enforce = tmp_path / "enforce"
+    enforce.write_text("0\n")
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+    monkeypatch.setenv("VP_SELINUX_RELABEL", relabel)
+
+    assert bind_mode("/home/u/project") == "rw"
+    docker_mod.report_selinux_relabel()
+
+    captured = capsys.readouterr()
+    assert captured.out + captured.err == ""
+
+
+@posix_paths
+def test_report_selinux_relabel_lists_each_relabeled_path_once(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path)
+
+    bind_mode("/home/u/project")
+    bind_mode("/home/u/project")
+    bind_mode("/etc/ssl/certs")
+    docker_mod.report_selinux_relabel()
+    bind_mode("/home/u/project")
+    bind_mode("/home/u/.config/vibepod/proxy", "ro")
+    docker_mod.report_selinux_relabel()
+
+    err = capsys.readouterr().err
+    assert err.count("/home/u/project") == 1
+    assert err.count("/home/u/.config/vibepod/proxy") == 1
+    assert "/etc/ssl/certs" not in err
+    assert "SELinux is enforcing" not in err
+
+
+def test_bind_mode_keeps_explicit_relabel_and_named_volumes(monkeypatch, tmp_path: Path) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path)
+
+    assert bind_mode("/home/u/data", "rw,Z") == "rw,Z"
+    assert bind_mode("/home/u/data", "ro,z") == "ro,z"
+    assert bind_mode("/home/u/data", "z") == "z"
+    assert bind_mode("cache") == "rw"
+
+
+@posix_paths
+def test_bind_mode_never_relabels_home_or_system_dirs(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home" / "u"
+    home.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _enforcing_selinux(monkeypatch, tmp_path)
+
+    for path in (home, home.parent, tmp_path, "/", "/home", "/tmp", "/usr", "/etc", "/var"):
+        assert bind_mode(path) == "rw", path
+    assert bind_mode(home / "project") == "rw,z"
+
+
+@posix_paths
+def test_bind_mode_never_relabels_inside_system_trees(monkeypatch, tmp_path: Path) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path)
+
+    for path in ("/etc/ssl/certs", "/usr/local/share/vibepod", "/etc/../usr/lib/x"):
+        assert bind_mode(path) == "rw", path
+    # User projects under other top-level dirs are still relabeled.
+    for path in ("/opt/project", "/srv/project", "/var/www/project", "/etc-backup/x"):
+        assert bind_mode(path) == "rw,z", path
+
+
+@posix_paths
+def test_run_agent_relabels_binds_on_selinux_host(tmp_path: Path, monkeypatch) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path)
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "agents" / "claude").mkdir(parents=True)
+
+    _run_acp_agent(
+        manager,
+        tmp_path,
+        workspace_mount_path=str(tmp_path / "workspace"),
+        extra_volumes=[
+            ("/tmp/.X11-unix", "/tmp/.X11-unix", "rw"),
+            ("/usr/local/bin/herdr", "/usr/local/bin/herdr", "ro"),
+            ("/home/u/.ssh", "/x", "ro"),
+        ],
+        start=False,
+    )
+
+    binds = client.api.host_config_kwargs["binds"]
+    assert f"{tmp_path / 'workspace'}:/workspace:rw,z" in binds
+    assert f"{tmp_path / 'workspace'}:{tmp_path / 'workspace'}:rw,z" in binds
+    assert f"{tmp_path / 'agents' / 'claude'}:/claude:rw,z" in binds
+    # Host-owned and user volumes keep the mode they were given.
+    assert "/tmp/.X11-unix:/tmp/.X11-unix:rw" in binds
+    assert "/usr/local/bin/herdr:/usr/local/bin/herdr:ro" in binds
+    assert "/home/u/.ssh:/x:ro" in binds
+
+
+@posix_paths
+def test_run_agent_does_not_relabel_by_default_on_selinux_host(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path, relabel=False)
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "agents" / "claude").mkdir(parents=True)
+
+    _run_acp_agent(manager, tmp_path, start=False)
+
+    binds = client.api.host_config_kwargs["binds"]
+    assert f"{tmp_path / 'workspace'}:/workspace:rw" in binds
+    assert f"{tmp_path / 'agents' / 'claude'}:/claude:rw" in binds
+    assert not any(bind.endswith(",z") for bind in binds)
+    err = capsys.readouterr().err
+    assert "SELinux is enforcing" in err
+    assert "selinux_relabel: true" in err
+
+
+@posix_paths
+def test_run_agent_warns_instead_of_relabeling_home_workspace(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home = tmp_path / "home"
+    (home / "agents" / "claude").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _enforcing_selinux(monkeypatch, tmp_path)
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    _run_acp_agent(
+        manager,
+        tmp_path,
+        workspace=home,
+        config_dir=home / "agents" / "claude",
+        start=False,
+    )
+
+    binds = client.api.host_config_kwargs["binds"]
+    assert f"{home}:/workspace:rw" in binds
+    assert f"{home / 'agents' / 'claude'}:/claude:rw,z" in binds
+    captured = capsys.readouterr()
+    assert "SELinux" in captured.out + captured.err
+
+
+@posix_paths
+def test_ensure_proxy_relabels_ca_dir_on_selinux_host(tmp_path: Path, monkeypatch) -> None:
+    """Without `z` the CA store is unwritable: mitmdump exits 1 on startup."""
+
+    class _FakeContainers:
+        def __init__(self) -> None:
+            self.run_kwargs: dict | None = None
+
+        def run(self, **kwargs):
+            self.run_kwargs = kwargs
+            return {"id": "proxy"}
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.containers = _FakeContainers()
+
+    _enforcing_selinux(monkeypatch, tmp_path)
+    manager = object.__new__(DockerManager)
+    manager.client = _FakeClient()  # type: ignore[assignment]
+    monkeypatch.setattr(DockerManager, "find_proxy", lambda self: None)
+
+    db_path = tmp_path / "proxy" / "proxy.db"
+    ca_dir = tmp_path / "proxy" / "mitmproxy"
+    manager.ensure_proxy(
+        image="vibepod/proxy:latest",
+        db_path=db_path,
+        ca_dir=ca_dir,
+        network="vibepod-network",
+    )
+
+    volumes = manager.client.containers.run_kwargs["volumes"]  # type: ignore[union-attr]
+    assert volumes[str(db_path.parent)]["mode"] == "rw,z"
+    assert volumes[str(ca_dir)]["mode"] == "rw,z"
 
 
 class _FakeStreamSocket:

@@ -3786,3 +3786,61 @@ def test_extend_write_roots_seeds_an_unset_variable() -> None:
     _extend_write_roots(env, "HERMES_WRITE_SAFE_ROOT", ["/home/me/code"])
 
     assert env["HERMES_WRITE_SAFE_ROOT"] == "/home/me/code"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="SELinux relabeling only applies to POSIX host paths")
+def test_run_relabels_vibepod_mounts_but_not_user_volumes(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    """On SELinux hosts VibePod relabels its own dirs; a user's volumes keep their mode."""
+    from vibepod.core import docker as docker_mod
+
+    enforce = _tmp_config_root / "enforce"
+    enforce.write_text("1\n")
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "true")
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    shared = _tmp_config_root / "shared"
+    shared.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("opencode", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "opencode", "-w", str(workspace), "--detach", "-v", f"{shared}:/shared:ro"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    modes = {target: mode for _, target, mode in stub.run_kwargs["extra_volumes"]}
+    assert modes["/root/.config/opencode"] == "rw,z"
+    assert modes["/shared"] == "ro"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="SELinux relabeling only applies to POSIX host paths")
+def test_run_does_not_relabel_on_selinux_host_by_default(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    """Relabeling is opt-in: without `selinux_relabel` no mount gains `z`."""
+    from vibepod.core import docker as docker_mod
+
+    enforce = _tmp_config_root / "enforce"
+    enforce.write_text("1\n")
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("opencode", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "opencode", "-w", str(workspace), "--detach"])
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    modes = [mode for _, _, mode in stub.run_kwargs["extra_volumes"]]
+    assert modes
+    assert not any("z" in mode.split(",") for mode in modes)

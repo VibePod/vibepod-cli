@@ -30,7 +30,7 @@ from vibepod.core.agents import (
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
 from vibepod.core.config import get_config, get_config_root
-from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
+from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag, bind_mode
 from vibepod.core.herdr import (
     PANE_LABEL,
     apply_herdr_if_enabled,
@@ -855,7 +855,9 @@ def task_create(
 
             apply_proxy_env(merged_env, proxy_policy_id)
 
-            extra_volumes.append((str(actual_ca_dir), PROXY_CA_MOUNT_PATH, "ro"))
+            extra_volumes.append(
+                (str(actual_ca_dir), PROXY_CA_MOUNT_PATH, bind_mode(actual_ca_dir, "ro")),
+            )
 
         info(f"Starting task on {selected} with image {image}")
         container_user = None

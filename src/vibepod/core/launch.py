@@ -23,6 +23,7 @@ from vibepod.core.docker import (
     DockerClientError,
     DockerManager,
     _is_latest_tag,
+    bind_mode,
 )
 from vibepod.utils.console import error, warning
 
@@ -372,31 +373,33 @@ def agent_extra_volumes(agent: str, config_dir: Path) -> list[tuple[str, str, st
     # the entrypoint can land on, including the one it creates for a host uid it
     # does not already know (macOS Docker Desktop's 501, for one). ACP mode
     # cannot recover from a miss: editors have no TTY for a login flow.
+    mounts: list[tuple[str, str, str]] = []
     if agent == "auggie":
         host = str(config_dir / ".augment")
-        return [
+        mounts = [
             (host, "/root/.augment", "rw"),
             (host, "/home/node/.augment", "rw"),
             (host, "/home/auggie/.augment", "rw"),
         ]
-    if agent == "copilot":
+    elif agent == "copilot":
         host = str(config_dir / ".copilot")
-        return [
+        mounts = [
             (host, "/root/.copilot", "rw"),
             (host, "/home/node/.copilot", "rw"),
             (host, "/home/coder/.copilot", "rw"),
             (host, "/home/copilot/.copilot", "rw"),
         ]
-    if agent == "opencode":
+    elif agent == "opencode":
         xdg_config = config_dir / ".config" / "opencode"
         xdg_data = config_dir / ".local" / "share" / "opencode"
-        return [
+        mounts = [
             (str(xdg_data), "/root/.local/share/opencode", "rw"),
             (str(xdg_config), "/root/.config/opencode", "rw"),
             (str(xdg_data), "/home/node/.local/share/opencode", "rw"),
             (str(xdg_config), "/home/node/.config/opencode", "rw"),
         ]
-    return []
+    # VibePod-owned dirs under the agent config dir: relabel them for SELinux.
+    return [(host, target, bind_mode(host, mode)) for host, target, mode in mounts]
 
 
 X11_CONTAINER_XAUTH_PATH = "/tmp/.vibepod-xauth"

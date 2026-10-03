@@ -83,6 +83,119 @@ PROXY_POLICY_SCHEMA_LABEL = "io.vibepod.proxy.policy-schema"
 # matching PROXY_POLICY_SCHEMA_LABEL value.
 PROXY_POLICY_SCHEMA = "2"
 
+_SELINUX_ENFORCE_PATH = "/sys/fs/selinux/enforce"
+# Engines refuse to relabel these (and the home dir or its ancestors): doing so
+# would rewrite the label the host itself depends on.
+_SELINUX_PROTECTED_DIRS = frozenset(
+    "/ /bin /boot /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv "
+    "/sys /tmp /usr /var".split(),
+)
+# System trees whose descendants are host-owned too (say `/etc/ssl/certs` as a
+# proxy CA dir): relabeling anything under them could break host services.
+# `/home`, `/tmp`, `/opt`, `/srv`, `/var`, `/mnt` and friends hold user projects.
+_SELINUX_PROTECTED_TREES = tuple(
+    Path(root) for root in "/bin /boot /dev /etc /lib /lib64 /proc /sbin /sys /usr".split()
+)
+_SELINUX_HINT = (
+    "SELinux is enforcing: containers may be denied access to VibePod's bind mounts "
+    "(the workspace, ~/.config/vibepod). To let VibePod relabel them, set "
+    "`selinux_relabel: true` in config.yaml or VP_SELINUX_RELABEL=true. Relabeling "
+    "permanently changes the SELinux label of those host directories."
+)
+
+
+class _SelinuxNotices:
+    """What this process has already told the user about SELinux relabeling."""
+
+    def __init__(self) -> None:
+        self.hint_shown = False
+        self.relabeled: list[str] = []
+        self.reported: set[str] = set()
+
+
+_selinux_notices = _SelinuxNotices()
+
+
+def _selinux_enforcing() -> bool:
+    try:
+        return Path(_SELINUX_ENFORCE_PATH).read_text().strip() == "1"
+    except OSError:
+        return False
+
+
+def selinux_relabel_enabled() -> bool:
+    """Whether the user opted into relabeling (`selinux_relabel` / VP_SELINUX_RELABEL)."""
+    from vibepod.core.config import get_config
+
+    return get_config().get("selinux_relabel") is True
+
+
+def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
+    """Return `mode`, plus SELinux's `z` flag when the user opted into relabeling.
+
+    On an enforcing SELinux host (Fedora and friends) a bind mount keeps its
+    host label -- `config_home_t` for the config dir, `user_home_t` for a
+    workspace -- and `container_t` may write neither: the proxy dies on
+    startup with `Permission denied: /data/mitmproxy/mitmproxy-ca.pem`, and
+    agents see an unwritable workspace. `z` relabels the source to the shared
+    `container_file_t`, which stays readable across containers (the agent
+    reads the proxy's CA dir, datasette shares the proxy db dir) where the
+    private `Z` would not. Non-Linux engines have no such file and stay
+    unflagged -- Podman's macOS VM cannot relabel a virtiofs share anyway.
+
+    The relabel is permanent and can break host services that read the same
+    files (a workspace under `/var/www`, say), so it only happens when
+    `selinux_relabel` is enabled; `report_selinux_relabel` tells the user
+    either way. Only call this for mounts VibePod owns: relabeling a user's own
+    volume (say `~/.ssh`) would break the host services that read it. Named
+    volumes, an explicit `z`/`Z`, the home or system dirs, and anything under
+    system trees such as `/etc` or `/usr` are left as they are.
+    """
+    if "/" not in str(host_path) or {"z", "Z"} & set(mode.split(",")):
+        return mode
+    if not _selinux_enforcing() or not selinux_relabel_enabled():
+        return mode
+    # Check the path as given too: on macOS /home, /tmp and /etc are symlinks
+    # into /System/Volumes/Data or /private, so only the unresolved form matches.
+    given = Path(host_path).absolute()
+    path = given.resolve()
+    home = Path.home().resolve()
+    if {str(given), str(path)} & _SELINUX_PROTECTED_DIRS or path == home or path in home.parents:
+        return mode
+    for candidate in (given, path):
+        if any(root in candidate.parents for root in _SELINUX_PROTECTED_TREES):
+            return mode
+    if str(given) not in _selinux_notices.relabeled:
+        _selinux_notices.relabeled.append(str(given))
+    return f"{mode},z"
+
+
+def report_selinux_relabel() -> None:
+    """Tell the user what SELinux relabeling does for the containers being started.
+
+    Call it once the binds of a VibePod container are built. On an enforcing
+    host with relabeling off it prints a hint on how to opt in (once per
+    process); with relabeling on it lists the host paths `bind_mode` relabeled
+    that were not reported yet. Elsewhere it prints nothing. Both go to stderr.
+    """
+    if not _selinux_enforcing():
+        return
+    # stderr: stdout may carry JSON (`vp skills list --json`) or JSON-RPC (ACP).
+    from rich.console import Console
+    from rich.markup import escape
+
+    notices = _selinux_notices
+    if not selinux_relabel_enabled():
+        if not notices.hint_shown:
+            notices.hint_shown = True
+            Console(stderr=True).print(f"[yellow]{_SELINUX_HINT}[/yellow]", highlight=False)
+        return
+    new = [path for path in notices.relabeled if path not in notices.reported]
+    if new:
+        notices.reported.update(new)
+        message = escape(f"Relabeling for SELinux (container_file_t): {', '.join(new)}")
+        Console(stderr=True).print(f"[cyan]{message}[/cyan]", highlight=False)
+
 
 def _run_podman(podman: str, args: list[str]) -> str | None:
     """Run a Podman subcommand, returning its trimmed stdout on success."""
@@ -662,16 +775,28 @@ class DockerManager:
 
         environment = {**env}
 
+        workspace_mode = bind_mode(workspace)
+        config_mode = bind_mode(config_dir)
+        report_selinux_relabel()
+        if workspace_mode == "rw" and _selinux_enforcing() and selinux_relabel_enabled():
+            from vibepod.utils.console import warning
+
+            warning(
+                f"Not relabeling {workspace} for SELinux (home or system dir); "
+                "the agent may be unable to access it.",
+            )
         volumes: list[str] = [
-            f"{workspace}:/workspace:rw",
-            f"{config_dir}:{config_mount_path}:rw",
+            f"{workspace}:/workspace:{workspace_mode}",
+            f"{config_dir}:{config_mount_path}:{config_mode}",
         ]
         if workspace_mount_path:
             # ACP path parity: bind the workspace a second time onto its own
             # host path so host-side absolute paths (ACP session cwd, @-mentions,
             # diffs) resolve identically inside the container.
-            volumes.insert(1, f"{workspace}:{workspace_mount_path}:rw")
+            volumes.insert(1, f"{workspace}:{workspace_mount_path}:{workspace_mode}")
         if extra_volumes:
+            # Mounted with the mode the caller chose: user volumes and host-owned
+            # files (herdr, X11) must keep their SELinux label.
             volumes.extend(f"{host}:{bind}:{mode}" for host, bind, mode in extra_volumes)
 
         try:
@@ -860,16 +985,17 @@ class DockerManager:
         proxy_parent = Path(os.path.abspath(str(proxy_db_path.parent)))
 
         if logs_parent == proxy_parent:
-            volumes = {str(logs_parent): {"bind": "/mount/data", "mode": "rw"}}
+            volumes = {str(logs_parent): {"bind": "/mount/data", "mode": bind_mode(logs_parent)}}
             logs_db_container_path = f"/mount/data/{logs_db_path.name}"
             proxy_db_container_path = f"/mount/data/{proxy_db_path.name}"
         else:
             volumes = {
-                str(logs_parent): {"bind": "/mount/logs", "mode": "rw"},
-                str(proxy_parent): {"bind": "/mount/proxy", "mode": "rw"},
+                str(logs_parent): {"bind": "/mount/logs", "mode": bind_mode(logs_parent)},
+                str(proxy_parent): {"bind": "/mount/proxy", "mode": bind_mode(proxy_parent)},
             }
             logs_db_container_path = f"/mount/logs/{logs_db_path.name}"
             proxy_db_container_path = f"/mount/proxy/{proxy_db_path.name}"
+        report_selinux_relabel()
 
         return self.client.containers.run(
             image=image,
@@ -952,9 +1078,10 @@ class DockerManager:
         ca_dir.mkdir(parents=True, exist_ok=True)
 
         volumes = {
-            str(db_path.parent): {"bind": "/data", "mode": "rw"},
-            str(ca_dir): {"bind": "/data/mitmproxy", "mode": "rw"},
+            str(db_path.parent): {"bind": "/data", "mode": bind_mode(db_path.parent)},
+            str(ca_dir): {"bind": "/data/mitmproxy", "mode": bind_mode(ca_dir)},
         }
+        report_selinux_relabel()
 
         run_kwargs: dict[str, Any] = {
             "image": image,
