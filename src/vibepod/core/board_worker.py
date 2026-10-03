@@ -1797,13 +1797,7 @@ class BoardWorker:
     ) -> None:
         """Puts back the branches and tags moved during a review: none of them is the
         reviewer's to move, the reviewed branch least of all."""
-        restored, left = worktrees.restore_refs(
-            repo,
-            refs,
-            "",
-            self._worktree_dir(repo),
-            checked_out,
-        )
+        restored, left = worktrees.restore_refs(repo, refs, "", checked_out)
         if restored:
             raise ReviewProblem(f"{who} moved {', '.join(restored)}; restored them")
         if left:
