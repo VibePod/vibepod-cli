@@ -16,10 +16,13 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 # The committer used when the repository has no identity configured.
 FALLBACK_IDENTITY = ("VibePod", "vibepod@users.noreply.github.com")
+# The agent container's `.git` file on a Windows host, kept in the worktree's own directory
+# inside the git directory.
+CONTAINER_POINTER = "vibepod-container-gitdir"
 # No hooks and no fsmonitor: git on the host must not run programs the repository names.
 SAFE_CONFIG = ("-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false")
 
@@ -206,6 +209,20 @@ def admin_dir(worktree: Path) -> Path:
     return (value if value.is_absolute() else worktree / value).resolve()
 
 
+def container_path(path: PurePath) -> str:
+    """Where a host path is mounted in the Linux agent container: at the same path, and for a
+    Windows path such as `C:\\repo\\.git` at `/c/repo/.git`, since a Linux container cannot
+    resolve a drive path."""
+    text = str(path)
+    if text.startswith("/"):
+        return text
+    windows = PureWindowsPath(text)
+    drive = windows.drive
+    if len(drive) != 2 or drive[1] != ":" or not windows.is_absolute():
+        raise GitError(f"Cannot mount {text} into the agent container: use a local drive")
+    return "/".join(["", drive[0].lower(), *windows.parts[1:]])
+
+
 def agent_mounts(
     repo: Path,
     worktree: Path,
@@ -218,10 +235,10 @@ def agent_mounts(
     the HEAD and index of the other checkouts, such as the user's own, which the agent has
     no business switching or staging in."""
     common = common_git_dir(repo)
-    mounts = [(str(common), str(common), "rw")]
+    mounts = [(str(common), container_path(common), "rw")]
     for name in ("hooks", "info"):
         (common / name).mkdir(exist_ok=True)
-        mounts.append((str(common / name), str(common / name), "ro"))
+        mounts.append((str(common / name), container_path(common / name), "ro"))
     admin = admin_dir(worktree)
     others = [common]
     if (common / "worktrees").is_dir():
@@ -234,8 +251,14 @@ def agent_mounts(
     files += [other / name for other in others for name in ("HEAD", "index")]
     for file in files:
         if file.is_file():
-            mounts.append((str(file), str(file), "ro"))
-    mounts.append((str(worktree / ".git"), f"{workspace_mount}/.git", "ro"))
+            mounts.append((str(file), container_path(file), "ro"))
+    pointer = worktree / ".git"
+    if container_path(admin) != str(admin):
+        # The worktree's `.git` names the git directory by its Windows path: the container
+        # gets one that names it by its path there.
+        pointer = admin / CONTAINER_POINTER
+        pointer.write_text(f"gitdir: {container_path(admin)}\n", encoding="utf-8")
+    mounts.append((str(pointer), f"{workspace_mount}/.git", "ro"))
     return mounts
 
 

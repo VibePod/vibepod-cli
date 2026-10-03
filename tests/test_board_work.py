@@ -8,7 +8,7 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 import pytest
@@ -259,16 +259,19 @@ def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
     admin = git_dir / "worktrees" / "vp-1"
     # The git directory is writable for commits; what makes git run programs, the
     # worktree's pointers into it, and the HEAD and index of the user's checkout are not.
+    # On Windows, the container gets its own `.git` file naming the git directory's path there.
+    pointer = admin / worktrees.CONTAINER_POINTER if sys.platform == "win32" else worktree / ".git"
+    in_container = worktrees.container_path
     assert start["mounts"] == [
-        (str(git_dir), str(git_dir), "rw"),
-        (str(git_dir / "hooks"), str(git_dir / "hooks"), "ro"),
-        (str(git_dir / "info"), str(git_dir / "info"), "ro"),
-        (str(git_dir / "config"), str(git_dir / "config"), "ro"),
-        (str(admin / "commondir"), str(admin / "commondir"), "ro"),
-        (str(admin / "gitdir"), str(admin / "gitdir"), "ro"),
-        (str(git_dir / "HEAD"), str(git_dir / "HEAD"), "ro"),
-        (str(git_dir / "index"), str(git_dir / "index"), "ro"),
-        (str(worktree / ".git"), "/workspace/.git", "ro"),
+        (str(git_dir), in_container(git_dir), "rw"),
+        (str(git_dir / "hooks"), in_container(git_dir / "hooks"), "ro"),
+        (str(git_dir / "info"), in_container(git_dir / "info"), "ro"),
+        (str(git_dir / "config"), in_container(git_dir / "config"), "ro"),
+        (str(admin / "commondir"), in_container(admin / "commondir"), "ro"),
+        (str(admin / "gitdir"), in_container(admin / "gitdir"), "ro"),
+        (str(git_dir / "HEAD"), in_container(git_dir / "HEAD"), "ro"),
+        (str(git_dir / "index"), in_container(git_dir / "index"), "ro"),
+        (str(pointer), "/workspace/.git", "ro"),
     ]
     assert start["allow"] == repo.resolve()
     assert start["workspace"] == worktree
@@ -1782,6 +1785,37 @@ def test_the_agent_cannot_switch_or_stage_in_other_checkouts(repo: Path, tmp_pat
     # The task's own HEAD and index stay writable for its commits.
     own = worktrees.admin_dir(task.path)
     assert not {str(own / "HEAD"), str(own / "index")} & readonly
+
+
+def test_windows_git_paths_are_translated_for_the_linux_container(
+    monkeypatch,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    assert worktrees.container_path(PureWindowsPath(r"C:\Users\me\app\.git")) == (
+        "/c/Users/me/app/.git"
+    )
+    assert worktrees.container_path(PurePosixPath("/home/me/app/.git")) == "/home/me/app/.git"
+    with pytest.raises(worktrees.GitError, match="use a local drive"):
+        worktrees.container_path(PureWindowsPath(r"\\server\share\app\.git"))
+
+    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
+    own_pointer = (task.path / ".git").read_text()
+    # As on a Windows host, where no host path is a container path.
+    monkeypatch.setattr(worktrees, "container_path", lambda path: f"/c{PurePath(path).as_posix()}")
+
+    mounts = worktrees.agent_mounts(repo, task.path)
+
+    git_dir = (repo / ".git").resolve()
+    admin = worktrees.admin_dir(task.path)
+    assert (str(git_dir), f"/c{git_dir.as_posix()}", "rw") in mounts
+    host, target, mode = mounts[-1]
+    assert (target, mode) == ("/workspace/.git", "ro")
+    assert Path(host).read_text() == f"gitdir: /c{admin.as_posix()}\n"
+    # The worktree's own pointer, which git on the host reads, is left as it was.
+    assert (task.path / ".git").read_text() == own_pointer
 
 
 def test_worktree_helpers_prepare_and_clean_up(repo: Path, tmp_path: Path) -> None:
