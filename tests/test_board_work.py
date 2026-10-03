@@ -255,7 +255,9 @@ def test_hands_a_task_over_after_the_agent_committed_and_verify_passed(
         "assignee": "claude@laptop",
         "branchName": "issue-12",
         "note": f"1 commit; verify passed ({CHECKS_THE_FEATURE})",
+        "headSha": git(repo, "rev-parse", "issue-12"),
     }
+    assert card["headSha"] == git(repo, "rev-parse", "issue-12")
     # The branch holds the work, the worktree is gone.
     assert git(repo, "log", "--format=%s", "main..issue-12") == "Add the feature"
     assert not (repo.parent / "app-worktrees" / "issue-12").exists()
