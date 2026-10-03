@@ -50,6 +50,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Snap distribution: snap.md
   - Development: development.md
   - Agents: agents/index.md
   - Profiles: profiles.md

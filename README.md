@@ -56,6 +56,10 @@ mamba install -c conda-forge vibepod
 pixi global install vibepod
 ```
 
+Snap packaging for Linux amd64 is included; Store publication is pending.
+Once published, install with `sudo snap install vibepod --classic` and use
+`vibepod` (or `vibepod.vp`). See [Snap setup, updates and removal](docs/snap.md).
+
 ## Quick Start
 
 ```bash
