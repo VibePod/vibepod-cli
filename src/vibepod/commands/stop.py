@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 import typer
 
-from vibepod.constants import EXIT_DOCKER_NOT_RUNNING
+from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, agent_ids
 from vibepod.core.agents import resolve_agent_name
 from vibepod.core.docker import DockerClientError, DockerManager
 from vibepod.core.herdr import PANE_LABEL, release_agent
@@ -56,7 +56,7 @@ def stop(
         _release_herdr_entries(
             c
             for c in _managed_containers(manager)
-            if (getattr(c, "labels", {}) or {}).get("vibepod.agent") == resolved_agent
+            if (getattr(c, "labels", {}) or {}).get("vibepod.agent") in agent_ids(resolved_agent)
         )
         try:
             stopped = manager.stop_agent(agent=resolved_agent, force=force)
