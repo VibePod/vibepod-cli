@@ -795,6 +795,10 @@ class BoardWorker:
             pointers = worktrees.pointers(worktree.path)
             refs = worktrees.branch_refs(repo)
             checked_out = worktrees.checkouts(repo)
+            # A stop or cancel that came while the worktree was prepared ends the run before
+            # the agent starts, rather than once it already writes to the worktree.
+            if self._ended_early(self._interruption(deadline) or "exit", result):
+                return
             run = self.runner.start(
                 build_prompt(task, worktree.branch),
                 worktree.path,

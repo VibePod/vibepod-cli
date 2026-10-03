@@ -150,6 +150,33 @@ class FakeRunner:
         return run
 
 
+Instructions = Callable[[], list[dict[str, Any]]]
+
+
+def cancel(board: FakeBoard, task_id: str) -> Instructions:
+    """Cancels the task's run on the board, which puts the task back to Planned."""
+
+    def cancelled() -> list[dict[str, Any]]:
+        board.cards[task_id].update(column="planned", assignee=None, claimedAt=None)
+        return [{"type": "cancel", "taskId": task_id, "reason": "Run cancelled by admin"}]
+
+    return cancelled
+
+
+def once_the_agent_runs(instructions: Instructions) -> Callable[[dict[str, Any]], Any]:
+    """Heartbeat replies that carry the instructions once the agent runs: from the second
+    heartbeat of that step on, since the first is sent before the agent starts."""
+    seen: list[dict[str, Any]] = []
+
+    def on_heartbeat(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") != "agent_running":
+            return []
+        seen.append(beat)
+        return instructions() if len(seen) > 1 else []
+
+    return on_heartbeat
+
+
 @pytest.fixture
 def board() -> FakeBoard:
     return FakeBoard()
@@ -712,13 +739,7 @@ def test_a_run_cancelled_from_the_board_stops_without_giving_the_task_back(
 ) -> None:
     board.add_task("Cancelled")
 
-    def cancel_once_running(beat: dict[str, Any]) -> list[dict[str, Any]]:
-        if beat.get("step") == "agent_running":
-            board.cards["idea-1"].update(column="planned", assignee=None, claimedAt=None)
-            return [{"type": "cancel", "taskId": "idea-1", "reason": "Run cancelled by admin"}]
-        return []
-
-    board.on_heartbeat = cancel_once_running
+    board.on_heartbeat = once_the_agent_runs(cancel(board, "idea-1"))
     board.add_task("Next in line")
 
     class CancelledThenDone(FakeRunner):
@@ -745,6 +766,30 @@ def test_a_run_cancelled_from_the_board_stops_without_giving_the_task_back(
     assert board.card("VP-1")["column"] == "planned"
 
 
+def test_a_cancel_that_comes_while_preparing_never_starts_the_agent(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Cancelled before it started")
+
+    def cancel_as_it_prepares(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        # The reply to the heartbeat sent once the worktree is ready, before the agent starts.
+        return cancel(board, "idea-1")() if beat.get("step") == "agent_running" else []
+
+    board.on_heartbeat = cancel_as_it_prepares
+    runner = FakeRunner()
+
+    worker, _ = work(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    assert board.requests("POST", "/api/board/card-1/release") == []
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+    report = board.runs[0]
+    assert (report["outcome"], report["failureReason"]) == ("cancelled", "Run cancelled by admin")
+    assert list(worker.passed_over) == ["idea-1"]
+
+
 def test_a_cancelled_run_that_also_failed_is_not_given_back(
     board: FakeBoard,
     server: FakeBoardServer,
@@ -752,13 +797,7 @@ def test_a_cancelled_run_that_also_failed_is_not_given_back(
 ) -> None:
     board.add_task("Cancelled and failing")
 
-    def cancel_once_running(beat: dict[str, Any]) -> list[dict[str, Any]]:
-        if beat.get("step") == "agent_running":
-            board.cards["idea-1"].update(column="planned", assignee=None, claimedAt=None)
-            return [{"type": "cancel", "taskId": "idea-1", "reason": "Run cancelled by admin"}]
-        return []
-
-    board.on_heartbeat = cancel_once_running
+    board.on_heartbeat = once_the_agent_runs(cancel(board, "idea-1"))
 
     class DetachesWhenStopped(FakeRunner):
         """Leaves its branch on the way out, which the check after the run catches."""
@@ -809,10 +848,7 @@ def test_a_stop_from_the_board_ends_the_run_and_the_worker(
     board.add_task("Stopped")
     board.add_task("Never started")
 
-    def stop_once_running(beat: dict[str, Any]) -> list[dict[str, Any]]:
-        return [{"type": "stop"}] if beat.get("step") == "agent_running" else []
-
-    board.on_heartbeat = stop_once_running
+    board.on_heartbeat = once_the_agent_runs(lambda: [{"type": "stop"}])
     runner = FakeRunner(polls=None)
 
     worker, _ = work(server, runner, repo, poll_seconds=30)
