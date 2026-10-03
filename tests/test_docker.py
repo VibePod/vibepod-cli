@@ -164,6 +164,14 @@ def test_run_agent_podman_branch_honors_start_false(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Windows host paths carry no `/`, so bind_mode never relabels them (and no
+# Windows host has SELinux to begin with).
+posix_paths = pytest.mark.skipif(
+    os.name == "nt",
+    reason="SELinux relabeling only applies to POSIX host paths",
+)
+
+
 def _enforcing_selinux(monkeypatch, tmp_path: Path) -> None:
     enforce = tmp_path / "enforce"
     enforce.write_text("1\n")
@@ -194,7 +202,7 @@ def test_bind_mode_keeps_explicit_relabel_and_named_volumes(monkeypatch, tmp_pat
     assert bind_mode("cache") == "rw"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX paths")
+@posix_paths
 def test_bind_mode_never_relabels_home_or_system_dirs(monkeypatch, tmp_path: Path) -> None:
     home = tmp_path / "home" / "u"
     home.mkdir(parents=True)
@@ -206,6 +214,18 @@ def test_bind_mode_never_relabels_home_or_system_dirs(monkeypatch, tmp_path: Pat
     assert bind_mode(home / "project") == "rw,z"
 
 
+@posix_paths
+def test_bind_mode_never_relabels_inside_system_trees(monkeypatch, tmp_path: Path) -> None:
+    _enforcing_selinux(monkeypatch, tmp_path)
+
+    for path in ("/etc/ssl/certs", "/usr/local/share/vibepod", "/etc/../usr/lib/x"):
+        assert bind_mode(path) == "rw", path
+    # User projects under other top-level dirs are still relabeled.
+    for path in ("/opt/project", "/srv/project", "/var/www/project", "/etc-backup/x"):
+        assert bind_mode(path) == "rw,z", path
+
+
+@posix_paths
 def test_run_agent_relabels_binds_on_selinux_host(tmp_path: Path, monkeypatch) -> None:
     _enforcing_selinux(monkeypatch, tmp_path)
     client = _AcpLowLevelClient()
@@ -237,7 +257,7 @@ def test_run_agent_relabels_binds_on_selinux_host(tmp_path: Path, monkeypatch) -
     assert "/home/u/.ssh:/x:ro" in binds
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX paths")
+@posix_paths
 def test_run_agent_warns_instead_of_relabeling_home_workspace(
     tmp_path: Path,
     monkeypatch,
@@ -266,6 +286,7 @@ def test_run_agent_warns_instead_of_relabeling_home_workspace(
     assert "SELinux" in captured.out + captured.err
 
 
+@posix_paths
 def test_ensure_proxy_relabels_ca_dir_on_selinux_host(tmp_path: Path, monkeypatch) -> None:
     """Without `z` the CA store is unwritable: mitmdump exits 1 on startup."""
 

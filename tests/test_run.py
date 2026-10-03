@@ -3797,6 +3797,7 @@ def test_extend_write_roots_seeds_an_unset_variable() -> None:
     assert env["HERMES_WRITE_SAFE_ROOT"] == "/home/me/code"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="SELinux relabeling only applies to POSIX host paths")
 def test_run_relabels_vibepod_mounts_but_not_user_volumes(
     monkeypatch,
     _tmp_config_root,
