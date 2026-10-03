@@ -10,7 +10,8 @@ from typing import Annotated, Any
 import typer
 import yaml
 
-from vibepod.constants import SUPPORTED_AGENTS
+from vibepod.constants import SUPPORTED_AGENTS, agent_ids
+from vibepod.core.agents import resolve_agent_name
 from vibepod.core.allowed_dirs import (
     add_allowed_dir,
     is_protected_dir,
@@ -44,9 +45,11 @@ def init(
     """Create a minimal project config or add a specific agent config."""
     project_path = get_project_config_path()
     if agent is not None:
-        if agent not in SUPPORTED_AGENTS:
+        resolved = resolve_agent_name(agent)
+        if resolved is None:
             error(f"Unknown agent '{agent}'. Supported: {', '.join(SUPPORTED_AGENTS)}")
             raise typer.Exit(1)
+        agent = resolved
 
         try:
             project_path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +70,7 @@ def init(
                 error(f"Project config key 'agents' must be a YAML mapping: {project_path}")
                 raise typer.Exit(1)
 
-            if agent in agents_config:
+            if any(agent_id in agents_config for agent_id in agent_ids(agent)):
                 error(f"Project config already contains agent '{agent}': {project_path}")
                 raise typer.Exit(1)
 
