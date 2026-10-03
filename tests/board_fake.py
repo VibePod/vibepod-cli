@@ -49,6 +49,8 @@ class FakeBoard:
     reviews: list[dict[str, Any]] = field(default_factory=list)
     # False plays a board from before review workers, which ignores the claim's mode.
     reviews_supported: bool = True
+    # A verdict the board refuses as invalid.
+    refused_verdict: str | None = None
     # Answers every request with a redirect to this URL.
     redirect: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -340,7 +342,13 @@ class FakeBoard:
         verdict = body.get("verdict")
         note = (body.get("note") or "").strip()
         sha = (body.get("headSha") or "").strip().lower() or None
-        if verdict not in ("approve", "rework", "needs_input", "failed", "released"):
+        if verdict == self.refused_verdict or verdict not in (
+            "approve",
+            "rework",
+            "needs_input",
+            "failed",
+            "released",
+        ):
             return 400, {"error": "Invalid request body"}
         if verdict in ("rework", "needs_input") and not note:
             return 400, {"error": f"A note is required for {verdict}"}

@@ -1546,7 +1546,10 @@ class BoardWorker:
                 # Checking a commit out can take long in a large repository.
                 with self._keepalive():
                     path, base, base_commit = self._prepare_review(task, repo, result)
-                self.say("info", f"Reviewing {result.branch} at {result.commit} in {path}")
+                self.say(
+                    "info",
+                    f"Reviewing {result.branch} at {(result.commit or '')[:12]} in {path}",
+                )
                 self._run_review(task, repo, path, base, base_commit, result, started)
             except worktrees.GitError as exc:
                 raise TaskProblem(str(exc)) from exc
@@ -1888,7 +1891,7 @@ class BoardWorker:
                 )
         if verdict == "approve" and result.verdict is not None:
             self.summary.approved.append(key)
-            self.say("success", f"Approved {key} at {result.commit}")
+            self.say("success", f"Approved {key} at {(result.commit or '')[:12]}")
         elif verdict == "rework" and result.verdict is not None:
             self.summary.reworked.append(key)
             self.say("success", f"Sent {key} back for rework")
@@ -1921,7 +1924,9 @@ class BoardWorker:
     ) -> None:
         verify = result.verify
         verdict = REVIEW_VERDICTS.get(str(result.verdict), "no verdict")
-        lines = [f"Review of {result.branch or key} at {(result.commit or '')[:12]}: {verdict}"]
+        commit = result.commit or result.head_sha
+        at = f" at {commit[:12]}" if commit else ""
+        lines = [f"Review of {result.branch or key}{at}: {verdict}"]
         if result.summary:
             lines += ["", result.summary]
         if result.verdict == "rework" and result.note:

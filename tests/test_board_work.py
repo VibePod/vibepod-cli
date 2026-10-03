@@ -2134,6 +2134,25 @@ def test_a_review_whose_task_was_handed_over_again_ends_quietly(
     assert not [message for level, message in messages if level == "error"]
 
 
+def test_a_refused_verdict_ends_the_review_as_failed(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    sha = handed_over(board, repo)
+    board.refused_verdict = "approve"
+
+    worker, _ = review(server, FakeRunner(says("approve", summary="Good.")), repo)
+
+    approve, failed = board.requests("POST", "/api/board/card-1/review")
+    assert approve is not None and approve["verdict"] == "approve"
+    reason = "The board refused the verdict approve: Invalid request body"
+    assert failed == {"assignee": REVIEWER, "verdict": "failed", "headSha": sha, "note": reason}
+    assert board.runs[0]["failureReason"] == reason
+    assert board.reviews[0]["verdict"] == "failed"
+    assert worker.summary.approved == []
+
+
 def test_another_reviewers_rework_cancels_the_review_without_a_verdict(
     board: FakeBoard,
     server: FakeBoardServer,
