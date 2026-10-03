@@ -4195,6 +4195,7 @@ def test_run_skips_image_inspection_when_logging_disabled(
     assert inspections["count"] == 0
 
 
+@pytest.mark.skipif(os.name == "nt", reason="SELinux relabeling only applies to POSIX host paths")
 def test_run_relabels_vibepod_mounts_but_not_user_volumes(
     monkeypatch,
     _tmp_config_root,

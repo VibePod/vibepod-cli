@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -491,6 +492,7 @@ def test_run_engine_checks_updates_when_latest(
     assert ("vibepod/skills-engine:latest", True) in checked_images
 
 
+@pytest.mark.skipif(os.name == "nt", reason="SELinux relabeling only applies to POSIX host paths")
 def test_engine_relabels_skills_dirs_but_not_local_locator_on_selinux_host(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
