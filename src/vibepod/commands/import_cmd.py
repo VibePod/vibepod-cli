@@ -53,9 +53,17 @@ def _resolve_categories(only: str | None, skip: str | None, extras: set[Category
     return selected
 
 
+def _display_source(path: Path, source_root: Path) -> Path:
+    """*path* relative to *source_root*, or absolute when a followed symlink left it."""
+    try:
+        return path.relative_to(source_root)
+    except ValueError:
+        return path
+
+
 def _print_plan(plan: ImportPlan) -> None:
     for planned in plan.files:
-        rel_source = planned.source.relative_to(plan.source_root)
+        rel_source = _display_source(planned.source, plan.source_root)
         rel_dest = planned.dest.relative_to(plan.dest_root)
         console.print(f"  {planned.category:<12} {rel_source}  ->  {rel_dest}")
     for skipped in plan.skipped:
@@ -286,6 +294,20 @@ def import_config(
 
     info(f"{resolved}: {source_root}  ->  {dest_root}")
     _print_plan(plan)
+
+    if plan.is_empty:
+        # Everything found was skipped or left unclassified: say so instead of
+        # reporting a successful import of zero files.
+        reasons = sorted({skipped.reason for skipped in plan.skipped})
+        if plan.unclassified:
+            reasons.append("unrecognized (--with-other)")
+        detail = f" Skipped: {'; '.join(reasons)}." if reasons else ""
+        if dry_run:
+            warning(f"Nothing would be imported.{detail}")
+            info("Dry run: nothing was written.")
+            return
+        error(f"Nothing was imported into {dest_root}.{detail}")
+        raise typer.Exit(code=1)
 
     if dry_run:
         info("Dry run: nothing was written.")

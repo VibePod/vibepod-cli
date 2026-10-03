@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -156,6 +157,53 @@ def test_no_installation_found_names_checked_paths(config_root: Path, tmp_path: 
     assert result.exit_code == 1
     # Rich wraps long temp paths (Windows runners), so match across line breaks.
     assert str(empty / ".claude") in result.output.replace("\n", "")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need extra privileges on Windows")
+def test_symlinked_agent_directory_is_imported(config_root: Path, tmp_path: Path) -> None:
+    dotfiles = tmp_path / "dotfiles" / "claude"
+    (dotfiles / "commands").mkdir(parents=True)
+    (dotfiles / "settings.json").write_text('{"model": "opus"}')
+    (dotfiles / "commands" / "ship.md").write_text("ship it")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").symlink_to(dotfiles, target_is_directory=True)
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(home)])
+
+    assert result.exit_code == 0, result.output
+    agent_dir = config_root / "agents" / "claude"
+    assert (agent_dir / "settings.json").read_text() == '{"model": "opus"}'
+    assert (agent_dir / "commands" / "ship.md").read_text() == "ship it"
+    assert "Imported 2 file(s)" in result.output.replace("\n", "")
+
+
+def test_nothing_imported_because_of_skips_fails(config_root: Path, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text("{}")
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(home)])
+
+    assert result.exit_code == 1, result.output
+    output = result.output.replace("\n", "")
+    assert "Nothing was imported" in output
+    assert "--with-credentials" in output
+    assert "Imported 0" not in output
+    assert not (config_root / "agents" / "claude" / ".credentials.json").exists()
+
+
+def test_dry_run_warns_when_nothing_would_be_imported(config_root: Path, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude" / "ide").mkdir(parents=True)
+    (home / ".claude" / "ide" / "state.json").write_text("{}")
+
+    result = runner.invoke(app, ["import", "claude", "--home", str(home), "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    output = result.output.replace("\n", "")
+    assert "Nothing would be imported" in output
+    assert "--with-other" in output
 
 
 def test_bare_import_scans_the_host(config_root: Path, host_home: Path) -> None:
