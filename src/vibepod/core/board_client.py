@@ -149,8 +149,11 @@ class BoardClient:
         assignee: str,
         branch_name: str | None = None,
         note: str | None = None,
+        head_sha: str | None = None,
     ) -> dict[str, Any]:
-        body = _body(assignee=assignee, branchName=branch_name, note=note)
+        """Moves a claimed task to Review. `head_sha` names the commit handed over: the
+        board binds the reviews and approvals of the task to it."""
+        body = _body(assignee=assignee, branchName=branch_name, note=note, headSha=head_sha)
         result: dict[str, Any] = self.request("POST", f"/api/board/{_ref(card)}/handover", body)
         return _item(result)
 

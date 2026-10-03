@@ -161,6 +161,9 @@ class FakeBoard:
             return 400, {"error": "Invalid request body"}
         card.update(column="review", assignee=None, claimedAt=None, attempts=0)
         card["branchName"] = body.get("branchName")
+        # Reviews and approvals are bound to the commit handed over; a new one starts the
+        # approval count over.
+        card["headSha"] = (body.get("headSha") or "").strip().lower() or None
         return 200, {"item": dict(card)}
 
     def _release(self, ref: str, body: dict[str, Any]) -> tuple[int, Any]:
