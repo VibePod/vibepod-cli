@@ -374,3 +374,21 @@ def test_legacy_devstral_config_merges_as_vibe(monkeypatch, tmp_path: Path) -> N
     assert "devstral" not in config["agents"]
     assert config["agents"]["vibe"]["image"] == "custom/vibe:latest"
     assert config["agents"]["vibe"]["env"] == {"LEGACY": "preserved", "SHARED": "project"}
+
+
+def test_legacy_devstral_herdr_integrations_merge_as_vibe(monkeypatch, tmp_path: Path) -> None:
+    config_root = tmp_path / "global"
+    config_root.mkdir()
+    monkeypatch.setenv("VP_CONFIG_DIR", str(config_root))
+    monkeypatch.chdir(tmp_path)
+    (config_root / "config.yaml").write_text(
+        "herdr:\n  integrations:\n    devstral:\n"
+        "      - {source: /legacy.sh, dest: hooks/legacy.sh}\n"
+        "    vibe:\n      - {source: /vibe.sh, dest: hooks/vibe.sh}\n",
+    )
+    integrations = get_config()["herdr"]["integrations"]
+    assert "devstral" not in integrations
+    assert integrations["vibe"] == [
+        {"source": "/legacy.sh", "dest": "hooks/legacy.sh"},
+        {"source": "/vibe.sh", "dest": "hooks/vibe.sh"},
+    ]
