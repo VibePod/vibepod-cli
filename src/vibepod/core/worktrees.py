@@ -246,8 +246,9 @@ def agent_mounts(
     worktree points into, at the same path so git works in the container. It stays writable
     for commits, but what makes git run programs (config, hooks, info) and the worktree's
     pointers into it are read-only, since git on the host reads them after the run. So are
-    the HEAD and index of the other checkouts, such as the user's own, which the agent has
-    no business switching or staging in."""
+    the per-worktree configurations where the repository uses them, and the HEAD and index
+    of the other checkouts, such as the user's own, which the agent has no business
+    switching or staging in."""
     common = common_git_dir(repo)
     mounts = [(str(common), container_path(common), "rw")]
     for name in ("hooks", "info"):
@@ -263,6 +264,14 @@ def agent_mounts(
         )
     files = [common / "config", admin / "commondir", admin / "gitdir"]
     files += [other / name for other in others for name in ("HEAD", "index")]
+    if _worktree_config(common):
+        # Git reads each checkout's `config.worktree` too: made where missing, so that the
+        # agent cannot write one, such as with a filter that `git add` on the host would run.
+        for directory in (*others, admin):
+            config = directory / "config.worktree"
+            if not config.exists():
+                config.touch()
+            files.append(config)
     for file in files:
         if file.is_file():
             mounts.append((str(file), container_path(file), "ro"))
@@ -274,6 +283,19 @@ def agent_mounts(
         pointer.write_text(f"gitdir: {container_path(admin)}\n", encoding="utf-8")
     mounts.append((str(pointer), f"{workspace_mount}/.git", "ro"))
     return mounts
+
+
+def _worktree_config(common: Path) -> bool:
+    """Whether the repository reads a configuration of each worktree's own."""
+    result = _run(
+        common,
+        "config",
+        "--file",
+        str(common / "config"),
+        "--bool",
+        "extensions.worktreeConfig",
+    )
+    return result.stdout.strip() == "true"
 
 
 def pointers(worktree: Path) -> dict[str, str]:

@@ -1992,6 +1992,20 @@ def test_the_agent_cannot_switch_or_stage_in_other_checkouts(repo: Path, tmp_pat
     assert not {str(own / "HEAD"), str(own / "index")} & readonly
 
 
+def test_the_agent_cannot_write_per_worktree_configuration(repo: Path, tmp_path: Path) -> None:
+    git(repo, "config", "extensions.worktreeConfig", "true")
+    git(repo, "worktree", "add", "--quiet", "-b", "mine", str(tmp_path / "mine"))
+    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
+    git_dir = (repo / ".git").resolve()
+    own = worktrees.admin_dir(task.path)
+
+    readonly = {host for host, _, mode in worktrees.agent_mounts(repo, task.path) if mode == "ro"}
+
+    configs = [git_dir, git_dir / "worktrees" / "mine", own]
+    assert {str(path / "config.worktree") for path in configs} <= readonly
+    assert all((path / "config.worktree").read_text() == "" for path in configs)
+
+
 def test_windows_git_paths_are_translated_for_the_linux_container(
     monkeypatch,
     repo: Path,
