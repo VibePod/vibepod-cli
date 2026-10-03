@@ -51,6 +51,8 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Development: development.md
+  - Runtime evaluations:
+      - "VP-152: workerd": analysis/workerd.md
   - Agents: agents/index.md
   - Profiles: profiles.md
   - Model providers: providers.md

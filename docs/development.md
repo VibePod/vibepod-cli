@@ -36,3 +36,8 @@ Build the static docs site:
 ```bash
 mkdocs build
 ```
+
+## Runtime evaluations
+
+- [VP-152: workerd for sandboxing agent work](analysis/workerd.md) — no-go;
+  execution model, supported platforms, candidate uses, and integration effort.
