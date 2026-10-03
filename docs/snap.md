@@ -112,22 +112,27 @@ SH
 Use Python 3.11+ for the version-extraction command above. `--dangerous` is only
 for local, unsigned artifacts. Keep Snapcraft's classic and library lint checks
 enabled; fix their findings before publishing. The smoke test runs using the
-packaged interpreter and dependencies, verifies the version, pulls an image,
-runs a container, checks a host workspace bind mount and environment injection,
-checks container discovery, and removes its test container. A running Docker
+packaged interpreter and dependencies, verifies that imports come from the snap
+and that both installed commands report the release version, pulls an image,
+runs a container, checks host workspace reads and writes, a hidden configuration
+directory bind mount and environment injection, and exercises the installed
+CLI's container listing and stop commands. It removes its test container even
+if validation fails. A running Docker
 or Podman API is required. Repeat with `DOCKER_HOST` set to a rootless Podman
 socket before claiming support on a new runtime or base. Before the first Store
 release, also exercise an authenticated agent session, HTTP tracking and the
 dashboard on the installed snap.
 
 `.github/workflows/snap.yml` builds and smoke-tests pull requests that affect
-packaging or CLI code; manual dispatch validates without publishing. Published
+packaging or CLI code against Docker and rootless Podman; manual dispatch
+validates without publishing. Both runtimes must pass before upload. Published
 GitHub releases build from their release tag and publish only after the unit
 suite and installed-package smoke test pass. The version is read directly from
 `pyproject.toml` via `adopt-info`; a release tag must match it (with an optional
 `v` prefix). Normal releases go to `latest/stable`, prereleases to `latest/beta`.
 The tested amd64 artifact is retained on the workflow run. No main-branch or
 pull-request build uploads to the Store.
+Release runs fail early with a setup error if publisher credentials are missing.
 
 One-time publisher setup:
 
