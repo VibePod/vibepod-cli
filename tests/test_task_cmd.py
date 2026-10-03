@@ -501,7 +501,9 @@ def test_task_create_qwen_uses_prompt_flag(monkeypatch, tmp_path, tmp_task_store
 
 
 def test_task_create_cursor_trusts_workspace_and_keeps_prompt_intact(
-    monkeypatch, tmp_path, tmp_task_store
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
 ) -> None:
     stub = _CapturingDockerManager()
     monkeypatch.setattr(task_cmd, "get_config", _make_config)
