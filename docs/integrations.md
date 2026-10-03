@@ -82,9 +82,11 @@ vp run claude -e ANTHROPIC_BASE_URL=http://mytool:4000   # this run only
 ```
 
 For LLM gateways the [`llm:` section](llm.md) sets base URL, key and model
-for Claude Code in one place. Its Codex mapping passes only the base URL and
-model (Codex's `--oss` mode, no key), so authenticated gateways need Codex's
-own provider config as shown below.
+for Claude Code in one place. It has no per-agent scope: once enabled it is
+applied to every agent with an LLM mapping, and its Codex mapping passes only
+the base URL and model (Codex's `--oss` mode, no key). When Codex routes
+through an authenticated gateway with its own provider config, as shown
+below, leave `llm:` off and configure Claude through `agents.claude.env`.
 
 Some agents read endpoints from their own config files rather than the
 environment (Codex's `config.toml`, Pi's `models.json`, Tau's
@@ -208,22 +210,32 @@ LiteLLM as an empty string and only that model's requests fail. Drop the
 
 === "Claude Code"
 
-    The [`llm:` section](llm.md) covers Claude Code end to end: base URL, key
-    (sent as `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`) and the model name
-    from `model_list`.
+    Set the base URL, the key and the model name from `model_list` in
+    Claude's own `env`, so the setting stays scoped to Claude:
 
     ```yaml
     # .vibepod/config.yaml
-    llm:
-      enabled: true
-      base_url: http://litellm:4000
-      api_key: sk-litellm-...      # master key or a LiteLLM virtual key
-      model: claude-sonnet-4-6
+    agents:
+      claude:
+        env:
+          ANTHROPIC_BASE_URL: http://litellm:4000
+          ANTHROPIC_API_KEY: sk-litellm-...      # master key or a LiteLLM virtual key
+          ANTHROPIC_AUTH_TOKEN: sk-litellm-...
+          ANTHROPIC_MODEL: claude-sonnet-4-6
+          ANTHROPIC_DEFAULT_OPUS_MODEL: claude-sonnet-4-6
+          ANTHROPIC_DEFAULT_SONNET_MODEL: claude-sonnet-4-6
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: claude-sonnet-4-6
     ```
 
     ```bash
     vp run claude -p "say ok"
     ```
+
+    These are the variables the [`llm:` section](llm.md) would set. `llm:` is
+    shorter, but it is not per agent: enabled, it also launches Codex as
+    `codex --oss -m claude-sonnet-4-6` against `http://litellm:4000`, which
+    overrides the provider set up in the Codex tab. Use it only when Claude
+    Code is the one agent you route through LiteLLM.
 
 === "Codex"
 
