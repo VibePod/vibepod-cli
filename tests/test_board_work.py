@@ -1683,11 +1683,13 @@ class _Container:
     def __init__(self) -> None:
         self.attrs: dict[str, Any] = {"State": {"Status": "running"}}
         self.stopped = False
+        self.log_requests: list[dict[str, Any]] = []
 
     def reload(self) -> None:
         pass
 
     def logs(self, **kwargs: Any) -> bytes:
+        self.log_requests.append(kwargs)
         return b"All done.\n"
 
     def stop(self, timeout: int = 10) -> None:
@@ -1803,6 +1805,9 @@ def test_the_docker_runner_backs_the_time_limit_and_tells_hiccups_from_exits(
     )
 
     assert watchers == [(run.task_id, 600 + board_cmd.WATCHER_SLACK_SECONDS)]
+    # Only the end of the output is read, however much the agent wrote.
+    assert run.logs() == "All done.\n"
+    assert manager.container.log_requests[-1] == {"tail": board_cmd.AGENT_LOG_LINES}
 
     def engine_hiccup() -> None:
         raise docker.errors.APIError("engine busy")

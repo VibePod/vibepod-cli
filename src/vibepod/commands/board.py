@@ -38,6 +38,9 @@ from vibepod.utils.console import error, info, success, warning
 
 # The watcher backstop fires this long after the worker's own time limit.
 WATCHER_SLACK_SECONDS = 120
+# The lines of the agent's output read when it ended: its summary and any usage limit are at
+# the end, and all of it may not fit into memory.
+AGENT_LOG_LINES = 1_000
 
 app = typer.Typer(
     name="board",
@@ -117,7 +120,7 @@ class DockerAgentRun:
 
     def logs(self) -> str:
         try:
-            raw = self.launched.container.logs()
+            raw = self.launched.container.logs(tail=AGENT_LOG_LINES)
         except Exception:  # docker SDK raises APIError / DockerException
             return ""
         return raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
