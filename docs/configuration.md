@@ -44,6 +44,13 @@ log_level: info
 # Disable colour output
 no_color: false
 
+# Relabel VibePod's own bind mounts for SELinux (default: false)
+# Only has an effect on an SELinux-enforcing Linux host. Adds the `z` option to
+# the workspace and ~/.config/vibepod mounts so containers may access them.
+# This PERMANENTLY changes the SELinux label of those host directories; see
+# SELinux in the quickstart before enabling it.
+selinux_relabel: false
+
 agents:
   claude:
     enabled: true
@@ -239,6 +246,7 @@ These variables override the corresponding config keys without editing any file:
 | `VP_AUTO_CLEAN`        | `auto_clean`        | `VP_AUTO_CLEAN=false`                    |
 | `VP_LOG_LEVEL`         | `log_level`         | `VP_LOG_LEVEL=debug`                     |
 | `VP_NO_COLOR`          | `no_color`          | `VP_NO_COLOR=true`                       |
+| `VP_SELINUX_RELABEL`   | `selinux_relabel`   | `VP_SELINUX_RELABEL=true`                |
 | `VP_DATASETTE_PORT`    | `logging.ui_port`   | `VP_DATASETTE_PORT=9001`                 |
 | `VP_PROXY_ENABLED`     | `proxy.enabled`     | `VP_PROXY_ENABLED=false`                 |
 | `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow`             |
@@ -406,7 +414,7 @@ Each entry is a quoted string in `SOURCE:TARGET[:MODE]` format:
 
 - **SOURCE** is an existing host file or directory, or a runtime-managed named volume. Host paths may be absolute (`/srv/datasets`), start with `~` (`~/datasets`), or be relative (`./data`, `../shared-lib`). Config paths resolve against the workspace, **not** the `.vibepod` directory. Use `./data` for a local directory: a bare name such as `data` or `pip-cache` means a named volume. Volume names must start with a letter or digit and contain only letters, digits, `_`, `.`, or `-`. VibePod rejects missing host paths rather than letting the runtime create them.
 - **TARGET** must be an absolute Linux container path, regardless of host platform. It cannot be `/` or an exact path VibePod already mounts, such as `/workspace`, the agent's config directory, or `/etc/vibepod-proxy-ca`. Other managed targets depend on enabled features. Nested mounts such as `/workspace/data` are allowed, but hide the underlying contents at that path while mounted. Duplicate targets in the final custom list are rejected; paths are normalized before collision checks.
-- **MODE** is `rw` (read-write, the default) or `ro` (read-only). Supported additional options are `z` and `Z` for SELinux relabeling, combined with commas, for example `ro,z` or `rw,Z`. Other runtime options such as `cached`, `delegated`, or `U` are not accepted; neither are `ro` and `rw` together. VibePod never relabels these volumes itself: add `z` (shared) or `Z` (private) only when the path is not also used by host services — see [SELinux](quickstart.md#selinux).
+- **MODE** is `rw` (read-write, the default) or `ro` (read-only). Supported additional options are `z` and `Z` for SELinux relabeling, combined with commas, for example `ro,z` or `rw,Z`. Other runtime options such as `cached`, `delegated`, or `U` are not accepted; neither are `ro` and `rw` together. VibePod never relabels these volumes itself, even with `selinux_relabel` enabled: add `z` (shared) or `Z` (private) only when the path is not also used by host services — see [SELinux](quickstart.md#selinux).
 - **Same-path shorthand**: a single absolute POSIX host path, such as `"/srv/datasets"`, is shorthand for `/srv/datasets:/srv/datasets` with read-write access. Relative paths, `~` paths, and named volumes require an explicit target; use an explicit mapping to set a mode.
 
 ### One-off mounts
