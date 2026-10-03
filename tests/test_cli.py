@@ -377,15 +377,15 @@ def test_run_and_alias_forward_volume_flag(monkeypatch) -> None:
 
     monkeypatch.setattr(run_cmd, "run", _fake_run)
 
-    result = runner.invoke(app, ["run", "claude", "-v", "~/data:/data:ro"])
+    result = runner.invoke(app, ["run", "claude", "-v", "~/data:/data:ro", "--volume", "/my/path"])
     assert result.exit_code == 0
-    assert called["volume"] == ["~/data:/data:ro"]
+    assert called["volume"] == ["~/data:/data:ro", "/my/path"]
     assert called["passthrough"] == []
 
-    result = runner.invoke(app, ["claude", "-v", "cache:/cache", "--volume", "/srv:/srv"])
+    result = runner.invoke(app, ["claude", "-v", "cache:/cache", "--volume", "/srv"])
     assert result.exit_code == 0
     assert called["agent"] == "claude"
-    assert called["volume"] == ["cache:/cache", "/srv:/srv"]
+    assert called["volume"] == ["cache:/cache", "/srv"]
     assert called["passthrough"] == []
 
 

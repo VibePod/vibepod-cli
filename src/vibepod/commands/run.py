@@ -525,7 +525,7 @@ def run(
         typer.Option(
             "-v",
             "--volume",
-            help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+            help="Mount as SOURCE:TARGET[:ro|rw] or an absolute host path at the same path; "
             "added to configured agents.<agent>.volumes (same TARGET replaces)",
             show_default=False,
         ),

@@ -379,16 +379,26 @@ Each entry is a quoted string in `SOURCE:TARGET[:MODE]` format:
 - **SOURCE** is an existing host file or directory, or a runtime-managed named volume. Host paths may be absolute (`/srv/datasets`), start with `~` (`~/datasets`), or be relative (`./data`, `../shared-lib`). Config paths resolve against the workspace, **not** the `.vibepod` directory. Use `./data` for a local directory: a bare name such as `data` or `pip-cache` means a named volume. Volume names must start with a letter or digit and contain only letters, digits, `_`, `.`, or `-`. VibePod rejects missing host paths rather than letting the runtime create them.
 - **TARGET** must be an absolute Linux container path, regardless of host platform. It cannot be `/` or an exact path VibePod already mounts, such as `/workspace`, the agent's config directory, or `/etc/vibepod-proxy-ca`. Other managed targets depend on enabled features. Nested mounts such as `/workspace/data` are allowed, but hide the underlying contents at that path while mounted. Duplicate targets in the final custom list are rejected; paths are normalized before collision checks.
 - **MODE** is `rw` (read-write, the default) or `ro` (read-only). Supported additional options are `z` and `Z` for SELinux relabeling, combined with commas, for example `ro,z` or `rw,Z`. Other runtime options such as `cached`, `delegated`, or `U` are not accepted; neither are `ro` and `rw` together.
+- **Same-path shorthand**: a single absolute POSIX host path, such as `"/srv/datasets"`, is shorthand for `/srv/datasets:/srv/datasets` with read-write access. Relative paths, `~` paths, and named volumes require an explicit target; use an explicit mapping to set a mode.
 
 ### One-off mounts
 
-`vp run` (and agent alias commands) accept a repeatable `-v/--volume` flag with the same syntax. The flag **adds** to the configured list; a flag entry replaces only the configured entry at the same container path. Relative flag paths resolve against the current directory:
+`vp run` (and agent alias commands) accept a repeatable `-v/--volume` flag with the same syntax, including the same-path shorthand. The flag **adds** to the configured list; a flag entry replaces only the configured entry at the same container path. Relative flag paths resolve against the current directory:
 
 ```bash
 vp run claude -v "./alternate-data:/datasets:ro" -v "~/shared:/shared:ro"
 ```
 
 With the configuration above, this replaces `/datasets` and adds `/shared`, while keeping `/results` and the pip cache. Create both host directories before running the command. For `vp task` containers, use the configuration list.
+
+To mount a host directory at the same path in the container, pass only the absolute host path:
+
+```bash
+# Same path on the host and in the container:
+vp run claude --volume /my/path
+# Equivalent explicit mapping:
+vp run claude --volume /my/path:/my/path
+```
 
 ### Permissions, security, and platform behavior
 
