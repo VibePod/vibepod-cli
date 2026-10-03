@@ -116,7 +116,9 @@ packaged interpreter and dependencies, verifies that imports come from the snap
 and that both installed commands report the release version, pulls an image,
 runs a container, checks host workspace reads and writes, a hidden configuration
 directory bind mount and environment injection, and exercises the installed
-CLI's container listing and stop commands. It removes its test container even
+CLI's container listing and stop commands. It also fetches HTTP content through
+a dynamically assigned localhost port, validating the port publishing used by
+the proxy and dashboard. It removes its test container even
 if validation fails. A running Docker
 or Podman API is required. Repeat with `DOCKER_HOST` set to a rootless Podman
 socket before claiming support on a new runtime or base. Before the first Store

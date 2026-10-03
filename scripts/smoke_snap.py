@@ -7,8 +7,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from importlib.metadata import version
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 from uuid import uuid4
 
 from vibepod.core.docker import DockerManager
@@ -49,12 +52,28 @@ def main() -> None:
             config_dir=config_dir,
             config_mount_path="/config",
             env={"VP_SNAP_SMOKE": "snap-env-ok"},
-            command=["sleep", "300"],
+            command=["httpd", "-f", "-p", "8080", "-h", "/workspace"],
+            ports={"8080/tcp": ("127.0.0.1", None)},
             auto_remove=False,
             name=f"vibepod-snap-smoke-{uuid4().hex[:8]}",
             version=version("vibepod"),
         )
         try:
+            # Exercise the localhost port publishing used by proxy/dashboard
+            # services, using a daemon-assigned port to avoid host conflicts.
+            container.reload()
+            bindings = container.attrs["NetworkSettings"]["Ports"]["8080/tcp"]
+            port = bindings[0]["HostPort"]
+            deadline = time.monotonic() + 30
+            while True:
+                try:
+                    with urlopen(f"http://127.0.0.1:{port}/marker", timeout=2) as response:
+                        assert response.read() == b"snap-workspace-ok\n"
+                    break
+                except URLError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.2)
             result = container.exec_run(
                 [
                     "sh",
