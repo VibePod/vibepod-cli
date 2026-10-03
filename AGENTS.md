@@ -24,11 +24,12 @@ directory only via the `skills.external_dirs` key in its own `config.yaml` and
 has no env-var override, so the `vibepod-agents` image entrypoint seeds the key
 rather than the CLI mounting a symlink.
 
-Hermes also has two launch constraints enforced by `validate_rootless_runtime`
-and the ACP reserved-path check: it is rejected on rootless Podman (the pinned
-image needs its own runtime user and rejects the UID rootless keep-id maps the
-container to, including 0), and `/opt/hermes` (its install root) is reserved so
-an `--acp` workspace bind cannot shadow the entrypoint/venv/`hermes-acp`.
+Hermes also has two launch constraints: on rootless Podman it cannot use plain
+keep-id (the image boots as root, then drops to its fixed `hermes` UID 10000 and
+exits for any other non-root start), so `AgentSpec.rootless_runtime_ids` makes
+`rootless_podman_identity` launch it with `keep-id:uid=10000,gid=10000` +
+`--user 0:0`; and `/opt/hermes` (its install root) is reserved so an `--acp`
+workspace bind cannot shadow the entrypoint/venv/`hermes-acp`.
 
 ## Tests
 

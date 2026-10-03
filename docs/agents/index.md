@@ -1163,13 +1163,16 @@ main custom-provider endpoint, and restricts API keys by endpoint host. Its
 ACP adapter also has no provider/model launch flags. Hermes-native provider
 setup remains supported; VibePod does not rewrite Hermes's saved settings.
 
-**Rootless Podman is not supported.** The pinned Hermes image needs its own
-runtime user and exits before showing any output when launched under
-rootless Podman's `keep-id` user mapping, which VibePod uses for most agents.
-On a rootless Podman engine, `vp run hermes` and `vp task create hermes`
-(affecting interactive, task, and ACP) reject the launch before
-starting a container rather than crashing mid-boot. Run Hermes on rootful
-Docker or Podman instead.
+**Rootless Podman** needs Podman 4.3 or newer. The pinned Hermes image must
+boot as root and then drop to its own `hermes` user (UID 10000); it exits if
+started directly as an arbitrary UID. On a rootless Podman engine VibePod
+therefore launches Hermes with `--userns=keep-id:uid=10000,gid=10000` and
+`--user 0:0` instead of the plain `keep-id` used for other agents: the image
+bootstraps as namespace root, and the `hermes` user it drops to is your host
+user, so files written to the workspace and config directory stay owned by
+you on the host. An explicit `HERMES_UID`/`HERMES_GID` (or `PUID`/`PGID`)
+other than `10000` is rejected there, since Hermes would drop to a UID
+outside that mapping.
 
 **Headless one-shot:**
 
