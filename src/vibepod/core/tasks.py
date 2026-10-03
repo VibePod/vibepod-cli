@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Final
 from uuid import uuid4
 
+from vibepod.constants import agent_ids
+
 TASK_STATUS_QUEUED: Final = "queued"
 TASK_STATUS_STARTING: Final = "starting"
 TASK_STATUS_RUNNING: Final = "running"
@@ -213,8 +215,10 @@ class TaskStore:
         query = "SELECT * FROM tasks"
         params: tuple[Any, ...] = ()
         if agent is not None:
-            query += " WHERE agent = ?"
-            params = (agent,)
+            # Rows recorded before a rename still carry the legacy agent id.
+            ids = agent_ids(agent)
+            query += f" WHERE agent IN ({', '.join('?' for _ in ids)})"
+            params = ids
         query += " ORDER BY created_at DESC"
         if limit is not None:
             query += " LIMIT ?"

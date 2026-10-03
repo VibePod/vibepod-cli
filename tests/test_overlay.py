@@ -39,6 +39,14 @@ def test_find_overlay_dockerfile_prefers_agent_overlay(tmp_path: Path) -> None:
     assert overlay.find_overlay_dockerfile(tmp_path, "claude") == agent_dockerfile
 
 
+def test_find_overlay_dockerfile_falls_back_to_legacy_agent_dir(tmp_path: Path) -> None:
+    _make_overlay(tmp_path)
+    legacy = _make_overlay(tmp_path, "devstral")
+    assert overlay.find_overlay_dockerfile(tmp_path, "vibe") == legacy
+    canonical = _make_overlay(tmp_path, "vibe")
+    assert overlay.find_overlay_dockerfile(tmp_path, "vibe") == canonical
+
+
 def test_find_overlay_dockerfile_ignores_other_agent_dirs(tmp_path: Path) -> None:
     _make_overlay(tmp_path, "gemini")
     assert overlay.find_overlay_dockerfile(tmp_path, "claude") is None
@@ -122,6 +130,13 @@ def test_shared_overlay_hash_excludes_agent_subdirs(tmp_path: Path) -> None:
     shared = _make_overlay(tmp_path)
     before = _hash("sha256:abc", shared)
     _make_overlay(tmp_path, "gemini", content="RUN apt-get install -y jq\n")
+    assert _hash("sha256:abc", shared) == before
+
+
+def test_shared_overlay_hash_excludes_legacy_agent_subdirs(tmp_path: Path) -> None:
+    shared = _make_overlay(tmp_path)
+    before = _hash("sha256:abc", shared)
+    _make_overlay(tmp_path, "devstral", content="RUN apt-get install -y jq\n")
     assert _hash("sha256:abc", shared) == before
 
 

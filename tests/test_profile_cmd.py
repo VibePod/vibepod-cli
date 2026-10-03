@@ -51,6 +51,18 @@ def test_profile_list_marks_agents_with_credentials(config_root: Path) -> None:
     assert "claude" in result.stdout
 
 
+def test_profile_list_reports_vibe_from_legacy_devstral_dir(config_root: Path) -> None:
+    runner.invoke(app, ["profile", "create", "work"])
+    creds = config_root / "profiles" / "work" / "agents" / "devstral"
+    assert agent_config_dir("vibe", "work") == creds
+    creds.mkdir(parents=True)
+    (creds / ".env").write_text("MISTRAL_API_KEY=x\n")
+
+    result = runner.invoke(app, ["profile", "list"])
+    assert result.exit_code == 0
+    assert "work  (vibe)" in result.stdout
+
+
 def test_profile_create_rejects_invalid_name(config_root: Path) -> None:
     result = runner.invoke(app, ["profile", "create", "Bad Name"])
     assert result.exit_code != 0

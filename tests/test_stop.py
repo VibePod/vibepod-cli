@@ -84,6 +84,36 @@ def test_stop_by_agent_shortcut_is_resolved(monkeypatch) -> None:
     assert calls == {"agent": "claude", "force": False}
 
 
+def test_stop_legacy_devstral_releases_legacy_labelled_containers(monkeypatch) -> None:
+    calls: dict = {}
+    released: list[tuple[str, str | None]] = []
+    legacy = _FakeContainer(
+        "vibepod-devstral-old",
+        {CONTAINER_LABEL_MANAGED: "true", "vibepod.agent": "devstral", "herdr.pane": "p1"},
+    )
+
+    class _Manager:
+        def list_managed(self, all_containers: bool = False) -> list[_FakeContainer]:
+            return [legacy]
+
+        def stop_agent(self, agent: str, force: bool = False) -> int:
+            calls["agent"] = agent
+            return 1
+
+    monkeypatch.setattr(stop_cmd, "DockerManager", lambda: _Manager())
+    monkeypatch.setattr(stop_cmd, "PANE_LABEL", "herdr.pane")
+    monkeypatch.setattr(
+        stop_cmd,
+        "release_agent",
+        lambda agent, pane=None: released.append((agent, pane)),
+    )
+
+    stop_cmd.stop(target="devstral", all_containers=False, force=False)
+
+    assert calls == {"agent": "vibe"}
+    assert released == [("devstral", "p1")]
+
+
 def test_stop_by_container_name_dispatches_to_stop_container(monkeypatch) -> None:
     calls: dict = {}
     container = _FakeContainer("vibepod-claude-abc12345")

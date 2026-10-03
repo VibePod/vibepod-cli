@@ -1230,3 +1230,28 @@ def test_remove_stale_overlays_survives_list_failure(mock_docker) -> None:
 
     manager = DockerManager()
     assert manager.remove_stale_overlays("k1", keep_tag="t:1") == 0
+
+
+def test_stop_agent_matches_legacy_agent_label(monkeypatch) -> None:
+    class _Container:
+        def __init__(self, name: str, agent: str) -> None:
+            self.name = name
+            self.labels = {"vibepod.agent": agent}
+            self.stopped = False
+
+        def stop(self, timeout: int = 10) -> None:  # noqa: ARG002
+            self.stopped = True
+
+    legacy = _Container("vibepod-devstral-old", "devstral")
+    current = _Container("vibepod-vibe-new", "vibe")
+    other = _Container("vibepod-claude-x", "claude")
+    manager = object.__new__(DockerManager)
+    monkeypatch.setattr(
+        manager,
+        "list_managed",
+        lambda all_containers=False: [legacy, current, other],  # noqa: ARG005
+    )
+
+    assert manager.stop_agent("vibe") == 2
+    assert legacy.stopped and current.stopped
+    assert not other.stopped

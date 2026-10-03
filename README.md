@@ -23,7 +23,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Devstral/Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Mistral Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes & more
 - 🔌 **Model providers** — register any OpenAI- or Anthropic-compatible endpoint or local model server once with `vp provider add`, then route agents to it with `vp run --provider` ([docs](https://vibepod.dev/docs/providers/))
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
@@ -63,7 +63,7 @@ vp run <agent>
 # examples:
 vp run claude
 vp run codex
-vp run vibe   # alias of devstral
+vp run vibe
 ```
 
 Extra arguments after the agent are forwarded to the agent process. Use `--`
@@ -81,7 +81,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | ------------------- | -------------------------------------------- |
 | `claude`            | `--dangerously-skip-permissions`             |
 | `gemini`            | `--approval-mode=yolo`                       |
-| `devstral` (`vibe`) | `--auto-approve`                             |
+| `vibe` (`devstral`) | `--auto-approve`                             |
 | `copilot`           | `--yolo`                                     |
 | `codex`             | `--dangerously-bypass-approvals-and-sandbox` |
 | `pi`                | `--approve`                                  |
@@ -97,7 +97,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 
 ## Editor integration (`--acp`)
 
-`vp run <agent> --acp` turns VibePod into an [Agent Client Protocol](https://agentclientprotocol.com/) adapter, so the containerized agent appears directly in the AI panel of any editor with ACP support (e.g. [Zed](https://zed.dev/docs/ai/external-agents)) — with isolation, profiles, overlays and proxy metrics intact. Supported out of the box: `claude`, `gemini`, `qwen`, `codex`, `opencode`, `copilot`, `auggie`, `jcode`, `devstral`, `hermes` and `pi`.
+`vp run <agent> --acp` turns VibePod into an [Agent Client Protocol](https://agentclientprotocol.com/) adapter, so the containerized agent appears directly in the AI panel of any editor with ACP support (e.g. [Zed](https://zed.dev/docs/ai/external-agents)) — with isolation, profiles, overlays and proxy metrics intact. Supported out of the box: `claude`, `gemini`, `qwen`, `codex`, `opencode`, `copilot`, `auggie`, `jcode`, `vibe`, `hermes` and `pi`.
 
 Register `vp` as a custom/external agent server in your editor. Zed example (`settings.json`):
 
@@ -176,7 +176,7 @@ Current defaults:
 - `claude` -> `vibepod/claude:latest`
 - `gemini` -> `vibepod/gemini:latest`
 - `opencode` -> `vibepod/opencode:latest`
-- `devstral` (alias: `vibe`) -> `vibepod/devstral:latest`
+- `vibe` (alias: `devstral`) -> `vibepod/devstral:latest`
 - `auggie` -> `vibepod/auggie:latest`
 - `copilot` -> `vibepod/copilot:latest`
 - `codex` -> `vibepod/codex:latest`
@@ -199,8 +199,8 @@ You can override any single image directly:
 VP_IMAGE_CLAUDE=vibepod/claude:latest vp run claude
 VP_IMAGE_GEMINI=vibepod/gemini:latest vp run gemini
 VP_IMAGE_OPENCODE=vibepod/opencode:latest vp run opencode
-VP_IMAGE_DEVSTRAL=vibepod/devstral:latest vp run devstral
-VP_IMAGE_DEVSTRAL=vibepod/devstral:latest vp run vibe   # same agent/image as devstral
+VP_IMAGE_VIBE=vibepod/devstral:latest vp run vibe
+VP_IMAGE_VIBE=vibepod/devstral:latest vp run devstral   # alias of vibe
 VP_IMAGE_AUGGIE=vibepod/auggie:latest vp run auggie
 VP_IMAGE_COPILOT=vibepod/copilot:latest vp run copilot
 VP_IMAGE_CODEX=vibepod/codex:latest vp run codex
