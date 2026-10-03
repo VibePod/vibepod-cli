@@ -47,6 +47,8 @@ class FakeBoard:
     max_review_rounds: int = 3
     # Every review claim, open or ended, oldest first.
     reviews: list[dict[str, Any]] = field(default_factory=list)
+    # False plays a board from before review workers, which ignores the claim's mode.
+    reviews_supported: bool = True
     # Answers every request with a redirect to this URL.
     redirect: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -160,7 +162,7 @@ class FakeBoard:
     def _claim(self, body: dict[str, Any]) -> tuple[int, Any]:
         if self.paused:
             return 200, {"claimed": False, "paused": True, "reason": self.paused}
-        if body.get("mode") == "review":
+        if body.get("mode") == "review" and self.reviews_supported:
             return self._claim_review(body)
         labels = body.get("labels") or []
         if body.get("task"):
