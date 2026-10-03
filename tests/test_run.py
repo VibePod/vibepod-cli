@@ -879,6 +879,25 @@ def test_run_publish_flag_rejects_invalid_entry(monkeypatch, _tmp_config_root) -
     assert stub.run_kwargs is None
 
 
+def test_parse_volume_same_path_shorthand(tmp_path: Path) -> None:
+    host = tmp_path / "data"
+    host.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(host, target_is_directory=True)
+    for path in (host, link):
+        assert (
+            launch.parse_volume_specs([str(path)], source="--volume", base_dir=tmp_path)
+            == launch.parse_volume_specs([f"{path}:{path}"], source="--volume", base_dir=tmp_path)
+            == [(str(host), str(path), "rw")]
+        )
+
+
+@pytest.mark.parametrize("entry", ["data", "./data", "~/data", "", "/", "/data:", "/a:/b:rw:ro"])
+def test_parse_volume_rejects_invalid_shorthand(tmp_path: Path, entry: str) -> None:
+    with pytest.raises(typer.BadParameter, match=r"Invalid --volume\[1\]"):
+        launch.parse_volume_specs([entry], source="--volume", base_dir=tmp_path)
+
+
 def test_agent_custom_volumes_empty_config(tmp_path: Path) -> None:
     for cfg in ({}, {"volumes": None}, {"volumes": []}):
         assert launch.agent_custom_volumes("claude", cfg, base_dir=tmp_path) == []
@@ -926,7 +945,7 @@ def test_agent_custom_volumes_parses_paths_and_named_volumes(
 @pytest.mark.parametrize(
     ("entry", "message"),
     [
-        ("/data", r"SOURCE:TARGET"),
+        ("data", r"shorthand requires an absolute POSIX host path"),
         ("a:b:c:d", r"SOURCE:TARGET"),
         ("cache:relative", r"must be absolute"),
         ("cache:/", r"container root"),
@@ -1093,6 +1112,55 @@ def test_run_volume_flag_replaces_configured_entry_with_missing_source(
     assert stub.run_kwargs is not None
     custom = [vol for vol in stub.run_kwargs["extra_volumes"] if vol[1] in {"/datasets", "/cache"}]
     assert custom == [("cache", "/cache", "rw"), ("datasets", "/datasets", "ro")]
+
+
+def test_run_same_path_volume_with_explicit_mapping(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    shared = _tmp_config_root / "shared"
+    shared.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _volumes_config(None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "claude",
+            "-w",
+            str(workspace),
+            "--detach",
+            "--volume",
+            str(shared),
+            "--volume",
+            f"{workspace}:/explicit:ro",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert (str(shared), str(shared), "rw") in stub.run_kwargs["extra_volumes"]
+    assert (str(workspace), "/explicit", "ro") in stub.run_kwargs["extra_volumes"]
+
+
+@pytest.mark.parametrize("entry", ["data", "./data", "~/data", "/", "missing"])
+def test_run_rejects_invalid_volume_shorthand(monkeypatch, _tmp_config_root, entry) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _volumes_config(None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    if entry == "missing":
+        entry = str(_tmp_config_root / "missing")
+
+    result = CliRunner().invoke(
+        app, ["run", "claude", "-w", str(workspace), "--detach", "--volume", entry]
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid --volume[1]" in result.output
+    assert stub.run_kwargs is None
 
 
 def test_run_rejects_invalid_configured_volume(monkeypatch, _tmp_config_root) -> None:
