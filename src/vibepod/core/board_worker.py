@@ -53,6 +53,9 @@ TERMINATE_GRACE_SECONDS = 10.0
 # before they wait for the next round of the loop.
 DELIVERY_ATTEMPTS = 5
 DEFAULT_USAGE_LIMIT_WAIT = 30 * 60
+# The share of the claim's lease that may pass without a renewal before the run is stopped:
+# the board gives the task to another worker once the lease runs out.
+LEASE_SAFETY = 0.75
 MAX_USAGE_LIMIT_WAIT = 24 * 60 * 60
 
 # Messages agents print when a subscription or API limit stops them. Only the end of the
@@ -411,6 +414,8 @@ class BoardWorker:
         self._heartbeat_lock = threading.Lock()
         # Why the agent of the current task could not be stopped, if it could not.
         self.stop_failed: str | None = None
+        # When the claim on the current task was last claimed or renewed.
+        self.renewed: float | None = None
 
     # --- lifecycle ------------------------------------------------------------------
 
@@ -569,7 +574,7 @@ class BoardWorker:
             return
         if not force and self.clock() - self._last_heartbeat < self.heartbeat_seconds:
             return
-        self._last_heartbeat = self.clock()
+        sent = self._last_heartbeat = self.clock()
         working = self.status == "working" and self.task is not None
         try:
             reply = self.client.heartbeat(
@@ -589,6 +594,8 @@ class BoardWorker:
             else:
                 self.say("warning", f"Heartbeat failed: {exc.message}")
             return
+        if working:
+            self.renewed = sent
         self._apply(reply.get("instructions") or [])
 
     def _apply(self, instructions: Sequence[dict[str, Any]]) -> None:
@@ -679,9 +686,18 @@ class BoardWorker:
             return "stop"
         if self.cancel_reason is not None:
             return "cancel"
+        if self._lease_lapsing():
+            return "lease"
         if deadline is not None and self.clock() >= deadline:
             return "timeout"
         return None
+
+    def _lease_lapsing(self) -> bool:
+        """Whether the claim went unrenewed for so long, such as while the board cannot be
+        reached, that the board may soon give the task to another worker."""
+        if self.task is None or self.renewed is None:
+            return False
+        return self.clock() - self.renewed >= self.options.lease_seconds * LEASE_SAFETY
 
     # --- one task -------------------------------------------------------------------
 
@@ -693,7 +709,7 @@ class BoardWorker:
         self.cancel_reason = None
         self.stop_failed = None
         started_at = self.now()
-        started = self.clock()
+        started = self.renewed = self.clock()
         self._set("working", step=STEP_PREPARING)
         result = TaskResult()
         repo: Path | None = None
@@ -921,6 +937,13 @@ class BoardWorker:
         elif ended == "cancel":
             # The board already put the task back; it is no longer ours to release.
             result.outcome, result.reason, result.release = "cancelled", self.cancel_reason, None
+        elif ended == "lease":
+            unrenewed = format_duration(self.clock() - (self.renewed or 0))
+            result.outcome, result.reason, result.release = (
+                "failed",
+                f"The claim could not be renewed for {unrenewed}; stopped before it runs out",
+                "released",
+            )
         elif ended == "timeout":
             limit = format_duration(self.options.timeout_seconds or 0)
             result.outcome, result.reason, result.release = (

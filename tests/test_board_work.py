@@ -885,6 +885,26 @@ def test_a_stop_that_comes_as_the_agent_finishes_still_gives_the_task_back(
     assert worker.summary.ended_because == "Stopped from the board"
 
 
+def test_a_run_stops_before_its_unrenewed_claim_runs_out(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Runs while the board is unreachable")
+    board.failures = {"POST /api/workers/worker-1/heartbeat": 10**6}
+    runner = FakeRunner(polls=None)
+
+    worker, _ = work(server, runner, repo, once=True, lease_seconds=120)
+
+    assert runner.runs[0].stopped is True
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "released"
+    assert release["note"].startswith("The claim could not be renewed for")
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+    assert board.runs[0]["outcome"] == "failed"
+    assert board.card("VP-1")["column"] == "planned"
+
+
 def test_a_refused_hand_over_blocks_the_task_instead_of_leaving_it_claimed(
     board: FakeBoard,
     server: FakeBoardServer,
