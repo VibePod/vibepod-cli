@@ -17,7 +17,13 @@ from vibepod.constants import (
     USER_SKILLS_DIR,
 )
 from vibepod.core.config import get_config
-from vibepod.core.docker import DockerClientError, DockerManager, NotFound, bind_mode
+from vibepod.core.docker import (
+    DockerClientError,
+    DockerManager,
+    NotFound,
+    bind_mode,
+    report_selinux_relabel,
+)
 
 Scope = Literal["local", "user"]
 
@@ -206,6 +212,7 @@ def run_engine(
         str(user): {"bind": "/vibepod/user-skills", "mode": bind_mode(user)},
         str(cache): {"bind": "/vibepod/cache", "mode": bind_mode(cache)},
     }
+    report_selinux_relabel()
     for host_path, container_path, mode in extra_mounts or []:
         volumes[str(host_path)] = {"bind": container_path, "mode": mode}
 

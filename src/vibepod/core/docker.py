@@ -96,6 +96,24 @@ _SELINUX_PROTECTED_DIRS = frozenset(
 _SELINUX_PROTECTED_TREES = tuple(
     Path(root) for root in "/bin /boot /dev /etc /lib /lib64 /proc /sbin /sys /usr".split()
 )
+_SELINUX_HINT = (
+    "SELinux is enforcing: containers may be denied access to VibePod's bind mounts "
+    "(the workspace, ~/.config/vibepod). To let VibePod relabel them, set "
+    "`selinux_relabel: true` in config.yaml or VP_SELINUX_RELABEL=true. Relabeling "
+    "permanently changes the SELinux label of those host directories."
+)
+
+
+class _SelinuxNotices:
+    """What this process has already told the user about SELinux relabeling."""
+
+    def __init__(self) -> None:
+        self.hint_shown = False
+        self.relabeled: list[str] = []
+        self.reported: set[str] = set()
+
+
+_selinux_notices = _SelinuxNotices()
 
 
 def _selinux_enforcing() -> bool:
@@ -105,8 +123,15 @@ def _selinux_enforcing() -> bool:
         return False
 
 
+def selinux_relabel_enabled() -> bool:
+    """Whether the user opted into relabeling (`selinux_relabel` / VP_SELINUX_RELABEL)."""
+    from vibepod.core.config import get_config
+
+    return get_config().get("selinux_relabel") is True
+
+
 def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
-    """Return `mode`, plus SELinux's `z` flag when the host mount needs it.
+    """Return `mode`, plus SELinux's `z` flag when the user opted into relabeling.
 
     On an enforcing SELinux host (Fedora and friends) a bind mount keeps its
     host label -- `config_home_t` for the config dir, `user_home_t` for a
@@ -118,14 +143,17 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
     private `Z` would not. Non-Linux engines have no such file and stay
     unflagged -- Podman's macOS VM cannot relabel a virtiofs share anyway.
 
-    Only call this for mounts VibePod owns: relabeling a user's own volume
-    (say `~/.ssh`) would break the host services that read it. Named volumes,
-    an explicit `z`/`Z`, the home or system dirs, and anything under system
-    trees such as `/etc` or `/usr` are left as they are.
+    The relabel is permanent and can break host services that read the same
+    files (a workspace under `/var/www`, say), so it only happens when
+    `selinux_relabel` is enabled; `report_selinux_relabel` tells the user
+    either way. Only call this for mounts VibePod owns: relabeling a user's own
+    volume (say `~/.ssh`) would break the host services that read it. Named
+    volumes, an explicit `z`/`Z`, the home or system dirs, and anything under
+    system trees such as `/etc` or `/usr` are left as they are.
     """
     if "/" not in str(host_path) or {"z", "Z"} & set(mode.split(",")):
         return mode
-    if not _selinux_enforcing():
+    if not _selinux_enforcing() or not selinux_relabel_enabled():
         return mode
     # Check the path as given too: on macOS /home, /tmp and /etc are symlinks
     # into /System/Volumes/Data or /private, so only the unresolved form matches.
@@ -137,7 +165,36 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
     for candidate in (given, path):
         if any(root in candidate.parents for root in _SELINUX_PROTECTED_TREES):
             return mode
+    if str(given) not in _selinux_notices.relabeled:
+        _selinux_notices.relabeled.append(str(given))
     return f"{mode},z"
+
+
+def report_selinux_relabel() -> None:
+    """Tell the user what SELinux relabeling does for the containers being started.
+
+    Call it once the binds of a VibePod container are built. On an enforcing
+    host with relabeling off it prints a hint on how to opt in (once per
+    process); with relabeling on it lists the host paths `bind_mode` relabeled
+    that were not reported yet. Elsewhere it prints nothing. Both go to stderr.
+    """
+    if not _selinux_enforcing():
+        return
+    # stderr: stdout may carry JSON (`vp skills list --json`) or JSON-RPC (ACP).
+    from rich.console import Console
+    from rich.markup import escape
+
+    notices = _selinux_notices
+    if not selinux_relabel_enabled():
+        if not notices.hint_shown:
+            notices.hint_shown = True
+            Console(stderr=True).print(f"[yellow]{_SELINUX_HINT}[/yellow]", highlight=False)
+        return
+    new = [path for path in notices.relabeled if path not in notices.reported]
+    if new:
+        notices.reported.update(new)
+        message = escape(f"Relabeling for SELinux (container_file_t): {', '.join(new)}")
+        Console(stderr=True).print(f"[cyan]{message}[/cyan]", highlight=False)
 
 
 def _run_podman(podman: str, args: list[str]) -> str | None:
@@ -719,7 +776,9 @@ class DockerManager:
         environment = {**env}
 
         workspace_mode = bind_mode(workspace)
-        if workspace_mode == "rw" and _selinux_enforcing():
+        config_mode = bind_mode(config_dir)
+        report_selinux_relabel()
+        if workspace_mode == "rw" and _selinux_enforcing() and selinux_relabel_enabled():
             from vibepod.utils.console import warning
 
             warning(
@@ -728,7 +787,7 @@ class DockerManager:
             )
         volumes: list[str] = [
             f"{workspace}:/workspace:{workspace_mode}",
-            f"{config_dir}:{config_mount_path}:{bind_mode(config_dir)}",
+            f"{config_dir}:{config_mount_path}:{config_mode}",
         ]
         if workspace_mount_path:
             # ACP path parity: bind the workspace a second time onto its own
@@ -936,6 +995,7 @@ class DockerManager:
             }
             logs_db_container_path = f"/mount/logs/{logs_db_path.name}"
             proxy_db_container_path = f"/mount/proxy/{proxy_db_path.name}"
+        report_selinux_relabel()
 
         return self.client.containers.run(
             image=image,
@@ -1021,6 +1081,7 @@ class DockerManager:
             str(db_path.parent): {"bind": "/data", "mode": bind_mode(db_path.parent)},
             str(ca_dir): {"bind": "/data/mitmproxy", "mode": bind_mode(ca_dir)},
         }
+        report_selinux_relabel()
 
         run_kwargs: dict[str, Any] = {
             "image": image,

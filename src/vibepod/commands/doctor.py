@@ -598,7 +598,7 @@ def herdr_doctor(
         image = None
         binds: dict[str, dict[str, str]] = {}
         try:
-            from vibepod.core.docker import DockerManager, bind_mode
+            from vibepod.core.docker import DockerManager, bind_mode, report_selinux_relabel
 
             manager = DockerManager()
             config = get_config()
@@ -606,6 +606,7 @@ def herdr_doctor(
             spec = get_agent_spec(agent)
             binds = {host: {"bind": dest, "mode": mode} for host, dest, mode in volumes}
             binds[str(cfg_dir)] = {"bind": spec.config_mount_path, "mode": bind_mode(cfg_dir)}
+            report_selinux_relabel()
             container_env = {
                 **spec.extra_env,
                 **env,

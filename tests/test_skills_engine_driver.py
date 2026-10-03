@@ -502,6 +502,7 @@ def test_engine_relabels_skills_dirs_but_not_local_locator_on_selinux_host(
     enforce = tmp_path / "enforce"
     enforce.write_text("1\n")
     monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "true")
     cwd = tmp_path / "project"
     source = cwd / "skills" / "researcher"
     source.mkdir(parents=True)
