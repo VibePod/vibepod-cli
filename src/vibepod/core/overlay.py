@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from vibepod.constants import SUPPORTED_AGENTS
+from vibepod.constants import LEGACY_AGENT_IDS, SUPPORTED_AGENTS, agent_ids
 from vibepod.utils.console import info
 
 OVERLAY_DIR = Path(".vibepod") / "overlay"
@@ -46,7 +46,9 @@ def find_overlay_dockerfile(workspace: Path, agent: str) -> Path | None:
     context: the target may live outside the committed overlay directory.
     """
     base = workspace / OVERLAY_DIR
-    for candidate in (base / agent / "Dockerfile", base / "Dockerfile"):
+    # Directories named after a legacy agent id (devstral -> vibe) still apply.
+    candidates = [base / agent_id / "Dockerfile" for agent_id in agent_ids(agent)]
+    for candidate in (*candidates, base / "Dockerfile"):
         if candidate.is_file() and not candidate.is_symlink():
             return candidate
     return None
@@ -74,7 +76,7 @@ def _context_files(dockerfile: Path) -> list[Path]:
     """
     context = dockerfile.parent
     skipped_roots = []
-    for agent in SUPPORTED_AGENTS:
+    for agent in (*SUPPORTED_AGENTS, *LEGACY_AGENT_IDS):
         agent_root = context / agent
         if (agent_root / "Dockerfile").is_file():
             skipped_roots.append(agent_root)
