@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -779,8 +780,10 @@ def test_run_and_task_expose_the_opt_out() -> None:
     from vibepod.cli import app
 
     runner = CliRunner()
-    assert "--no-dash" in runner.invoke(app, ["run", "--help"]).output
-    assert "--no-dash" in runner.invoke(app, ["task", "create", "--help"]).output
+    for args in (["run", "--help"], ["task", "create", "--help"]):
+        # Rich colors help on CI (GITHUB_ACTIONS), splitting option names with ANSI codes
+        output = re.sub(r"\x1b\[[0-9;]*m", "", runner.invoke(app, args).output)
+        assert "--no-dash" in output
 
 
 def test_a_rejected_token_says_where_to_find_the_right_one(capsys) -> None:
