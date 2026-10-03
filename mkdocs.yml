@@ -52,6 +52,7 @@ nav:
   - Quickstart: quickstart.md
   - Tutorials:
       - Overview: tutorials/index.md
+      - Getting started: tutorials/getting-started.md
   - Development: development.md
   - Agents: agents/index.md
   - Profiles: profiles.md

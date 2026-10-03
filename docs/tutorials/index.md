@@ -19,3 +19,9 @@ You need:
 The [Quickstart](../quickstart.md) is the short version: install, run an
 agent, done. The tutorials take more time and explain what happens along the
 way.
+
+## Available tutorials
+
+- [**Getting started with VibePod**](getting-started.md): a guided first
+  session, from installing VibePod to running, leaving, and rejoining agents,
+  checking the dashboard, and saving your settings.
