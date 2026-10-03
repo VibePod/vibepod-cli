@@ -912,7 +912,6 @@ class BoardWorker:
             repo,
             refs,
             worktree.branch,
-            self._worktree_dir(repo),
             checked_out,
         )
         if restored:

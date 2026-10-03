@@ -1283,6 +1283,29 @@ def test_what_the_verify_command_moved_is_restored_too(
     assert release["note"].startswith("The agent moved main; restored them")
 
 
+def test_another_tasks_branch_the_agent_moved_is_restored(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Overreaches into another task")
+    other = repo.parent / "app-worktrees" / "vp-9"
+    git(repo, "worktree", "add", "--quiet", "-b", "vp-9", str(other))
+    other_before = git(repo, "rev-parse", "vp-9")
+
+    def moves_the_other_branch(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        git(path, "update-ref", "refs/heads/vp-9", "HEAD")
+        return 0, "Done."
+
+    work(server, FakeRunner(moves_the_other_branch), repo, once=True)
+
+    assert git(repo, "rev-parse", "vp-9") == other_before
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith("The agent moved vp-9; restored them")
+
+
 def test_a_moved_branch_that_cannot_be_told_from_the_users_work_is_left_and_blocks(
     board: FakeBoard,
     server: FakeBoardServer,

@@ -316,17 +316,16 @@ def restore_refs(
     repo: Path,
     before: dict[str, str],
     own_branch: str,
-    worktrees_dir: Path,
     checked_out_before: dict[str, Path],
 ) -> tuple[list[str], list[str]]:
     """Puts back the branches and tags other than the task's own that the agent moved or
     removed during the run. Says which it restored, and which moved in a checkout but
     could not be told apart from the user's own work there, so were left as they are.
 
-    Others may move refs meanwhile too: the branches of other tasks, checked out in the
-    worktree folder, are theirs; and a branch checked out elsewhere, such as in the user's
-    checkout, moved with its checkout's index when the user committed there. Neither is
-    touched. Each ref is put back only if it did not move again since it was read."""
+    Others may move refs meanwhile too: a checked-out branch, such as another task's in the
+    worktree folder or the user's in their checkout, moved with its checkout's index when
+    it was committed to there, and is not touched. Each ref is put back only if it did not
+    move again since it was read."""
     after = branch_refs(repo)
     checked_out = {**checked_out_before, **checkouts(repo)}
     restored: list[str] = []
@@ -337,8 +336,6 @@ def restore_refs(
             continue
         name = ref.removeprefix("refs/heads/")
         checkout = checked_out.get(ref)
-        if checkout is not None and _inside(checkout, worktrees_dir):
-            continue
         if checkout is not None and checkout.is_dir():
             if now and _index_matches(checkout, now):
                 continue
