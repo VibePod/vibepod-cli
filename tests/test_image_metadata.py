@@ -164,3 +164,16 @@ def test_plain_repo_tag_without_namespace_still_parsed() -> None:
     meta = collect_image_metadata(_FakeContainer(), "ubuntu:24.04")
 
     assert meta.image_tag == "24.04"
+
+
+def test_broken_attrs_property_is_swallowed() -> None:
+    class _BrokenAttrsContainer:
+        image = None
+
+        @property
+        def attrs(self) -> dict:
+            raise RuntimeError("daemon gone")
+
+    meta = collect_image_metadata(_BrokenAttrsContainer(), "vibepod/claude:latest")
+
+    assert meta == ImageMetadata(image_tag="latest", image_hash=None, agent_version=None)

@@ -67,7 +67,10 @@ def collect_image_metadata(container: object, image: str) -> ImageMetadata:
                     break
 
     if image_hash is None:
-        attrs = getattr(container, "attrs", None)
+        try:
+            attrs = getattr(container, "attrs", None)
+        except Exception:
+            attrs = None
         if isinstance(attrs, dict):
             attr_image = attrs.get("Image")
             if isinstance(attr_image, str) and attr_image:
