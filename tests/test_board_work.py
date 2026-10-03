@@ -1339,7 +1339,7 @@ def test_another_tasks_branch_the_agent_moved_is_restored(
     def moves_the_other_branch(path: Path, prompt: str) -> tuple[int, str]:
         commits_a_feature(path, prompt)
         git(path, "update-ref", "refs/heads/vp-9", "HEAD")
-        return 0, "Done."
+        return 0, result_block(summary="Done.")
 
     work(server, FakeRunner(moves_the_other_branch), repo, once=True)
 
