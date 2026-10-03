@@ -102,6 +102,7 @@ snapcraft
 sudo snap install --dangerous --classic ./vibepod_*.snap
 export VP_SNAP_EXPECTED_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
 export VP_CONFIG_DIR="$(mktemp -d)"
+export VP_SNAP_EXPECTED_RUNTIME=docker
 snap run vibepod version
 snap run vibepod.vp version
 snap run --shell vibepod <<'SH'
@@ -112,22 +113,34 @@ SH
 Use Python 3.11+ for the version-extraction command above. `--dangerous` is only
 for local, unsigned artifacts. Keep Snapcraft's classic and library lint checks
 enabled; fix their findings before publishing. The smoke test runs using the
-packaged interpreter and dependencies, verifies the version, pulls an image,
-runs a container, checks a host workspace bind mount and environment injection,
-checks container discovery, and removes its test container. A running Docker
+packaged interpreter and dependencies, verifies that imports come from the snap
+and that both installed commands report the release version, pulls an image,
+runs a container, checks host workspace reads and writes, a hidden configuration
+directory bind mount and environment injection, and exercises the installed
+CLI's container listing and stop commands. It also fetches HTTP content through
+a dynamically assigned localhost port, validating the port publishing used by
+the proxy and dashboard. It removes its test container even
+if validation fails. A running Docker
 or Podman API is required. Repeat with `DOCKER_HOST` set to a rootless Podman
-socket before claiming support on a new runtime or base. Before the first Store
+socket and `VP_SNAP_EXPECTED_RUNTIME=rootless-podman` before claiming support
+on a new runtime or base. The test checks the daemon's engine and rootless
+status before creating a container, so an accidental fallback to Docker or
+rootful Podman cannot pass the rootless release gate. Before the first Store
 release, also exercise an authenticated agent session, HTTP tracking and the
 dashboard on the installed snap.
 
 `.github/workflows/snap.yml` builds and smoke-tests pull requests that affect
-packaging or CLI code; manual dispatch validates without publishing. Published
+packaging or CLI code against Docker and rootless Podman; manual dispatch
+validates without publishing. Both runtimes must pass before upload. Published
 GitHub releases build from their release tag and publish only after the unit
 suite and installed-package smoke test pass. The version is read directly from
 `pyproject.toml` via `adopt-info`; a release tag must match it (with an optional
 `v` prefix). Normal releases go to `latest/stable`, prereleases to `latest/beta`.
 The tested amd64 artifact is retained on the workflow run. No main-branch or
 pull-request build uploads to the Store.
+Release runs still build, validate and retain the artifact when publisher credentials
+are missing, then fail with a setup error before upload. This lets a maintainer
+recover the tested artifact after completing Store setup without bypassing validation.
 
 One-time publisher setup:
 

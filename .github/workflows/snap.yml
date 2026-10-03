@@ -46,9 +46,11 @@ jobs:
           PY
       - uses: snapcore/action-build@v1
         id: build
-      - name: Install and validate the packaged CLI
+      - name: Install and validate the packaged CLI with Docker
         env:
           SNAP_FILE: ${{ steps.build.outputs.snap }}
+          DOCKER_HOST: unix:///var/run/docker.sock
+          VP_SNAP_EXPECTED_RUNTIME: docker
         run: |
           sudo snap install --dangerous --classic "$SNAP_FILE"
           export VP_CONFIG_DIR="$RUNNER_TEMP/vibepod-snap-config"
@@ -58,11 +60,32 @@ jobs:
           snap run --shell vibepod <<'SH'
           exec "$SNAP/bin/python3" "$PWD/scripts/smoke_snap.py"
           SH
+      - name: Validate the packaged CLI with rootless Podman
+        env:
+          VP_SNAP_EXPECTED_RUNTIME: rootless-podman
+        run: |
+          systemctl --user enable --now podman.socket
+          export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+          curl --fail --silent --show-error --unix-socket "${DOCKER_HOST#unix://}" http://d/_ping
+          export VP_CONFIG_DIR="$RUNNER_TEMP/vibepod-snap-podman-config"
+          export VP_SNAP_EXPECTED_VERSION="$(python -c 'import importlib.metadata; print(importlib.metadata.version("vibepod"))')"
+          snap run --shell vibepod <<'SH'
+          exec "$SNAP/bin/python3" "$PWD/scripts/smoke_snap.py"
+          SH
       - uses: actions/upload-artifact@v4
         with:
           name: vibepod-snap-amd64
           path: ${{ steps.build.outputs.snap }}
           if-no-files-found: error
+      - name: Check release publisher setup
+        if: github.event_name == 'release'
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -z "$SNAPCRAFT_STORE_CREDENTIALS" ]; then
+            echo '::error::Snap publication requires SNAPCRAFT_STORE_CREDENTIALS. Complete the publisher setup in docs/snap.md.'
+            exit 1
+          fi
       - name: Publish validated release
         if: github.event_name == 'release'
         uses: snapcore/action-publish@v1
