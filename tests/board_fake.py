@@ -90,7 +90,8 @@ class FakeBoard:
                 return self._claim(body)
             if parts[:2] == ["api", "board"] and len(parts) == 4:
                 return {"handover": self._hand_over, "release": self._release}[parts[3]](
-                    parts[2], body
+                    parts[2],
+                    body,
                 )
             if parts == ["api", "workers"]:
                 return self._register(body)
@@ -227,7 +228,9 @@ class FakeBoardServer:
         handler = type("Handler", (_Handler,), {"board": board})
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = threading.Thread(
-            target=self.server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+            target=self.server.serve_forever,
+            kwargs={"poll_interval": 0.05},
+            daemon=True,
         )
 
     @property

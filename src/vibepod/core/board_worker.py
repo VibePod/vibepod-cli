@@ -259,7 +259,7 @@ def validate_branch_template(template: str) -> None:
     except (KeyError, IndexError, ValueError) as exc:
         raise ValueError(
             f"Invalid branch template {template!r}: use {{issue}}, {{number}}, {{key}} or "
-            "{project}"
+            "{project}",
         ) from exc
 
 
@@ -396,7 +396,10 @@ class BoardWorker:
 
     def run(self) -> WorkSummary:
         reply = self.client.register_worker(
-            self.options.project, self.options.name, self.options.agent, self.options.machine
+            self.options.project,
+            self.options.name,
+            self.options.agent,
+            self.options.machine,
         )
         self.worker_id = str(reply["item"]["id"])
         self.heartbeat_seconds = float(reply.get("heartbeatSeconds") or 15)
@@ -424,7 +427,8 @@ class BoardWorker:
                 return
             if self.board_pause:
                 if not self._wait_or_end(
-                    self.board_pause, f"Automation is paused: {self.board_pause}"
+                    self.board_pause,
+                    f"Automation is paused: {self.board_pause}",
                 ):
                     return
                 continue
@@ -716,14 +720,14 @@ class BoardWorker:
             path = Path(str(task["repositoryLocalPath"])).expanduser()
         if path is None:
             raise TaskProblem(
-                "No repository to work in: pass --repo, or set the task's local repository path"
+                "No repository to work in: pass --repo, or set the task's local repository path",
             )
         # Checked before git runs in it: the path may come from the board.
         resolved = path.resolve()
         if self.allow_repo is not None and not self.allow_repo(resolved):
             raise TaskProblem(
                 f"Repository {resolved} is not allowed for agents: run "
-                f"`vp config allow-dir {resolved}`"
+                f"`vp config allow-dir {resolved}`",
             )
         return worktrees.repository_root(resolved)
 
@@ -754,7 +758,8 @@ class BoardWorker:
                 allow_check_path=repo,
             )
         self.say(
-            "info", f"Agent running as task {run.task_id[:12]} (vp task logs {run.task_id[:12]})"
+            "info",
+            f"Agent running as task {run.task_id[:12]} (vp task logs {run.task_id[:12]})",
         )
         code, ended = self._wait_for(run.poll, run.stop, deadline)
         logs = run.logs()
@@ -807,7 +812,7 @@ class BoardWorker:
 
     def _did_work(self, worktree: worktrees.Worktree) -> bool:
         return worktrees.has_changes(worktree.path) or bool(
-            worktrees.commits_since(worktree.path, worktree.start)
+            worktrees.commits_since(worktree.path, worktree.start),
         )
 
     def _check_after_run(
@@ -825,13 +830,13 @@ class BoardWorker:
         if restored:
             raise TaskProblem(
                 f"The agent moved {', '.join(restored)}; restored them, and the work on "
-                f"{worktree.branch} needs a look"
+                f"{worktree.branch} needs a look",
             )
         on = worktrees.current_branch(worktree.path)
         if on != worktree.branch:
             raise TaskProblem(
                 f"The agent left the branch {worktree.branch} (now on {on or 'a detached HEAD'}); "
-                f"the worktree at {worktree.path} needs a look"
+                f"the worktree at {worktree.path} needs a look",
             )
 
     def _ended_early(self, ended: str, result: TaskResult) -> bool:
@@ -884,7 +889,10 @@ class BoardWorker:
             output.seek(0)
             text = output.read().decode("utf-8", errors="replace")
         return VerifyResult(
-            command=command, exit_code=code, output=shorten_output(text), ended=ended
+            command=command,
+            exit_code=code,
+            output=shorten_output(text),
+            ended=ended,
         )
 
     def _pause_for_usage_limit(self, logs: str) -> None:
@@ -937,7 +945,11 @@ class BoardWorker:
             self._deliver(
                 f"Giving {key} back",
                 lambda: self.client.release(
-                    card_ref, self.options.name, outcome, reason, max_attempts
+                    card_ref,
+                    self.options.name,
+                    outcome,
+                    reason,
+                    max_attempts,
                 ),
             )
             self.summary.returned.append(key)

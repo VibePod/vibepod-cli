@@ -34,7 +34,11 @@ from vibepod.core.board_worker import (
 
 def git(cwd: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
 
 
@@ -124,7 +128,7 @@ class FakeRunner:
         if self.fail_start:
             raise RunnerError("Docker is not running")
         self.starts.append(
-            {"prompt": prompt, "workspace": workspace, "mounts": mounts, "allow": allow_check_path}
+            {"prompt": prompt, "workspace": workspace, "mounts": mounts, "allow": allow_check_path},
         )
         run = FakeRun(f"task{len(self.runs):012d}", self.behaviour, workspace, prompt, self.polls)
         self.runs.append(run)
@@ -176,7 +180,9 @@ def work(
 
 
 def test_hands_a_task_over_after_the_agent_committed_and_verify_passed(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task(
         "Add the feature",
@@ -215,7 +221,9 @@ def test_hands_a_task_over_after_the_agent_committed_and_verify_passed(
 
 
 def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task(
         "Add the feature",
@@ -250,7 +258,9 @@ def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
 
 
 def test_reports_its_status_steps_and_task_in_heartbeats(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Add the feature")
 
@@ -265,14 +275,16 @@ def test_reports_its_status_steps_and_task_in_heartbeats(
         "handing_over",
     ]
     assert {beat.get("task") for beat in board.heartbeats if beat["status"] == "working"} == {
-        "idea-1"
+        "idea-1",
     }
     assert board.heartbeats[-1]["status"] == "idle"
     assert all(beat["leaseSeconds"] == 600 for beat in board.heartbeats)
 
 
 def test_commits_what_the_agent_left_uncommitted(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Leave changes")
 
@@ -288,7 +300,9 @@ def test_commits_what_the_agent_left_uncommitted(
 
 
 def test_works_through_every_planned_task_then_exits(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("First", githubIssueNumber=1)
     board.add_task("Second", githubIssueNumber=2)
@@ -301,7 +315,9 @@ def test_works_through_every_planned_task_then_exits(
 
 
 def test_once_and_max_limit_the_number_of_tasks(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     for number in range(3):
         board.add_task(f"Task {number}")
@@ -314,7 +330,9 @@ def test_once_and_max_limit_the_number_of_tasks(
 
 
 def test_claims_only_labelled_tasks_and_a_named_task(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Unmarked")
     board.add_task("Marked", labels=["agent"])
@@ -330,7 +348,9 @@ def test_claims_only_labelled_tasks_and_a_named_task(
 
 
 def test_a_named_task_that_cannot_be_claimed_ends_with_an_error(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Already in review", column="review")
 
@@ -344,7 +364,9 @@ def test_a_named_task_that_cannot_be_claimed_ends_with_an_error(
 
 
 def test_a_failed_verify_returns_the_task_to_planned_with_a_note(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Add the feature")
 
@@ -374,7 +396,9 @@ def test_a_failed_verify_returns_the_task_to_planned_with_a_note(
 
 
 def test_a_failing_task_is_retried_until_the_board_blocks_it(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Always fails")
 
@@ -392,7 +416,9 @@ def test_a_failing_task_is_retried_until_the_board_blocks_it(
 
 
 def test_failed_tasks_can_be_blocked_instead(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Add the feature")
 
@@ -404,7 +430,9 @@ def test_failed_tasks_can_be_blocked_instead(
 
 
 def test_an_agent_that_fails_or_changes_nothing_fails_the_run(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Crashes")
     board.add_task("Does nothing")
@@ -427,7 +455,9 @@ def test_an_agent_that_fails_or_changes_nothing_fails_the_run(
 
 
 def test_a_timed_out_agent_is_stopped_and_the_task_returned(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Endless")
     runner = FakeRunner(polls=None)
@@ -453,7 +483,9 @@ def test_a_task_without_a_repository_is_blocked(board: FakeBoard, server: FakeBo
 
 
 def test_uses_the_repository_path_of_the_task(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Has a path", repositoryLocalPath=str(repo))
 
@@ -463,7 +495,9 @@ def test_uses_the_repository_path_of_the_task(
 
 
 def test_a_start_failure_gives_the_task_back_and_stops_the_worker(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("First")
     board.add_task("Second")
@@ -479,7 +513,9 @@ def test_a_start_failure_gives_the_task_back_and_stops_the_worker(
 
 
 def test_continues_on_an_existing_branch(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Resumed")
     git(repo, "branch", "vp-1")
@@ -501,7 +537,9 @@ def test_continues_on_an_existing_branch(
 
 
 def test_refuses_an_existing_branch_when_asked(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Taken")
     git(repo, "branch", "vp-1")
@@ -516,7 +554,9 @@ def test_refuses_an_existing_branch_when_asked(
 
 
 def test_keeps_the_worktree_when_asked(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Keep it")
 
@@ -529,7 +569,9 @@ def test_keeps_the_worktree_when_asked(
 
 
 def test_a_run_cancelled_from_the_board_stops_without_giving_the_task_back(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Cancelled")
 
@@ -567,7 +609,9 @@ def test_a_run_cancelled_from_the_board_stops_without_giving_the_task_back(
 
 
 def test_a_cancelled_run_that_also_failed_is_not_given_back(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Cancelled and failing")
 
@@ -601,7 +645,9 @@ def test_a_cancelled_run_that_also_failed_is_not_given_back(
 
 
 def test_an_unexpected_error_gives_the_task_back_before_ending_the_worker(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Breaks the worker")
 
@@ -619,7 +665,9 @@ def test_an_unexpected_error_gives_the_task_back_before_ending_the_worker(
 
 
 def test_a_stop_from_the_board_ends_the_run_and_the_worker(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Stopped")
     board.add_task("Never started")
@@ -642,7 +690,9 @@ def test_a_stop_from_the_board_ends_the_run_and_the_worker(
 
 
 def test_a_paused_project_takes_no_new_task_until_resumed(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Waiting")
     board.paused = "Release freeze"
@@ -665,7 +715,9 @@ def test_a_paused_project_takes_no_new_task_until_resumed(
 
 
 def test_without_polling_a_paused_project_ends_the_worker(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Waiting")
     board.paused = "Release freeze"
@@ -677,7 +729,9 @@ def test_without_polling_a_paused_project_ends_the_worker(
 
 
 def test_a_usage_limit_returns_the_task_and_pauses_the_worker(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Too expensive")
     board.add_task("Next")
@@ -702,7 +756,9 @@ def test_a_usage_limit_returns_the_task_and_pauses_the_worker(
 
 
 def test_after_a_usage_limit_the_worker_waits_then_resumes(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Too expensive")
     board.add_task("Next")
@@ -731,7 +787,9 @@ def test_after_a_usage_limit_the_worker_waits_then_resumes(
 
 
 def test_a_usage_limit_is_detected_when_the_agent_exits_cleanly_without_work(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Limited quietly")
     board.add_task("Mentions limits")
@@ -764,7 +822,9 @@ def test_detects_usage_limits_only_at_the_end_of_the_output() -> None:
 
 
 def test_an_interrupt_stops_the_agent_and_gives_the_task_back(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Interrupted")
 
@@ -819,7 +879,10 @@ def test_stopping_a_verify_command_kills_its_whole_group(monkeypatch, tmp_path: 
 
 
 def test_host_git_never_runs_repository_hooks(
-    board: FakeBoard, server: FakeBoardServer, repo: Path, tmp_path: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
 ) -> None:
     board.add_task("Leaves changes behind")
     marker = tmp_path / "hook-ran"
@@ -839,7 +902,9 @@ def test_host_git_never_runs_repository_hooks(
 
 
 def test_a_worktree_pointing_elsewhere_is_left_alone(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Redirected")
 
@@ -856,7 +921,9 @@ def test_a_worktree_pointing_elsewhere_is_left_alone(
 
 
 def test_other_branches_the_agent_moved_are_restored(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Overreaches")
     main_before = git(repo, "rev-parse", "main")
@@ -875,7 +942,9 @@ def test_other_branches_the_agent_moved_are_restored(
 
 
 def test_an_agent_that_left_its_branch_blocks_the_task(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Wanders off")
 
@@ -892,7 +961,10 @@ def test_an_agent_that_left_its_branch_blocks_the_task(
 
 
 def test_a_branch_checked_out_in_someone_elses_worktree_is_not_taken_over(
-    board: FakeBoard, server: FakeBoardServer, repo: Path, tmp_path: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
 ) -> None:
     board.add_task("Mine, actually", githubIssueNumber=12)
     mine = tmp_path / "my-checkout"
@@ -911,7 +983,9 @@ def test_a_branch_checked_out_in_someone_elses_worktree_is_not_taken_over(
 
 
 def test_a_repository_that_is_not_allowed_is_never_touched(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Somewhere private", repositoryLocalPath=str(repo))
     runner = FakeRunner()
@@ -926,7 +1000,9 @@ def test_a_repository_that_is_not_allowed_is_never_touched(
 
 
 def test_a_continued_branch_that_already_holds_the_work_is_handed_over(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Done last time")
     git(repo, "checkout", "--quiet", "-b", "vp-1")
@@ -946,7 +1022,9 @@ def test_a_continued_branch_that_already_holds_the_work_is_handed_over(
 
 
 def test_board_writes_survive_a_board_restart(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Fails while the board restarts")
     board.add_task("Handed over after the restart")
@@ -970,7 +1048,9 @@ def test_board_writes_survive_a_board_restart(
 
 
 def test_claims_ride_out_a_board_restart_while_polling(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.add_task("Waiting for the board")
     board.failures = {"POST /api/board/claim": 1}
@@ -982,7 +1062,11 @@ def test_claims_ride_out_a_board_restart_while_polling(
 
 
 def test_the_verify_command_never_sees_the_board_token(
-    monkeypatch, board: FakeBoard, server: FakeBoardServer, repo: Path, tmp_path: Path
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
 ) -> None:
     board.add_task("Verified")
     monkeypatch.setenv("VP_BOARD_TOKEN", TOKEN)
@@ -1040,7 +1124,10 @@ def test_one_run_at_a_time_per_profile(tmp_path: Path) -> None:
 
 
 def test_a_worker_waits_for_the_profile_lock(
-    board: FakeBoard, server: FakeBoardServer, repo: Path, tmp_path: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
 ) -> None:
     board.add_task("Waits its turn")
     held = FileProfileLock(tmp_path / "profile.lock", "default")
@@ -1104,10 +1191,10 @@ def test_board_settings_come_from_config_and_environment(monkeypatch, tmp_path: 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "config.yaml").write_text(
-        "board:\n  url: http://board.local:3000/\n  token: vbp_from-config\n"
+        "board:\n  url: http://board.local:3000/\n  token: vbp_from-config\n",
     )
     assert resolve_board_settings(get_config()) == resolve_board_settings(
-        {"board": {"url": "http://board.local:3000", "token": "vbp_from-config"}}
+        {"board": {"url": "http://board.local:3000", "token": "vbp_from-config"}},
     )
 
     monkeypatch.setenv("VP_BOARD_URL", "https://board.example.com")
@@ -1163,7 +1250,9 @@ class _Manager:
 
 
 def test_the_docker_runner_keeps_the_board_token_from_the_agent(
-    monkeypatch, tmp_path: Path, repo: Path
+    monkeypatch,
+    tmp_path: Path,
+    repo: Path,
 ) -> None:
     from vibepod.commands import task as task_cmd
     from vibepod.core.tasks import TaskStore
@@ -1185,11 +1274,16 @@ def test_the_docker_runner_keeps_the_board_token_from_the_agent(
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     runner = board_cmd.DockerAgentRunner(
-        "claude", env=[f"ALSO={TOKEN}", "KEEP=1"], forbidden_env_values=(TOKEN,)
+        "claude",
+        env=[f"ALSO={TOKEN}", "KEEP=1"],
+        forbidden_env_values=(TOKEN,),
     )
 
     run = runner.start(
-        "Do it", worktree, mounts=[("/repo/.git", "/repo/.git", "rw")], allow_check_path=repo
+        "Do it",
+        worktree,
+        mounts=[("/repo/.git", "/repo/.git", "rw")],
+        allow_check_path=repo,
     )
 
     assert manager.run_kwargs is not None
@@ -1210,7 +1304,9 @@ def test_the_docker_runner_keeps_the_board_token_from_the_agent(
 
 
 def test_the_docker_runner_backs_the_time_limit_and_tells_hiccups_from_exits(
-    monkeypatch, tmp_path: Path, repo: Path
+    monkeypatch,
+    tmp_path: Path,
+    repo: Path,
 ) -> None:
     import docker.errors
 
@@ -1236,7 +1332,10 @@ def test_the_docker_runner_backs_the_time_limit_and_tells_hiccups_from_exits(
     worktree.mkdir()
 
     run = board_cmd.DockerAgentRunner("claude", timeout_seconds=600).start(
-        "Do it", worktree, mounts=[], allow_check_path=repo
+        "Do it",
+        worktree,
+        mounts=[],
+        allow_check_path=repo,
     )
 
     assert watchers == [(run.task_id, 600 + board_cmd.WATCHER_SLACK_SECONDS)]
@@ -1255,7 +1354,8 @@ def test_the_docker_runner_backs_the_time_limit_and_tells_hiccups_from_exits(
 
 
 def test_the_docker_runner_turns_launch_failures_into_runner_errors(
-    monkeypatch, tmp_path: Path
+    monkeypatch,
+    tmp_path: Path,
 ) -> None:
     from vibepod.commands import task as task_cmd
 
@@ -1265,7 +1365,10 @@ def test_the_docker_runner_turns_launch_failures_into_runner_errors(
 
     with pytest.raises(RunnerError, match="could not be started"):
         board_cmd.DockerAgentRunner("claude").start(
-            "Do it", tmp_path, mounts=[], allow_check_path=tmp_path
+            "Do it",
+            tmp_path,
+            mounts=[],
+            allow_check_path=tmp_path,
         )
 
 
@@ -1273,7 +1376,11 @@ def test_the_docker_runner_turns_launch_failures_into_runner_errors(
 
 
 def test_vp_board_work_runs_a_task_end_to_end(
-    monkeypatch, board: FakeBoard, server: FakeBoardServer, repo: Path, tmp_path: Path
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
 ) -> None:
     board.add_task("From the command line", githubIssueNumber=7)
     runner = FakeRunner()
@@ -1351,7 +1458,7 @@ def test_worktree_helpers_prepare_and_clean_up(repo: Path, tmp_path: Path) -> No
     assert worktrees.has_changes(fresh.path)
     worktrees.commit_all(fresh.path, "Change")
     assert [commit["subject"] for commit in worktrees.commits_since(fresh.path, fresh.start)] == [
-        "Change"
+        "Change",
     ]
 
     again = worktrees.prepare_worktree(repo, tmp_path / "trees", "vp-9", "main")

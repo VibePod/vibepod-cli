@@ -164,7 +164,8 @@ class DockerAgentRunner:
             # A backstop outside this process: the container still stops at its time limit
             # when the worker itself dies. The worker enforces the limit first.
             task_cmd._start_timeout_watcher(
-                launched.record.id, self.timeout_seconds + WATCHER_SLACK_SECONDS
+                launched.record.id,
+                self.timeout_seconds + WATCHER_SLACK_SECONDS,
             )
         return DockerAgentRun(launched)
 
@@ -225,7 +226,10 @@ def board_work(
     min_readiness: Annotated[
         int | None,
         typer.Option(
-            "--min-readiness", min=1, max=10, help="Only claim tasks rated at least this ready"
+            "--min-readiness",
+            min=1,
+            max=10,
+            help="Only claim tasks rated at least this ready",
         ),
     ] = None,
     task: Annotated[
@@ -234,7 +238,8 @@ def board_work(
     ] = None,
     once: Annotated[bool, typer.Option("--once", help="Work on one task, then exit")] = False,
     max_tasks: Annotated[
-        int | None, typer.Option("--max", min=1, help="Exit after this many tasks")
+        int | None,
+        typer.Option("--max", min=1, help="Exit after this many tasks"),
     ] = None,
     poll: Annotated[
         str | None,
@@ -257,7 +262,8 @@ def board_work(
     base: Annotated[
         str | None,
         typer.Option(
-            "--base", help="Where new branches start; defaults to the repository's current branch"
+            "--base",
+            help="Where new branches start; defaults to the repository's current branch",
         ),
     ] = None,
     branch_template: Annotated[
@@ -271,11 +277,13 @@ def board_work(
     existing: Annotated[
         ExistingMode,
         typer.Option(
-            "--existing", help="When the task's branch or worktree exists: continue or refuse"
+            "--existing",
+            help="When the task's branch or worktree exists: continue or refuse",
         ),
     ] = ExistingMode.CONTINUE,
     keep_worktree: Annotated[
-        bool, typer.Option("--keep-worktree", help="Keep worktrees after the hand-over")
+        bool,
+        typer.Option("--keep-worktree", help="Keep worktrees after the hand-over"),
     ] = False,
     profile: Annotated[
         str | None,
@@ -302,12 +310,14 @@ def board_work(
         typer.Option("--network", help="Additional Docker network for the agent container"),
     ] = None,
     no_overlay: Annotated[
-        bool, typer.Option("--no-overlay", help="Skip the project overlay image")
+        bool,
+        typer.Option("--no-overlay", help="Skip the project overlay image"),
     ] = False,
     verify: Annotated[
         str | None,
         typer.Option(
-            "--verify", help="Command that must pass in the worktree before the hand-over"
+            "--verify",
+            help="Command that must pass in the worktree before the hand-over",
         ),
     ] = None,
     on_fail: Annotated[
@@ -418,7 +428,8 @@ def board_work(
         None
         if parallel
         else FileProfileLock(
-            get_config_root() / "locks" / f"board-work-{active_profile}.lock", active_profile
+            get_config_root() / "locks" / f"board-work-{active_profile}.lock",
+            active_profile,
         )
     )
     worker = BoardWorker(

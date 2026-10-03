@@ -133,7 +133,11 @@ class BoardClient:
         return result
 
     def hand_over(
-        self, card: str, assignee: str, branch_name: str | None = None, note: str | None = None
+        self,
+        card: str,
+        assignee: str,
+        branch_name: str | None = None,
+        note: str | None = None,
     ) -> dict[str, Any]:
         body = _body(assignee=assignee, branchName=branch_name, note=note)
         result: dict[str, Any] = self.request("POST", f"/api/board/{_ref(card)}/handover", body)
@@ -176,7 +180,9 @@ class BoardClient:
             leaseSeconds=lease_seconds,
         )
         result: dict[str, Any] = self.request(
-            "POST", f"/api/workers/{_ref(worker_id)}/heartbeat", body
+            "POST",
+            f"/api/workers/{_ref(worker_id)}/heartbeat",
+            body,
         )
         return result
 
@@ -188,7 +194,9 @@ class BoardClient:
 
     def add_run_report(self, task: str, report: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = self.request(
-            "POST", f"/api/ideas/{_ref(task)}/runs", _body(**report)
+            "POST",
+            f"/api/ideas/{_ref(task)}/runs",
+            _body(**report),
         )
         return _item(result)
 

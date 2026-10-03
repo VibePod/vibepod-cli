@@ -140,7 +140,7 @@ def prepare_worktree(
         if checked_out is not None and not _inside(checked_out, worktrees_dir):
             raise GitError(
                 f"Branch {branch} is checked out in {checked_out}, outside {worktrees_dir}; "
-                "not working in someone else's checkout"
+                "not working in someone else's checkout",
             )
         path = checked_out or _add(repo, worktrees_dir, branch)
         return Worktree(
@@ -179,7 +179,9 @@ def admin_dir(worktree: Path) -> Path:
 
 
 def agent_mounts(
-    repo: Path, worktree: Path, workspace_mount: str = "/workspace"
+    repo: Path,
+    worktree: Path,
+    workspace_mount: str = "/workspace",
 ) -> list[tuple[str, str, str]]:
     """The volumes the agent container needs besides the worktree: the git directory the
     worktree points into, at the same path so git works in the container. It stays writable
@@ -223,7 +225,11 @@ def verify_pointers(worktree: Path, before: dict[str, str]) -> None:
 
 def branch_refs(repo: Path) -> dict[str, str]:
     output = git(
-        repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags"
+        repo,
+        "for-each-ref",
+        "--format=%(refname) %(objectname)",
+        "refs/heads",
+        "refs/tags",
     )
     refs = {}
     for line in output.splitlines():
