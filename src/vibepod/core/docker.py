@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from vibepod.constants import CONTAINER_LABEL_MANAGED
+from vibepod.constants import CONTAINER_LABEL_MANAGED, agent_ids
 
 docker: Any | None
 APIError: type[Exception]
@@ -762,8 +762,10 @@ class DockerManager:
     def stop_agent(self, agent: str, force: bool = False) -> int:
         stopped = 0
         timeout = 0 if force else 10
+        # Containers started before a rename still carry the legacy agent label.
+        labels = agent_ids(agent)
         for container in self.list_managed(all_containers=True):
-            if container.labels.get("vibepod.agent") != agent:
+            if container.labels.get("vibepod.agent") not in labels:
                 continue
             try:
                 container.stop(timeout=timeout)
