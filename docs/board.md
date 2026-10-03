@@ -110,9 +110,10 @@ The agent runs in its container; the worker keeps it there:
 - Git on your machine never runs hooks or an fsmonitor while the worker uses it. The agent
   container can commit to the repository, but its git configuration, hooks, the
   worktree's pointers into the repository, and the HEAD and index of your own checkout
-  are read-only there. A run that changed them
-  anyway, moved other branches or tags (they are put back), or left its own branch blocks
-  the task for a look instead of being handed over.
+  are read-only there. A run that changed them anyway, moved other branches or tags
+  (they are put back), or left its own branch blocks the task for a look instead of
+  being handed over. Branches others move meanwhile are left alone: those of other
+  tasks, and a branch you commit to in your own checkout.
 - Only worktrees in the worktree folder are reused or removed. A branch checked out
   anywhere else, such as in your own worktree, is never taken over.
 - A repository named by a task on the board must be on the allowed directories list,

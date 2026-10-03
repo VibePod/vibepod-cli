@@ -784,6 +784,7 @@ class BoardWorker:
             mounts = worktrees.agent_mounts(repo, worktree.path)
             pointers = worktrees.pointers(worktree.path)
             refs = worktrees.branch_refs(repo)
+            checked_out = worktrees.checkouts(repo)
             run = self.runner.start(
                 build_prompt(task, worktree.branch),
                 worktree.path,
@@ -798,7 +799,7 @@ class BoardWorker:
         logs = run.logs()
         result.summary = summarize_logs(logs)
         with self._keepalive():
-            self._check_after_run(repo, worktree, pointers, refs)
+            self._check_after_run(repo, worktree, pointers, refs, checked_out)
         if self._ended_early(ended, result):
             return
         # Some agents exit cleanly when a limit stops them, so a run that left no work is
@@ -865,16 +866,29 @@ class BoardWorker:
         worktree: worktrees.Worktree,
         pointers: dict[str, str],
         refs: dict[str, str],
+        checked_out: dict[str, Path],
     ) -> None:
         """What the agent must not have done, checked before git on the host touches the
         worktree: redirect it to another git directory, move other branches or tags, or leave
         its own branch."""
         worktrees.verify_pointers(worktree.path, pointers)
-        restored = worktrees.restore_refs(repo, refs, worktree.branch)
+        restored, left = worktrees.restore_refs(
+            repo,
+            refs,
+            worktree.branch,
+            self._worktree_dir(repo),
+            checked_out,
+        )
         if restored:
             raise TaskProblem(
                 f"The agent moved {', '.join(restored)}; restored them, and the work on "
                 f"{worktree.branch} needs a look",
+            )
+        if left:
+            raise TaskProblem(
+                f"{', '.join(left)} moved during the run, in a checkout with changes staged; "
+                f"left as they are: check whether the agent moved them, and the work on "
+                f"{worktree.branch}",
             )
         on = worktrees.current_branch(worktree.path)
         if on != worktree.branch:

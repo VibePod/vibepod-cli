@@ -117,15 +117,21 @@ def is_valid_branch_name(repo: Path, branch: str) -> bool:
     return _run(repo, "check-ref-format", "--branch", branch).returncode == 0
 
 
-def worktree_of_branch(repo: Path, branch: str) -> Path | None:
-    """Where the branch is checked out as a worktree, if anywhere."""
+def checkouts(repo: Path) -> dict[str, Path]:
+    """The branches checked out in the repository's worktrees, by ref, and where."""
+    found: dict[str, Path] = {}
     current: Path | None = None
     for line in git(repo, "worktree", "list", "--porcelain").splitlines():
         if line.startswith("worktree "):
             current = Path(line[len("worktree ") :])
-        elif line == f"branch refs/heads/{branch}" and current is not None:
-            return current.resolve()
-    return None
+        elif line.startswith("branch ") and current is not None:
+            found[line[len("branch ") :]] = current.resolve()
+    return found
+
+
+def worktree_of_branch(repo: Path, branch: str) -> Path | None:
+    """Where the branch is checked out as a worktree, if anywhere."""
+    return checkouts(repo).get(f"refs/heads/{branch}")
 
 
 def worktree_folder(branch: str) -> str:
@@ -300,16 +306,48 @@ def branch_refs(repo: Path) -> dict[str, str]:
     return refs
 
 
-def restore_refs(repo: Path, before: dict[str, str], own_branch: str) -> list[str]:
-    """Puts back every branch and tag other than the task's own that moved or vanished during
-    the run, and names them."""
+def _index_matches(checkout: Path, sha: str) -> bool:
+    """Whether the checkout's staging index holds the commit's tree: it does after the
+    user committed there, and it does not when its branch was moved behind its back."""
+    return _run(checkout, "diff-index", "--cached", "--quiet", sha, "--").returncode == 0
+
+
+def restore_refs(
+    repo: Path,
+    before: dict[str, str],
+    own_branch: str,
+    worktrees_dir: Path,
+    checked_out_before: dict[str, Path],
+) -> tuple[list[str], list[str]]:
+    """Puts back the branches and tags other than the task's own that the agent moved or
+    removed during the run. Says which it restored, and which moved in a checkout but
+    could not be told apart from the user's own work there, so were left as they are.
+
+    Others may move refs meanwhile too: the branches of other tasks, checked out in the
+    worktree folder, are theirs; and a branch checked out elsewhere, such as in the user's
+    checkout, moved with its checkout's index when the user committed there. Neither is
+    touched. Each ref is put back only if it did not move again since it was read."""
     after = branch_refs(repo)
-    restored = []
+    checked_out = {**checked_out_before, **checkouts(repo)}
+    restored: list[str] = []
+    left: list[str] = []
     for ref, sha in before.items():
-        if ref != f"refs/heads/{own_branch}" and after.get(ref) != sha:
-            git(repo, "update-ref", ref, sha)
-            restored.append(ref.removeprefix("refs/heads/"))
-    return restored
+        now = after.get(ref, "")
+        if ref == f"refs/heads/{own_branch}" or now == sha:
+            continue
+        name = ref.removeprefix("refs/heads/")
+        checkout = checked_out.get(ref)
+        if checkout is not None and _inside(checkout, worktrees_dir):
+            continue
+        if checkout is not None and checkout.is_dir():
+            if now and _index_matches(checkout, now):
+                continue
+            if not _index_matches(checkout, sha):
+                left.append(name)
+                continue
+        git(repo, "update-ref", ref, sha, now)
+        restored.append(name)
+    return restored, left
 
 
 def commits_since(path: Path, start: str) -> list[dict[str, str]]:

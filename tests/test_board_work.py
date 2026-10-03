@@ -1125,6 +1125,52 @@ def test_other_branches_the_agent_moved_are_restored(
     assert release["note"].startswith("The agent moved main; restored them")
 
 
+def test_refs_others_move_during_the_run_are_left_alone(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Runs while others work")
+    # Another task's branch, in a worktree of another worker, from an earlier run.
+    other = repo.parent / "app-worktrees" / "vp-9"
+    git(repo, "worktree", "add", "--quiet", "-b", "vp-9", str(other))
+
+    def others_commit_meanwhile(path: Path, prompt: str) -> tuple[int, str]:
+        (repo / "mine.txt").write_text("the user's own work\n")
+        git(repo, "add", "mine.txt")
+        git(repo, "commit", "--quiet", "-m", "The user commits on main")
+        git(other, "commit", "--quiet", "--allow-empty", "-m", "The other worker's agent")
+        return commits_a_feature(path, prompt)
+
+    worker, _ = work(server, FakeRunner(others_commit_meanwhile), repo, once=True)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    assert git(repo, "log", "-1", "--format=%s", "main") == "The user commits on main"
+    assert git(repo, "log", "-1", "--format=%s", "vp-9") == "The other worker's agent"
+
+
+def test_a_moved_branch_that_cannot_be_told_from_the_users_work_is_left_and_blocks(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Ambiguous")
+
+    def moves_main_while_the_user_stages(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        git(path, "update-ref", "refs/heads/main", "HEAD")
+        (repo / "staged.txt").write_text("staged by the user\n")
+        git(repo, "add", "staged.txt")
+        return 0, "Done."
+
+    work(server, FakeRunner(moves_main_while_the_user_stages), repo, once=True)
+
+    assert git(repo, "log", "-1", "--format=%s", "main") == "Add the feature"
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith("main moved during the run, in a checkout with changes")
+
+
 def test_an_agent_that_left_its_branch_blocks_the_task(
     board: FakeBoard,
     server: FakeBoardServer,
