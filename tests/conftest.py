@@ -42,3 +42,27 @@ def _no_ambient_herdr_env(monkeypatch):
     for key in list(os.environ):
         if key.startswith("HERDR_"):
             monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_dash_env(monkeypatch):
+    """Strip VPDASH_* env so tests never report to a real dashboard.
+
+    A developer with VPDASH_URL exported (the zero-config way to point `vp run`
+    at a board) would otherwise have the suite post events to it.
+    """
+    for key in list(os.environ):
+        if key.startswith("VPDASH_"):
+            monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_dash_finish_markers(monkeypatch, tmp_path_factory):
+    """Keep the dash once-only finish markers out of the real config dir.
+
+    Fresh per test, so one test's claimed finish never silences another's.
+    """
+    from vibepod.core import dash
+
+    markers = tmp_path_factory.mktemp("dash-finished")
+    monkeypatch.setattr(dash, "_finish_marker_dir", lambda: markers)

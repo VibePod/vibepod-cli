@@ -186,6 +186,15 @@ logging:
   db_path: ~/.config/vibepod/logs.db
   ui_port: 8001 # Port for the Datasette UI
 
+# Report agent state to a VibePod Dash board (see the Dash integration page)
+dash:
+  enabled: true
+  url: ""            # e.g. http://localhost:8765; empty disables reporting
+  token: ""          # ingest token of the dash server
+  container_url: ""  # Override the URL agents use; defaults to `url` with
+                     # localhost rewritten to host.docker.internal
+  integrations: {}   # Extra hook files per agent, {agent: [{source, dest}]}
+
 proxy:
   enabled: true
   image: vibepod/proxy:latest
@@ -202,22 +211,25 @@ proxy:
 
 These variables override the corresponding config keys without editing any file:
 
-| Variable               | Config key          | Example                                  |
-| ---------------------- | ------------------- | ---------------------------------------- |
-| `VP_DEFAULT_AGENT`     | `default_agent`     | `VP_DEFAULT_AGENT=vibe`                  |
-| `VP_AUTO_PULL`         | `auto_pull`         | `VP_AUTO_PULL=true`                      |
-| `VP_AUTO_CLEAN`        | `auto_clean`        | `VP_AUTO_CLEAN=false`                    |
-| `VP_LOG_LEVEL`         | `log_level`         | `VP_LOG_LEVEL=debug`                     |
-| `VP_NO_COLOR`          | `no_color`          | `VP_NO_COLOR=true`                       |
-| `VP_DATASETTE_PORT`    | `logging.ui_port`   | `VP_DATASETTE_PORT=9001`                 |
-| `VP_PROXY_ENABLED`     | `proxy.enabled`     | `VP_PROXY_ENABLED=false`                 |
-| `VP_PROXY_FILTER_MODE` | `proxy.filter.mode` | `VP_PROXY_FILTER_MODE=allow`             |
-| `VP_LLM_ENABLED`       | `llm.enabled`       | `VP_LLM_ENABLED=true`                    |
-| `VP_LLM_BASE_URL`      | `llm.base_url`      | `VP_LLM_BASE_URL=http://localhost:11434` |
-| `VP_LLM_API_KEY`       | `llm.api_key`       | `VP_LLM_API_KEY=ollama`                  |
-| `VP_LLM_MODEL`         | `llm.model`         | `VP_LLM_MODEL=qwen3:14b`                 |
-| `VP_CONFIG_DIR`        | _(config root)_     | `VP_CONFIG_DIR=/custom/path`             |
-| `VP_PROFILE`           | `profile`           | `VP_PROFILE=work`                        |
+| Variable               | Config key           | Example                                         |
+| ---------------------- | -------------------- | ----------------------------------------------- |
+| `VP_DEFAULT_AGENT`     | `default_agent`      | `VP_DEFAULT_AGENT=vibe`                         |
+| `VP_AUTO_PULL`         | `auto_pull`          | `VP_AUTO_PULL=true`                             |
+| `VP_AUTO_CLEAN`        | `auto_clean`         | `VP_AUTO_CLEAN=false`                           |
+| `VP_LOG_LEVEL`         | `log_level`          | `VP_LOG_LEVEL=debug`                            |
+| `VP_NO_COLOR`          | `no_color`           | `VP_NO_COLOR=true`                              |
+| `VP_DATASETTE_PORT`    | `logging.ui_port`    | `VP_DATASETTE_PORT=9001`                        |
+| `VP_PROXY_ENABLED`     | `proxy.enabled`      | `VP_PROXY_ENABLED=false`                        |
+| `VP_PROXY_FILTER_MODE` | `proxy.filter.mode`  | `VP_PROXY_FILTER_MODE=allow`                    |
+| `VP_LLM_ENABLED`       | `llm.enabled`        | `VP_LLM_ENABLED=true`                           |
+| `VP_LLM_BASE_URL`      | `llm.base_url`       | `VP_LLM_BASE_URL=http://localhost:11434`        |
+| `VP_LLM_API_KEY`       | `llm.api_key`        | `VP_LLM_API_KEY=ollama`                         |
+| `VP_LLM_MODEL`         | `llm.model`          | `VP_LLM_MODEL=qwen3:14b`                        |
+| `VPDASH_URL`           | `dash.url`           | `VPDASH_URL=http://localhost:8765`              |
+| `VPDASH_TOKEN`         | `dash.token`         | `VPDASH_TOKEN=s3cret`                           |
+| `VPDASH_CONTAINER_URL` | `dash.container_url` | `VPDASH_CONTAINER_URL=http://vibepod-dash:8765` |
+| `VP_CONFIG_DIR`        | _(config root)_      | `VP_CONFIG_DIR=/custom/path`                    |
+| `VP_PROFILE`           | `profile`            | `VP_PROFILE=work`                               |
 
 The `profile` key selects the active [credential profile](profiles.md); the
 `--profile` flag on `vp run`, `vp task create`, and `vp doctor claude` takes

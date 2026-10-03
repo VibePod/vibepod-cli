@@ -62,6 +62,7 @@ nav:
       - Overview: overlays/index.md
       - Recipes: overlays/recipes.md
   - Herdr integration: herdr.md
+  - Dash integration: dash.md
   - Editor integration (ACP): acp.md
   - Configuration: configuration.md
   - LLM Integration: llm.md

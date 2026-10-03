@@ -30,6 +30,17 @@ image needs its own runtime user and rejects the UID rootless keep-id maps the
 container to, including 0), and `/opt/hermes` (its install root) is reserved so
 an `--acp` workspace bind cannot shadow the entrypoint/venv/`hermes-acp`.
 
+## State-reporting integrations (herdr, dash)
+
+`core/herdr.py` and `core/dash.py` share the same shape: a config gate, a
+data-driven map of vendored files to inject into the agent config dir, and
+per-agent registration (claude `settings.json`, codex `.codex/hooks.json`).
+Both copy through `core/hooksync.py`, and both must soft-fail — a broken
+integration never blocks a run. The dash client scripts are vendored from the
+vibepod-dash repo; see `src/vibepod/resources/dash/README.md` before editing
+them. Codex registration is shared through `core/codex_hooks.py`, which lets
+Dash and herdr coexist and removes only VibePod's legacy `notify` entries.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

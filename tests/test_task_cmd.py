@@ -29,6 +29,7 @@ def _allow_all_dirs(monkeypatch):
         "_start_timeout_watcher",
         lambda task_id, timeout_seconds: None,
     )
+    monkeypatch.setattr(task_cmd, "_start_exit_watcher", lambda task_id: None)
 
 
 @pytest.fixture
@@ -620,6 +621,46 @@ def test_task_create_accepts_timeout_override(monkeypatch, tmp_path, tmp_task_st
 
     rows = tmp_task_store.list()
     assert launched == [(rows[0].id, 1800)]
+
+
+def test_task_create_watches_for_the_exit_when_reporting_to_dash(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    from vibepod.core import dash
+
+    stub = _CapturingDockerManager()
+    watched: list[str] = []
+    target = dash.make_target("claude", tmp_path, {"dash": {"url": "http://127.0.0.1:1"}})
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(task_cmd, "apply_dash_if_enabled", lambda *a, **kw: (target, {}))
+    monkeypatch.setattr(task_cmd, "dash_report", lambda *a, **kw: True)
+    monkeypatch.setattr(task_cmd, "_start_exit_watcher", watched.append)
+
+    task_cmd.task_create(agent="claude", prompt="do a thing", workspace=tmp_path)
+
+    assert watched == [tmp_task_store.list()[0].id]
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["extra_labels"][dash.RUN_ID_LABEL] == target.run_id
+
+
+def test_task_create_without_dash_starts_no_exit_watcher(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+    monkeypatch.setattr(
+        task_cmd,
+        "_start_exit_watcher",
+        lambda task_id: pytest.fail("exit watcher should not start"),
+    )
+
+    task_cmd.task_create(agent="claude", prompt="do a thing", workspace=tmp_path)
 
 
 def test_task_create_timeout_none_disables_watcher(monkeypatch, tmp_path, tmp_task_store) -> None:
@@ -1730,3 +1771,24 @@ def test_task_create_provider_wrapper_follows_native_entrypoint_with_init(
     wrapped = json.loads(kwargs["env"]["VIBEPOD_PROVIDER_COMMAND"])
     # Explicit passthrough model wins; the routing flag survives.
     assert wrapped == ["tau", "-p", "--provider", "hosted", "run tests", "--model", "other"]
+
+
+@pytest.mark.parametrize("os_name", ["posix", "nt"])
+def test_background_watchers_detach_on_every_host_os(monkeypatch, os_name) -> None:
+    launched: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(task_cmd.os, "name", os_name)
+    monkeypatch.setattr(
+        task_cmd.subprocess,
+        "Popen",
+        lambda args, **kwargs: launched.append((args, kwargs)),
+    )
+
+    task_cmd._spawn_detached(["task", "_watch-exit", "abc"])
+
+    [(args, kwargs)] = launched
+    assert args[-3:] == ["task", "_watch-exit", "abc"]
+    if os_name == "nt":
+        assert "start_new_session" not in kwargs
+        assert "creationflags" in kwargs
+    else:
+        assert kwargs["start_new_session"] is True
