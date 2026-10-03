@@ -133,7 +133,8 @@ the same profile waits for the first to finish its task; `--parallel` turns
 the lock off.
 
 When the agent stops at a usage limit, the task goes back to Planned without
-counting a failed attempt, and the worker pauses until the limit resets (when
+counting a failed attempt (also when the agent exits cleanly with a limit
+message and no work), and the worker pauses until the limit resets (when
 the agent says when) or for `--usage-limit-wait`. The board shows the worker as
 paused with the reason.
 
@@ -151,4 +152,6 @@ carries the board's instructions:
 - **Cancel** a run: the task is already back in Planned; the worker ends the
   run and reports it as cancelled.
 
-`Ctrl+C` stops the worker the same way.
+`Ctrl+C` stops the worker the same way. If the worker itself fails with an
+unexpected error, it gives the task back to Planned before it exits, so the task
+does not stay claimed until its lease runs out.

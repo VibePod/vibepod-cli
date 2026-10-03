@@ -698,6 +698,16 @@ class BoardWorker:
             )
             self._finish(key, card, result, started_at, started, repo, worktree)
             raise
+        except Exception as exc:
+            # Something the worker did not expect: the task goes back before the error ends
+            # the worker, instead of staying claimed until its lease runs out.
+            result.outcome, result.reason, result.release = (
+                "failed",
+                f"The worker failed: {exc}",
+                "released",
+            )
+            self._finish(key, card, result, started_at, started, repo, worktree)
+            raise
         self._finish(key, card, result, started_at, started, repo, worktree)
 
     def _repository(self, task: dict[str, Any]) -> Path:
@@ -752,15 +762,18 @@ class BoardWorker:
         self._check_after_run(repo, worktree, pointers, refs)
         if self._ended_early(ended, result):
             return
+        # Some agents exit cleanly when a limit stops them, so a run that left no work is
+        # searched too.
+        limited = usage_limit_in(logs) and (code != 0 or not self._did_work(worktree))
+        if limited:
+            result.outcome, result.reason, result.release = (
+                "usage_limit",
+                "The agent reached its usage limit",
+                "released",
+            )
+            self._pause_for_usage_limit(logs)
+            return
         if code != 0:
-            if usage_limit_in(logs):
-                result.outcome, result.reason, result.release = (
-                    "usage_limit",
-                    "The agent reached its usage limit",
-                    "released",
-                )
-                self._pause_for_usage_limit(logs)
-                return
             result.outcome, result.reason, result.release = (
                 "failed",
                 f"The agent exited with code {code}",
@@ -791,6 +804,11 @@ class BoardWorker:
                 )
                 return
         result.outcome, result.reason, result.release = "done", None, None
+
+    def _did_work(self, worktree: worktrees.Worktree) -> bool:
+        return worktrees.has_changes(worktree.path) or bool(
+            worktrees.commits_since(worktree.path, worktree.start)
+        )
 
     def _check_after_run(
         self,
@@ -888,8 +906,12 @@ class BoardWorker:
         repo: Path | None,
         worktree: worktrees.Worktree | None,
     ) -> None:
-        if result.outcome == "done" and self.cancel_reason is not None:
-            result.outcome, result.reason, result.release = "cancelled", self.cancel_reason, None
+        if self.cancel_reason is not None:
+            # The board already put the task back; it is no longer ours to hand over or
+            # release, whatever the run came to.
+            if result.outcome == "done":
+                result.outcome, result.reason = "cancelled", self.cancel_reason
+            result.release = None
         card_ref = str(card["id"])
         branch, note = result.branch, self._handover_note(result)
         if result.outcome == "done":
@@ -923,7 +945,7 @@ class BoardWorker:
         else:
             self.summary.returned.append(key)
             self.say("warning", f"{key}: {result.reason}")
-        if result.outcome == "cancelled" and result.release is None:
+        if result.outcome != "done" and result.release is None:
             self.passed_over.append(self._task_id())
         self._report(key, result, started_at, started)
         if (

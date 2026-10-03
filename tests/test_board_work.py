@@ -566,6 +566,58 @@ def test_a_run_cancelled_from_the_board_stops_without_giving_the_task_back(
     assert board.card("VP-1")["column"] == "planned"
 
 
+def test_a_cancelled_run_that_also_failed_is_not_given_back(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Cancelled and failing")
+
+    def cancel_once_running(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") == "agent_running":
+            board.cards["idea-1"].update(column="planned", assignee=None, claimedAt=None)
+            return [{"type": "cancel", "taskId": "idea-1", "reason": "Run cancelled by admin"}]
+        return []
+
+    board.on_heartbeat = cancel_once_running
+
+    class DetachesWhenStopped(FakeRunner):
+        """Leaves its branch on the way out, which the check after the run catches."""
+
+        def start(self, prompt: str, workspace: Path, **kwargs: Any) -> FakeRun:
+            run = super().start(prompt, workspace, **kwargs)
+            stop = run.stop
+
+            def detach_and_stop() -> None:
+                git(workspace, "checkout", "--quiet", "--detach")
+                stop()
+
+            run.stop = detach_and_stop  # type: ignore[method-assign]
+            return run
+
+    worker, _ = work(server, DetachesWhenStopped(polls=None), repo, once=True)
+
+    assert board.runs[0]["failureReason"].startswith("The agent left the branch")
+    assert board.requests("POST", "/api/board/card-1/release") == []
+    assert list(worker.passed_over) == ["idea-1"]
+
+
+def test_an_unexpected_error_gives_the_task_back_before_ending_the_worker(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Breaks the worker")
+
+    class BrokenRunner(FakeRunner):
+        def start(self, prompt: str, workspace: Path, **kwargs: Any) -> FakeRun:
+            raise OSError("disk full")
+
+    with pytest.raises(OSError, match="disk full"):
+        work(server, BrokenRunner(), repo)
+
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert (release["outcome"], release["note"]) == ("released", "The worker failed: disk full")
+    assert board.card("VP-1")["column"] == "planned"
+    assert board.runs[0]["outcome"] == "failed"
+
+
 def test_a_stop_from_the_board_ends_the_run_and_the_worker(
     board: FakeBoard, server: FakeBoardServer, repo: Path
 ) -> None:
@@ -676,6 +728,27 @@ def test_after_a_usage_limit_the_worker_waits_then_resumes(
     # The pause lasted about ten minutes of worker time.
     assert clock.now - 1000.0 >= 600
     assert worker.summary.handed_over == ["VP-1"]
+
+
+def test_a_usage_limit_is_detected_when_the_agent_exits_cleanly_without_work(
+    board: FakeBoard, server: FakeBoardServer, repo: Path
+) -> None:
+    board.add_task("Limited quietly")
+    board.add_task("Mentions limits")
+
+    def quietly_limited(path: Path, prompt: str) -> tuple[int, str]:
+        return 0, "Claude AI usage limit reached|1759140000"
+
+    worker, _ = work(server, FakeRunner(quietly_limited), repo, once=True)
+    assert board.runs[0]["outcome"] == "usage_limit"
+    assert board.requests("POST", "/api/board/card-1/release")[0]["outcome"] == "released"
+
+    def works_on_limits(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        return 0, "Added a usage limit reached banner."
+
+    worker, _ = work(server, FakeRunner(works_on_limits), repo, task="VP-2")
+    assert worker.summary.handed_over == ["VP-2"]
 
 
 def test_detects_usage_limits_only_at_the_end_of_the_output() -> None:
