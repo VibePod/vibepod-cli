@@ -50,6 +50,8 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Tutorials:
+      - Overview: tutorials/index.md
   - Development: development.md
   - Agents: agents/index.md
   - Profiles: profiles.md
