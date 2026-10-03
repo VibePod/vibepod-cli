@@ -5,6 +5,11 @@ own, runs the agent headless with the task as the prompt, runs an optional verif
 hands the task over to Review, or gives it back to Planned (or blocks it) with a note. Every run
 leaves a report on its task.
 
+In review mode the worker claims tasks in Review instead. It checks the commit the hand-over
+named out, detached, in a worktree of its own, has the agent judge the work without changing
+anything, and sends the verdict: approve, rework with feedback, or a question. The review
+must leave the repository as it found it; whatever the agent changed is thrown away.
+
 The worker is registered with the board while it runs and reports what it does in heartbeats.
 Their replies carry the board's instructions: pause (take no new task), stop (end the run, give
 the task back and sign off) and cancel (end the run of a task the worker no longer holds).
@@ -39,6 +44,9 @@ STEP_PREPARING = "preparing_workspace"
 STEP_AGENT = "agent_running"
 STEP_VERIFYING = "verifying"
 STEP_HANDING_OVER = "handing_over"
+
+MODE_IMPLEMENT = "implement"
+MODE_REVIEW = "review"
 
 # How much verify output is read and sent, in bytes: its head and tail.
 REPORT_OUTPUT_HEAD = 4_000
@@ -121,6 +129,11 @@ class TaskProblem(Exception):
     with the message as the reason."""
 
 
+class ReviewProblem(Exception):
+    """A review that went wrong, such as one whose agent changed the repository; it ends as
+    failed, with the message as the reason, and the task stays in Review for others."""
+
+
 class ProfileLock(Protocol):
     waiting_reason: str
 
@@ -188,6 +201,8 @@ class WorkOptions:
     agent: str
     name: str
     machine: str = field(default_factory=socket.gethostname)
+    # implement claims planned tasks and does the work; review judges tasks in Review.
+    mode: str = MODE_IMPLEMENT
     # Workspace: the repository (else the task's local path), where worktrees go, the base
     # of new branches, the branch name template, and what to do with an existing branch.
     repo: Path | None = None
@@ -217,6 +232,10 @@ class WorkOptions:
 class WorkSummary:
     handed_over: list[str] = field(default_factory=list)
     returned: list[str] = field(default_factory=list)
+    # Review mode: the tasks approved and those sent back for rework; `returned` has the
+    # reviews that ended otherwise.
+    approved: list[str] = field(default_factory=list)
+    reworked: list[str] = field(default_factory=list)
     ended_because: str = ""
 
 
@@ -244,6 +263,28 @@ class TaskResult:
     # The commit the branch ends at once the work is done: what the reviews judge.
     head: str | None = None
     verify: VerifyResult | None = None
+
+
+@dataclass
+class ReviewResult:
+    # The run report's outcome: done (the review came to a verdict on the work), failed,
+    # needs_input, timed_out, cancelled or usage_limit.
+    outcome: str = "failed"
+    reason: str | None = None
+    # The verdict sent to the board: approve, rework, needs_input, failed or released; None
+    # when there is none to send, such as for a review that already ended on the board.
+    verdict: str | None = "failed"
+    # The rework feedback, the question, or why the review failed.
+    note: str | None = None
+    summary: str = ""
+    branch: str | None = None
+    # The commit the claim named for the review, and the one checked out: the branch's tip
+    # when the claim named none.
+    head_sha: str | None = None
+    commit: str | None = None
+    verify: VerifyResult | None = None
+    # Kept for a look rather than removed: git must not run in it.
+    keep_worktree: bool = False
 
 
 def branch_name(template: str, task: dict[str, Any]) -> str:
@@ -309,6 +350,25 @@ End your final message with a result block in this form, and nothing after it:
 - `failed`: you cannot complete the task. Add `"reason"` with why."""
 
 
+REVIEW_STATUSES = ("approve", "rework", "needs_input", "failed")
+
+REVIEW_INSTRUCTIONS = f"""## How to finish
+
+End your final message with a result block in this form, and nothing after it:
+
+<{RESULT_TAG}>
+{{"status": "<approve | rework | needs_input | failed>", "summary": "<your verdict, briefly>"}}
+</{RESULT_TAG}>
+
+- `approve`: the work does what the task asks and meets its acceptance criteria; a pull
+  request can be opened.
+- `rework`: the work needs changes. Add `"feedback"` with concrete, actionable points, as a
+  list of strings: the next implementation run gets them as they are.
+- `needs_input`: you cannot judge the work without an answer from a person. Add
+  `"question"` with one precise question.
+- `failed`: you cannot review the work. Add `"reason"` with why."""
+
+
 @dataclass(frozen=True)
 class AgentResult:
     """How the agent says its run ended."""
@@ -317,11 +377,22 @@ class AgentResult:
     summary: str = ""
     question: str = ""
     reason: str = ""
+    # A reviewer's points for the rework.
+    feedback: str = ""
 
 
-def parse_result(logs: str) -> AgentResult | None:
+def _text(value: Any) -> str:
+    """A string field of the result; a list, such as of feedback points, becomes a list."""
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return "\n".join(f"- {item.removeprefix('- ')}" for item in items)
+    return str(value or "").strip()
+
+
+def parse_result(logs: str, statuses: Sequence[str] = RESULT_STATUSES) -> AgentResult | None:
     """The last well-formed result block in the agent's output, or None. The instructions in
-    the prompt may be echoed, but their placeholder status never parses."""
+    the prompt may be echoed, but their placeholder status never parses. A question needs
+    its question, and a rework its feedback."""
     found: AgentResult | None = None
     for block in RESULT_BLOCK.findall(logs):
         text = block.strip()
@@ -331,15 +402,18 @@ def parse_result(logs: str) -> AgentResult | None:
             data = json.loads(text)
         except json.JSONDecodeError:
             continue
-        if not isinstance(data, dict) or data.get("status") not in RESULT_STATUSES:
+        if not isinstance(data, dict) or data.get("status") not in statuses:
             continue
         result = AgentResult(
             status=str(data["status"]),
-            summary=str(data.get("summary") or "").strip(),
-            question=str(data.get("question") or "").strip(),
-            reason=str(data.get("reason") or "").strip(),
+            summary=_text(data.get("summary")),
+            question=_text(data.get("question")),
+            reason=_text(data.get("reason")),
+            feedback=_text(data.get("feedback")),
         )
         if result.status == "needs_input" and not result.question:
+            continue
+        if result.status == "rework" and not result.feedback:
             continue
         found = result
     return found
@@ -349,6 +423,87 @@ def conversation(history: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """The questions, answers and review feedback of a task, oldest first."""
     kept = [event for event in history if event.get("kind") in {"question", "answer", "feedback"}]
     return list(reversed(kept))[-CONVERSATION_LIMIT:]
+
+
+# What a reviewer gets of the task history: the conversation and the earlier verdicts.
+REVIEW_HISTORY = {
+    "question": "Question",
+    "answer": "Answer",
+    "feedback": "Review feedback",
+    "approved": "Review",
+    "rework_requested": "Review",
+}
+
+
+def review_history(history: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The questions, answers, review feedback and earlier verdicts of a task, oldest
+    first."""
+    kept = [event for event in history if event.get("kind") in REVIEW_HISTORY]
+    return list(reversed(kept))[-CONVERSATION_LIMIT:]
+
+
+def _task_lines(task: dict[str, Any]) -> list[str]:
+    description = str(task.get("details") or task.get("summary") or "").strip()
+    criteria = [str(item).strip() for item in task.get("acceptanceCriteria") or []]
+    criteria = [item for item in criteria if item]
+    return [
+        "## Description",
+        "",
+        description or "No description was given.",
+        "",
+        "## Acceptance criteria",
+        "",
+        *([f"- {item}" for item in criteria] or ["None were given."]),
+    ]
+
+
+def build_review_prompt(
+    task: dict[str, Any],
+    branch: str,
+    commit: str,
+    base: str,
+    base_commit: str,
+    earlier: Sequence[dict[str, Any]] = (),
+) -> str:
+    """A reviewer's instructions: the task, its history, where the work is and what it
+    branched off, that the review only reads, and how to give the verdict."""
+    key = task.get("key") or "the task"
+    lines = [
+        f"Review the work on task {key} from the project board: "
+        f"{str(task.get('title') or '').strip()}",
+        "",
+        "Your review answers one question: does the work need rework, or can a pull request "
+        "be opened?",
+        "",
+        *_task_lines(task),
+    ]
+    if earlier:
+        lines += ["", "## Task history", ""]
+        for event in earlier:
+            kind = str(event.get("kind"))
+            actor = (
+                f" from {event['actor']}"
+                if event.get("actor") and kind in {"question", "answer", "feedback"}
+                else ""
+            )
+            message = str(event.get("message") or "").strip()
+            lines.append(f"- {REVIEW_HISTORY.get(kind, 'Note')}{actor}: {message}")
+    lines += [
+        "",
+        "## How to review",
+        "",
+        f"- You are in a git worktree with commit `{commit}` of the branch `{branch}` checked "
+        "out, detached.",
+        f"- The work branched off `{base}`: read it with `git diff {base_commit}...HEAD` and "
+        f"`git log {base_commit}..HEAD`.",
+        "- Check it against the description and each acceptance criterion, and run the "
+        "relevant tests or checks where you can.",
+        "- Only read: do not change, create or delete files, do not commit, and do not switch "
+        "or create branches. Any change is thrown away, and the review then counts as failed.",
+        "",
+        REVIEW_INSTRUCTIONS,
+    ]
+    return "\n".join(lines)
 
 
 def build_prompt(
@@ -361,19 +516,10 @@ def build_prompt(
     was asked, answered and fed back in earlier runs, how to leave the work, and how to say
     how the run ended."""
     key = task.get("key") or "the task"
-    description = str(task.get("details") or task.get("summary") or "").strip()
-    criteria = [str(item).strip() for item in task.get("acceptanceCriteria") or []]
-    criteria = [item for item in criteria if item]
     lines = [
         f"Implement task {key} from the project board: {task.get('title', '').strip()}",
         "",
-        "## Description",
-        "",
-        description or "No description was given.",
-        "",
-        "## Acceptance criteria",
-        "",
-        *([f"- {item}" for item in criteria] or ["None were given."]),
+        *_task_lines(task),
     ]
     if earlier:
         lines += ["", "## Earlier questions, answers and review feedback", ""]
@@ -515,6 +661,10 @@ class BoardWorker:
         # When the claim on the current task was last claimed or renewed.
         self.renewed: float | None = None
 
+    @property
+    def reviewing(self) -> bool:
+        return self.options.mode == MODE_REVIEW
+
     # --- lifecycle ------------------------------------------------------------------
 
     def run(self) -> WorkSummary:
@@ -523,6 +673,7 @@ class BoardWorker:
             self.options.name,
             self.options.agent,
             self.options.machine,
+            mode=MODE_REVIEW if self.reviewing else None,
         )
         self.worker_id = str(reply["item"]["id"])
         self.heartbeat_seconds = float(reply.get("heartbeatSeconds") or 15)
@@ -590,7 +741,11 @@ class BoardWorker:
                     self.summary.ended_because = f"Task {self.options.task} could not be claimed"
                     return
                 if self.options.poll_seconds is None:
-                    self.summary.ended_because = "No planned task left to claim"
+                    self.summary.ended_because = (
+                        "No task in review left to claim"
+                        if self.reviewing
+                        else "No planned task left to claim"
+                    )
                     return
                 self._idle_wait(self.options.poll_seconds)
                 continue
@@ -647,6 +802,7 @@ class BoardWorker:
                 min_readiness=self.options.min_readiness,
                 exclude=list(self.passed_over),
                 lease_seconds=self.options.lease_seconds,
+                mode=MODE_REVIEW if self.reviewing else None,
             )
         except BoardApiError as exc:
             if self.options.task and exc.status in {400, 404, 409}:
@@ -657,12 +813,33 @@ class BoardWorker:
             raise
         if result.get("claimed"):
             item: dict[str, Any] = result["item"]
+            if self.reviewing:
+                item = {**item, "review": self._review_claim(item, result.get("review"))}
             self.say("info", f"Claimed {item['task'].get('key')}: {item['task'].get('title')}")
             return item
         if result.get("paused"):
             self.board_pause = str(result.get("reason") or "Automation is paused")
         self.say("info", str(result.get("reason") or "Nothing to claim"))
         return None
+
+    def _review_claim(self, item: dict[str, Any], review: Any) -> dict[str, Any]:
+        """The review a review claim carries. A board that does not know review workers
+        ignores the mode and claims a planned task to implement instead: that one goes back
+        right away."""
+        if isinstance(review, dict):
+            return review
+        card = str(item["card"]["id"])
+        with contextlib.suppress(BoardApiError):
+            self.client.release(
+                card,
+                self.options.name,
+                "released",
+                "Claimed by a review worker on a board without reviews",
+            )
+        raise WorkerError(
+            "The board claimed a task to implement instead of one to review: it does not "
+            "support review workers yet, so update it to use --mode review",
+        )
 
     # --- heartbeats and instructions ------------------------------------------------
 
@@ -809,6 +986,9 @@ class BoardWorker:
     # --- one task -------------------------------------------------------------------
 
     def _work_on(self, item: dict[str, Any]) -> None:
+        if self.reviewing:
+            self._review(item)
+            return
         task: dict[str, Any] = item["task"]
         card: dict[str, Any] = item["card"]
         key = str(task.get("key") or task["id"])
@@ -1084,8 +1264,15 @@ class BoardWorker:
             )
 
     def _conversation(self, task: dict[str, Any]) -> list[dict[str, Any]]:
+        return self._history(task, conversation)
+
+    def _history(
+        self,
+        task: dict[str, Any],
+        keep: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
         try:
-            return conversation(self.client.task_history(str(task["id"])))
+            return keep(self.client.task_history(str(task["id"])))
         except BoardApiError as exc:
             self.say("warning", f"Could not read the task history: {exc.message}")
             return []
@@ -1334,9 +1521,472 @@ class BoardWorker:
             lambda: self.client.add_run_report(task_id, report),
         )
 
+    # --- one review -----------------------------------------------------------------
+
+    def _review(self, item: dict[str, Any]) -> None:
+        task: dict[str, Any] = item["task"]
+        card: dict[str, Any] = item["card"]
+        review: dict[str, Any] = item["review"]
+        key = str(task.get("key") or task["id"])
+        self.task = task
+        self.cancel_reason = None
+        self.stop_failed = None
+        started_at = self.now()
+        started = self.clock()
+        self._set("working", step=STEP_PREPARING)
+        result = ReviewResult(
+            branch=str(card.get("branchName") or "") or None,
+            head_sha=str(review.get("headSha") or "") or None,
+        )
+        repo: Path | None = None
+        path: Path | None = None
+        try:
+            try:
+                repo = self._repository(task)
+                # Checking a commit out can take long in a large repository.
+                with self._keepalive():
+                    path, base, base_commit = self._prepare_review(task, repo, result)
+                self.say("info", f"Reviewing {result.branch} at {result.commit} in {path}")
+                self._run_review(task, repo, path, base, base_commit, result, started)
+            except worktrees.GitError as exc:
+                raise TaskProblem(str(exc)) from exc
+        except TaskProblem as problem:
+            # Blocked for a person, as a task that cannot run is: the card stays in Review
+            # with the reason as its question.
+            reason = str(problem)
+            result.outcome, result.reason, result.verdict, result.note = (
+                "failed",
+                reason,
+                "needs_input",
+                f"The review cannot run: {reason}",
+            )
+        except ReviewProblem as problem:
+            reason = str(problem)
+            result.outcome, result.reason, result.verdict, result.note = (
+                "failed",
+                reason,
+                "failed",
+                reason,
+            )
+        except AgentStopError as exc:
+            result.outcome, result.reason, result.verdict = "failed", str(exc), None
+            self.stop_requested = True
+            self.summary.ended_because = f"The agent could not be stopped: {exc}"
+        except RunnerError as exc:
+            result.outcome, result.reason, result.verdict = "failed", str(exc), "released"
+            self.stop_requested = True
+            self.summary.ended_because = f"The agent could not be started: {exc}"
+        except KeyboardInterrupt:
+            result.outcome, result.reason, result.verdict = (
+                "cancelled",
+                "The worker was interrupted",
+                "released",
+            )
+            self._finish_review(key, card, result, started_at, started, repo, path)
+            raise
+        except Exception as exc:
+            result.outcome, result.reason, result.verdict = (
+                "failed",
+                f"The worker failed: {exc}",
+                "released",
+            )
+            self._finish_review(key, card, result, started_at, started, repo, path)
+            raise
+        self._finish_review(key, card, result, started_at, started, repo, path)
+
+    def _prepare_review(
+        self,
+        task: dict[str, Any],
+        repo: Path,
+        result: ReviewResult,
+    ) -> tuple[Path, str, str]:
+        """Checks the commit under review out in a worktree of the reviewer's own. Says
+        where, and the base the work is diffed against, by name and commit."""
+        branch = result.branch
+        if not branch:
+            raise TaskProblem("The card names no branch to review")
+        if not worktrees.branch_exists(repo, branch):
+            raise TaskProblem(f"The branch {branch} to review is not in {repo}")
+        if result.head_sha:
+            if not worktrees.commit_exists(repo, result.head_sha):
+                raise TaskProblem(
+                    f"The commit {result.head_sha[:12]} of {branch} to review is not in {repo}",
+                )
+            result.commit = worktrees.git(repo, "rev-parse", f"{result.head_sha}^{{commit}}")
+        else:
+            # Handed over without naming its commit: the branch as it is now.
+            result.commit = worktrees.git(repo, "rev-parse", f"refs/heads/{branch}^{{commit}}")
+        base = self.options.base or worktrees.current_branch(repo) or "HEAD"
+        base_commit = worktrees.resolve_commit(repo, base)
+        key = str(task.get("key") or task["id"]).lower()
+        path = worktrees.prepare_review_worktree(
+            repo,
+            self._worktree_dir(repo),
+            f"review-{key}-{self.options.name}",
+            result.commit,
+        )
+        return path, base, base_commit
+
+    def _run_review(
+        self,
+        task: dict[str, Any],
+        repo: Path,
+        path: Path,
+        base: str,
+        base_commit: str,
+        result: ReviewResult,
+        started: float,
+    ) -> None:
+        assert result.branch is not None and result.commit is not None
+        deadline = started + self.options.timeout_seconds if self.options.timeout_seconds else None
+        earlier = self._history(task, review_history)
+        self._set("working", step=STEP_AGENT)
+        with self._keepalive():
+            mounts = worktrees.agent_mounts(repo, path, read_only=True)
+            pointers = worktrees.pointers(path)
+            refs = worktrees.branch_refs(repo)
+            checked_out = worktrees.checkouts(repo)
+            run = self.runner.start(
+                build_review_prompt(task, result.branch, result.commit, base, base_commit, earlier),
+                path,
+                mounts=mounts,
+                allow_check_path=repo,
+            )
+        self.say(
+            "info",
+            f"Agent running as task {run.task_id[:12]} (vp task logs {run.task_id[:12]})",
+        )
+        code, ended = self._wait_for(run.poll, run.stop, deadline)
+        logs = run.logs()
+        result.summary = summarize_logs(logs)
+        with self._keepalive():
+            self._check_review(repo, path, result, pointers, refs, checked_out)
+        if self._review_ended_early(ended, result):
+            return
+        said = parse_result(logs, REVIEW_STATUSES)
+        if usage_limit_in(logs) and (code != 0 or said is None):
+            result.outcome, result.reason, result.verdict = (
+                "usage_limit",
+                "The agent reached its usage limit",
+                "released",
+            )
+            self._pause_for_usage_limit(logs)
+            return
+        if code != 0:
+            self._review_failed(result, f"The agent exited with code {code}")
+            return
+        if self.options.verify:
+            self._set("working", step=STEP_VERIFYING)
+            result.verify = self._verify(path, deadline)
+            with self._keepalive():
+                self._check_refs(repo, refs, checked_out, "The verify command")
+            if self._review_ended_early(result.verify.ended, result):
+                return
+            if result.verify.exit_code != 0:
+                # Failing checks need rework, whatever the agent made of the work.
+                points = said.feedback if said is not None and said.status == "rework" else ""
+                result.outcome, result.reason, result.verdict, result.note = (
+                    "done",
+                    None,
+                    "rework",
+                    _verify_feedback(result.verify, points),
+                )
+                result.summary = f"The verify command failed. {said.summary if said else ''}"
+                result.summary = result.summary.strip()
+                return
+        if said is None:
+            self._review_failed(result, "The run ended without a readable result")
+            return
+        result.summary = said.summary or result.summary
+        if said.status == "approve":
+            result.outcome, result.reason, result.verdict, result.note = (
+                "done",
+                None,
+                "approve",
+                said.summary or None,
+            )
+        elif said.status == "rework":
+            result.outcome, result.reason, result.verdict, result.note = (
+                "done",
+                None,
+                "rework",
+                said.feedback,
+            )
+        elif said.status == "needs_input":
+            result.outcome, result.reason, result.verdict, result.note = (
+                "needs_input",
+                said.question,
+                "needs_input",
+                said.question,
+            )
+        else:
+            self._review_failed(
+                result,
+                f"The agent could not review: {said.reason or 'no reason given'}",
+            )
+
+    def _review_failed(self, result: ReviewResult, reason: str) -> None:
+        result.outcome, result.reason, result.verdict, result.note = (
+            "failed",
+            reason,
+            "failed",
+            reason,
+        )
+
+    def _check_review(
+        self,
+        repo: Path,
+        path: Path,
+        result: ReviewResult,
+        pointers: dict[str, str],
+        refs: dict[str, str],
+        checked_out: dict[str, Path],
+    ) -> None:
+        """The review must leave the repository as it found it. What the agent committed,
+        switched to or left changed in the worktree is thrown away, refs it moved are put
+        back, and the review fails. Nothing of git runs in a worktree whose pointers into
+        the git directory changed."""
+        assert result.commit is not None
+        try:
+            worktrees.verify_pointers(path, pointers)
+        except worktrees.GitError as exc:
+            result.keep_worktree = True
+            reason = f"{exc}; the worktree at {path} needs a look"
+            try:
+                self._check_refs(repo, refs, checked_out, "The agent")
+            except ReviewProblem as problem:
+                reason += f". {problem}"
+            raise ReviewProblem(reason) from exc
+        changed: list[str] = []
+        on = worktrees.current_branch(path)
+        if on is not None:
+            changed.append(f"switched to the branch {on}")
+        if worktrees.git(path, "rev-parse", "HEAD") != result.commit:
+            changed.append("committed")
+        if worktrees.has_changes(path):
+            changed.append("left uncommitted changes")
+        if changed:
+            worktrees.discard_changes(path, result.commit)
+            created = f"refs/heads/{on}"
+            if on is not None and created not in refs:
+                # A branch the agent made for its commits; nobody else knows it.
+                worktrees.git(repo, "update-ref", "-d", created)
+        try:
+            self._check_refs(repo, refs, checked_out, "The agent")
+        except ReviewProblem as problem:
+            if not changed:
+                raise
+            raise ReviewProblem(
+                f"The agent {_and(changed)} in the review worktree; threw that away. {problem}",
+            ) from problem
+        if changed:
+            raise ReviewProblem(
+                f"The agent {_and(changed)} in the review worktree, which a review must not "
+                "do; threw that away",
+            )
+
+    def _check_refs(
+        self,
+        repo: Path,
+        refs: dict[str, str],
+        checked_out: dict[str, Path],
+        who: str,
+    ) -> None:
+        """Puts back the branches and tags moved during a review: none of them is the
+        reviewer's to move, the reviewed branch least of all."""
+        restored, left = worktrees.restore_refs(
+            repo,
+            refs,
+            "",
+            self._worktree_dir(repo),
+            checked_out,
+        )
+        if restored:
+            raise ReviewProblem(f"{who} moved {', '.join(restored)}; restored them")
+        if left:
+            raise ReviewProblem(
+                f"{', '.join(left)} moved during the review, in a checkout with changes "
+                "staged; left as they are: check whether the review moved them",
+            )
+
+    def _review_ended_early(self, ended: str, result: ReviewResult) -> bool:
+        if ended == "stop":
+            result.outcome, result.reason, result.verdict = (
+                "cancelled",
+                "The worker was stopped from the board",
+                "released",
+            )
+        elif ended == "cancel":
+            # The review already ended on the board, such as after another reviewer's rework
+            # verdict: there is no verdict left to give.
+            result.outcome, result.reason, result.verdict = "cancelled", self.cancel_reason, None
+        elif ended == "timeout":
+            self._review_failed(
+                result,
+                f"Timed out after {format_duration(self.options.timeout_seconds or 0)}",
+            )
+            result.outcome = "timed_out"
+        else:
+            return False
+        return True
+
+    def _finish_review(
+        self,
+        key: str,
+        card: dict[str, Any],
+        result: ReviewResult,
+        started_at: datetime,
+        started: float,
+        repo: Path | None,
+        path: Path | None,
+    ) -> None:
+        if result.verdict in {"approve", "rework", "needs_input"}:
+            # The board's last word before the verdict: a stop or cancel still wins.
+            self._set("working", step=STEP_HANDING_OVER)
+            self._review_ended_early(self._interruption(None) or "exit", result)
+        if self.cancel_reason is not None:
+            if result.outcome != "cancelled":
+                result.outcome, result.reason = "cancelled", self.cancel_reason
+            result.verdict = None
+        if self.stop_failed is not None:
+            # The agent may still be running: the review stays held until its lease runs out.
+            result.verdict = None
+        verdict, note, head_sha = result.verdict, result.note, result.head_sha
+        delivered: bool | BoardApiError | None = None
+        if verdict is not None:
+            delivered = self._deliver(
+                f"Sending the review of {key}",
+                lambda: self.client.submit_review(
+                    str(card["id"]),
+                    self.options.name,
+                    verdict,
+                    head_sha,
+                    note,
+                ),
+            )
+        if isinstance(delivered, BoardApiError) and (
+            delivered.is_conflict or delivered.is_not_found
+        ):
+            # The review ended on the board meanwhile, or the branch moved on: nothing to
+            # judge any more.
+            result.outcome, result.reason, result.verdict = "cancelled", delivered.message, None
+        elif isinstance(delivered, BoardApiError):
+            # Refused for another reason: the review is still held, and ends as failed rather
+            # than staying held while this worker's heartbeats keep it alive.
+            reason = f"The board refused the verdict {verdict}: {delivered.message}"
+            result.outcome, result.reason, result.verdict = "failed", reason, None
+            if verdict != "failed":
+                self._deliver(
+                    f"Ending the review of {key}",
+                    lambda: self.client.submit_review(
+                        str(card["id"]),
+                        self.options.name,
+                        "failed",
+                        head_sha,
+                        reason,
+                    ),
+                )
+        if verdict == "approve" and result.verdict is not None:
+            self.summary.approved.append(key)
+            self.say("success", f"Approved {key} at {result.commit}")
+        elif verdict == "rework" and result.verdict is not None:
+            self.summary.reworked.append(key)
+            self.say("success", f"Sent {key} back for rework")
+        else:
+            self.summary.returned.append(key)
+            self.say("warning", f"{key}: {result.reason or result.note}")
+        if result.verdict is None:
+            self.passed_over.append(self._task_id())
+        self._report_review(key, result, started_at, started)
+        if (
+            path is not None
+            and repo is not None
+            and not self.options.keep_worktree
+            and not result.keep_worktree
+        ):
+            try:
+                worktrees.remove_worktree(repo, self._worktree_dir(repo), path)
+            except worktrees.GitError as exc:
+                self.say("warning", f"Could not remove the review worktree: {exc}")
+        self.task = None
+        self.cancel_reason = None
+        self._set("idle")
+
+    def _report_review(
+        self,
+        key: str,
+        result: ReviewResult,
+        started_at: datetime,
+        started: float,
+    ) -> None:
+        verify = result.verify
+        verdict = REVIEW_VERDICTS.get(str(result.verdict), "no verdict")
+        lines = [f"Review of {result.branch or key} at {(result.commit or '')[:12]}: {verdict}"]
+        if result.summary:
+            lines += ["", result.summary]
+        if result.verdict == "rework" and result.note:
+            lines += ["", "Feedback:", result.note]
+        if result.verdict == "needs_input" and result.note:
+            lines += ["", f"Question: {result.note}"]
+        report: dict[str, Any] = {
+            # Not a field of the board's run reports yet; it ignores unknown fields.
+            "kind": MODE_REVIEW,
+            "outcome": result.outcome,
+            "agent": self.options.agent,
+            "workerId": self.worker_id,
+            "summary": "\n".join(lines),
+            "commits": [],
+            "branchName": result.branch,
+            "verifyCommand": verify.command if verify else None,
+            "verifyExitCode": verify.exit_code if verify else None,
+            "verifyOutput": verify.output if verify else None,
+            "durationSeconds": max(0, int(self.clock() - started)),
+            "failureReason": (
+                None
+                if result.outcome == "done"
+                else f"Needs input: {result.reason}"
+                if result.outcome == "needs_input"
+                else result.reason
+            ),
+            "startedAt": _iso(started_at),
+            "finishedAt": _iso(self.now()),
+        }
+        task_id = self._task_id()
+        self._deliver(
+            f"Adding the review report to {key}",
+            lambda: self.client.add_run_report(task_id, report),
+        )
+
     def _task_id(self) -> str:
         assert self.task is not None
         return str(self.task["id"])
+
+
+# How a review's verdict reads in its run report.
+REVIEW_VERDICTS = {
+    "approve": "approved",
+    "rework": "sent back for rework",
+    "needs_input": "asked for input",
+    "failed": "failed",
+    "released": "given up",
+}
+# How much of a failed verify command's output goes into the rework feedback.
+FEEDBACK_OUTPUT_CHARS = 4_000
+
+
+def _and(items: Sequence[str]) -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _verify_feedback(verify: VerifyResult, points: str = "") -> str:
+    """Rework feedback for a failed verify command: the reviewer's points, then the end of
+    the command's output, where test runners say what failed."""
+    output = verify.output.strip()[-FEEDBACK_OUTPUT_CHARS:]
+    lines = [points, ""] if points else []
+    lines.append(f"The verify command `{verify.command}` failed with exit code {verify.exit_code}.")
+    if output:
+        lines += ["", "Its output ends with:", "", output]
+    return "\n".join(lines)
 
 
 def _transient(exc: BoardApiError) -> bool:
