@@ -347,6 +347,48 @@ def test_changes_the_verify_command_made_are_committed_too(
     assert handover["note"].startswith("2 commits; verify passed")
 
 
+def test_heartbeats_go_on_while_host_git_works(
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    import contextlib
+
+    board.add_task("Large repository")
+    alive: list[bool] = []
+    outside: list[str] = []
+    keepalive = BoardWorker._keepalive
+
+    @contextlib.contextmanager
+    def tracked(self: BoardWorker):
+        with keepalive(self):
+            alive.append(True)
+            try:
+                yield
+            finally:
+                alive.pop()
+
+    def checked(name: str) -> Callable[..., Any]:
+        original = getattr(worktrees, name)
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            if not alive:
+                outside.append(name)
+            return original(*args, **kwargs)
+
+        return call
+
+    monkeypatch.setattr(BoardWorker, "_keepalive", tracked)
+    for name in ("prepare_worktree", "branch_refs", "restore_refs", "commit_all"):
+        monkeypatch.setattr(worktrees, name, checked(name))
+
+    work(server, FakeRunner(), repo, verify=PASSES, once=True)
+
+    assert board.card("VP-1")["column"] == "review"
+    assert outside == []
+
+
 def test_works_through_every_planned_task_then_exits(
     board: FakeBoard,
     server: FakeBoardServer,

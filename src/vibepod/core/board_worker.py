@@ -632,8 +632,9 @@ class BoardWorker:
 
     @contextlib.contextmanager
     def _keepalive(self) -> Iterator[None]:
-        """Keeps heartbeats going while the main thread is busy, such as while an image is
-        pulled or an overlay built for the agent, so the claim does not lapse meanwhile."""
+        """Keeps heartbeats going while the main thread is busy, such as while git checks a
+        branch out or an image is pulled for the agent, so the claim does not lapse
+        meanwhile."""
         done = threading.Event()
 
         def beat() -> None:
@@ -675,13 +676,15 @@ class BoardWorker:
             try:
                 repo = self._repository(task)
                 result.branch = branch_name(self.options.branch_template, task)
-                worktree = worktrees.prepare_worktree(
-                    repo,
-                    self._worktree_dir(repo),
-                    result.branch,
-                    self.options.base or worktrees.current_branch(repo) or "HEAD",
-                    self.options.existing,
-                )
+                # Checking a branch out can take long in a large repository.
+                with self._keepalive():
+                    worktree = worktrees.prepare_worktree(
+                        repo,
+                        self._worktree_dir(repo),
+                        result.branch,
+                        self.options.base or worktrees.current_branch(repo) or "HEAD",
+                        self.options.existing,
+                    )
                 if worktree.continued:
                     self.say("info", f"Continuing on branch {worktree.branch} in {worktree.path}")
                 else:
@@ -757,10 +760,10 @@ class BoardWorker:
     ) -> None:
         deadline = started + self.options.timeout_seconds if self.options.timeout_seconds else None
         self._set("working", step=STEP_AGENT)
-        mounts = worktrees.agent_mounts(repo, worktree.path)
-        pointers = worktrees.pointers(worktree.path)
-        refs = worktrees.branch_refs(repo)
         with self._keepalive():
+            mounts = worktrees.agent_mounts(repo, worktree.path)
+            pointers = worktrees.pointers(worktree.path)
+            refs = worktrees.branch_refs(repo)
             run = self.runner.start(
                 build_prompt(task, worktree.branch),
                 worktree.path,
@@ -774,7 +777,8 @@ class BoardWorker:
         code, ended = self._wait_for(run.poll, run.stop, deadline)
         logs = run.logs()
         result.summary = summarize_logs(logs)
-        self._check_after_run(repo, worktree, pointers, refs)
+        with self._keepalive():
+            self._check_after_run(repo, worktree, pointers, refs)
         if self._ended_early(ended, result):
             return
         # Some agents exit cleanly when a limit stops them, so a run that left no work is
@@ -795,10 +799,11 @@ class BoardWorker:
                 self._failure(),
             )
             return
-        worktrees.commit_all(worktree.path, _commit_message(task))
-        result.commits = worktrees.commits_since(worktree.path, worktree.start)
-        # A continued branch may already hold the work, such as after a flaky verify.
-        result.branch_commits = worktrees.commits_since(worktree.path, worktree.base)
+        with self._keepalive():
+            worktrees.commit_all(worktree.path, _commit_message(task))
+            result.commits = worktrees.commits_since(worktree.path, worktree.start)
+            # A continued branch may already hold the work, such as after a flaky verify.
+            result.branch_commits = worktrees.commits_since(worktree.path, worktree.base)
         if not result.branch_commits:
             result.outcome, result.reason, result.release = (
                 "failed",
@@ -820,12 +825,13 @@ class BoardWorker:
                 return
             # What the verify command changed or committed, such as formatted files or
             # updated snapshots, goes with the work instead of being lost with the worktree.
-            worktrees.commit_all(
-                worktree.path,
-                _commit_message(task, "Changes left by the verify command"),
-            )
-            result.commits = worktrees.commits_since(worktree.path, worktree.start)
-            result.branch_commits = worktrees.commits_since(worktree.path, worktree.base)
+            with self._keepalive():
+                worktrees.commit_all(
+                    worktree.path,
+                    _commit_message(task, "Changes left by the verify command"),
+                )
+                result.commits = worktrees.commits_since(worktree.path, worktree.start)
+                result.branch_commits = worktrees.commits_since(worktree.path, worktree.base)
         result.outcome, result.reason, result.release = "done", None, None
 
     def _did_work(self, worktree: worktrees.Worktree) -> bool:
