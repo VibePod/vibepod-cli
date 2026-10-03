@@ -1,10 +1,9 @@
-"""`vp board work` end to end: a fake agent in real git worktrees, against a fake board over
+"""`vp board work` end to end: a fake agent in real git clones, against a fake board over
 HTTP. No agent subscription and no container runtime are involved."""
 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 import threading
@@ -206,6 +205,7 @@ def work(
     repo: Path | None,
     clock: Clock | None = None,
     allow_repo: Callable[[Path], bool] | None = None,
+    name: str = "claude@laptop",
     **options: Any,
 ) -> tuple[BoardWorker, list[tuple[str, str]]]:
     messages: list[tuple[str, str]] = []
@@ -216,7 +216,7 @@ def work(
         WorkOptions(
             project="VP",
             agent="claude",
-            name="claude@laptop",
+            name=name,
             machine="laptop",
             repo=repo,
             **options,
@@ -259,7 +259,7 @@ def test_hands_a_task_over_after_the_agent_committed_and_verify_passed(
         "headSha": git(repo, "rev-parse", "issue-12"),
     }
     assert card["headSha"] == git(repo, "rev-parse", "issue-12")
-    # The branch holds the work, the worktree is gone.
+    # The branch holds the work, the clone is gone.
     assert git(repo, "log", "--format=%s", "main..issue-12") == "Add the feature"
     assert not (repo.parent / "app-worktrees" / "issue-12").exists()
     [report] = board.runs
@@ -276,7 +276,7 @@ def test_hands_a_task_over_after_the_agent_committed_and_verify_passed(
     assert board.requests("POST", "/api/workers/worker-1/sign-off") == [None]
 
 
-def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
+def test_the_prompt_carries_the_task_and_only_the_clone_is_writable(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
@@ -286,7 +286,14 @@ def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
         details="Build the feature described here.",
         acceptanceCriteria=["feature.txt exists"],
     )
-    runner = FakeRunner()
+    seen: dict[str, Any] = {}
+
+    def looks_around(path: Path, prompt: str) -> tuple[int, str]:
+        seen["git dir"] = (path / ".git").is_dir()
+        seen["worktrees"] = worktrees.worktree_paths(repo)
+        return commits_a_feature(path, prompt)
+
+    runner = FakeRunner(looks_around)
 
     work(server, runner, repo)
 
@@ -296,27 +303,29 @@ def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
     assert "- feature.txt exists" in start["prompt"]
     assert "`vp-1`" in start["prompt"]
     assert "<vibepod-result>" in start["prompt"]
-    git_dir = (repo / ".git").resolve()
-    worktree = (repo.parent / "app-worktrees" / "vp-1").resolve()
-    admin = git_dir / "worktrees" / "vp-1"
-    # The git directory is writable for commits; what makes git run programs, the
-    # worktree's pointers into it, and the HEAD and index of the user's checkout are not.
-    # On Windows, the container gets its own `.git` file naming the git directory's path there.
-    pointer = admin / worktrees.CONTAINER_POINTER if sys.platform == "win32" else worktree / ".git"
-    in_container = worktrees.container_path
+    clone = (repo.parent / "app-worktrees" / "vp-1").resolve()
+    # A clone of its own with a git directory of its own, not a worktree of the repository.
+    assert start["workspace"] == clone
+    assert seen == {"git dir": True, "worktrees": [repo.resolve()]}
+    # The agent gets the repository's objects the clone borrows, read-only, and nothing else
+    # of the repository. In the clone, what makes git run programs and the pointer to the
+    # borrowed objects are read-only. On Windows, the container gets a pointer of its own
+    # naming the objects by their path there.
+    objects = (repo / ".git" / "objects").resolve()
+    dot_git = clone / ".git"
+    pointer = (
+        dot_git / worktrees.CONTAINER_ALTERNATES
+        if sys.platform == "win32"
+        else dot_git / "objects" / "info" / "alternates"
+    )
     assert start["mounts"] == [
-        (str(git_dir), in_container(git_dir), "rw"),
-        (str(git_dir / "hooks"), in_container(git_dir / "hooks"), "ro"),
-        (str(git_dir / "info"), in_container(git_dir / "info"), "ro"),
-        (str(git_dir / "config"), in_container(git_dir / "config"), "ro"),
-        (str(admin / "commondir"), in_container(admin / "commondir"), "ro"),
-        (str(admin / "gitdir"), in_container(admin / "gitdir"), "ro"),
-        (str(git_dir / "HEAD"), in_container(git_dir / "HEAD"), "ro"),
-        (str(git_dir / "index"), in_container(git_dir / "index"), "ro"),
-        (str(pointer), "/workspace/.git", "ro"),
+        (str(objects), worktrees.container_path(objects), "ro"),
+        (str(dot_git / "hooks"), "/workspace/.git/hooks", "ro"),
+        (str(dot_git / "info"), "/workspace/.git/info", "ro"),
+        (str(dot_git / "config"), "/workspace/.git/config", "ro"),
+        (str(pointer), "/workspace/.git/objects/info/alternates", "ro"),
     ]
     assert start["allow"] == repo.resolve()
-    assert start["workspace"] == worktree
 
 
 def test_reports_its_status_steps_and_task_in_heartbeats(
@@ -428,7 +437,7 @@ def test_heartbeats_go_on_while_host_git_works(
         return call
 
     monkeypatch.setattr(BoardWorker, "_keepalive", tracked)
-    for name in ("prepare_worktree", "branch_refs", "restore_refs", "commit_all"):
+    for name in ("prepare_clone", "agent_mounts", "commit_all", "write_back"):
         monkeypatch.setattr(worktrees, name, checked(name))
 
     work(server, FakeRunner(), repo, verify=PASSES, once=True)
@@ -1242,48 +1251,6 @@ def test_host_git_never_runs_repository_hooks(
     assert not marker.exists()
 
 
-def test_a_worktree_pointing_elsewhere_is_left_alone(
-    board: FakeBoard,
-    server: FakeBoardServer,
-    repo: Path,
-) -> None:
-    board.add_task("Redirected")
-
-    def redirects(path: Path, prompt: str) -> tuple[int, str]:
-        # Git for Windows hides .git, and Windows refuses to overwrite a hidden file.
-        (path / ".git").unlink()
-        (path / ".git").write_text("gitdir: /tmp/somewhere-else\n")
-        return 0, result_block(summary="Done.")
-
-    work(server, FakeRunner(redirects), repo, once=True)
-
-    [release] = board.requests("POST", "/api/board/card-1/release")
-    assert release["outcome"] == "blocked"
-    assert "changed the worktree's git metadata" in release["note"]
-    assert board.requests("POST", "/api/board/card-1/handover") == []
-
-
-def test_other_branches_the_agent_moved_are_restored(
-    board: FakeBoard,
-    server: FakeBoardServer,
-    repo: Path,
-) -> None:
-    board.add_task("Overreaches")
-    main_before = git(repo, "rev-parse", "main")
-
-    def moves_main(path: Path, prompt: str) -> tuple[int, str]:
-        commits_a_feature(path, prompt)
-        git(path, "update-ref", "refs/heads/main", "HEAD")
-        return 0, result_block(summary="Done.")
-
-    work(server, FakeRunner(moves_main), repo, once=True)
-
-    assert git(repo, "rev-parse", "main") == main_before
-    [release] = board.requests("POST", "/api/board/card-1/release")
-    assert release["outcome"] == "blocked"
-    assert release["note"].startswith("The agent moved main; restored them")
-
-
 def test_refs_others_move_during_the_run_are_left_alone(
     board: FakeBoard,
     server: FakeBoardServer,
@@ -1308,8 +1275,119 @@ def test_refs_others_move_during_the_run_are_left_alone(
     assert git(repo, "log", "-1", "--format=%s", "vp-9") == "The other worker's agent"
 
 
+@pytest.mark.parametrize("meddling", ["redirects", "configures"])
+def test_a_clone_whose_git_metadata_changed_is_left_alone(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
+    meddling: str,
+) -> None:
+    board.add_task("Redirected")
+    marker = tmp_path / "filter-ran"
+
+    def meddles(path: Path, prompt: str) -> tuple[int, str]:
+        if meddling == "redirects":
+            (path / ".git").rename(path / ".git-elsewhere")
+            (path / ".git").write_text("gitdir: /tmp/somewhere-else\n")
+        else:
+            # A filter `git add` on the host would run for the files left uncommitted.
+            with (path / ".git" / "config").open("a") as config:
+                config.write(f'[filter "evil"]\n\tclean = touch {marker.as_posix()}\n')
+            (path / ".gitattributes").write_text("* filter=evil\n")
+            (path / "notes.txt").write_text("uncommitted\n")
+        return 0, result_block(summary="Done.")
+
+    work(server, FakeRunner(meddles), repo, once=True)
+
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert "changed the clone's git metadata" in release["note"]
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+    assert not marker.exists()
+    # Nothing came back, and the clone stays for a look.
+    assert not worktrees.branch_exists(repo, "vp-1")
+    assert (repo.parent / "app-worktrees" / "vp-1").exists()
+
+
+def test_branches_the_agent_moves_in_its_clone_never_reach_the_repository(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Overreaches")
+    git(repo, "branch", "vp-9")
+    before = worktrees.branch_refs(repo)
+
+    def overreaches(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        git(path, "branch", "--no-track", "vp-9", "origin/vp-9")
+        git(path, "update-ref", "refs/heads/vp-9", "HEAD")
+        git(path, "update-ref", "-d", "refs/heads/main")
+        git(path, "branch", "rogue")
+        git(path, "tag", "v9")
+        return 0, result_block(summary="Done.")
+
+    worker, _ = work(server, FakeRunner(overreaches), repo, once=True)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    after = worktrees.branch_refs(repo)
+    assert after.pop("refs/heads/vp-1") == board.card("VP-1")["headSha"]
+    assert after == before
+
+
+def test_another_workers_commits_during_the_run_are_left_alone(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("First worker's task")
+    board.add_task("Second worker's task")
+    git(repo, "branch", "vp-2")
+    others: list[BoardWorker] = []
+
+    def another_worker_hands_over_meanwhile(path: Path, prompt: str) -> tuple[int, str]:
+        # A second worker on the same repository commits to its branch and hands its task
+        # over while this one's agent runs.
+        other, _ = work(server, FakeRunner(), repo, name="codex@laptop", task="VP-2")
+        others.append(other)
+        return commits_a_feature(path, prompt)
+
+    worker, _ = work(server, FakeRunner(another_worker_hands_over_meanwhile), repo, task="VP-1")
+
+    assert worker.summary.handed_over == ["VP-1"]
+    assert others[0].summary.handed_over == ["VP-2"]
+    for key, branch in (("VP-1", "vp-1"), ("VP-2", "vp-2")):
+        assert board.card(key)["column"] == "review"
+        assert git(repo, "rev-parse", branch) == board.card(key)["headSha"]
+        assert git(repo, "log", "--format=%s", f"main..{branch}") == "Add the feature"
+
+
+def test_a_branch_a_person_moves_during_the_run_is_left_alone(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Runs while a person works")
+    git(repo, "branch", "unrelated")
+
+    def a_person_moves_a_branch(path: Path, prompt: str) -> tuple[int, str]:
+        (path.parent / "scratch").mkdir()
+        git(repo, "worktree", "add", "--quiet", "--detach", str(path.parent / "scratch"))
+        scratch = path.parent / "scratch"
+        git(scratch, "commit", "--quiet", "--allow-empty", "-m", "A person's commit")
+        git(repo, "branch", "--force", "unrelated", git(scratch, "rev-parse", "HEAD"))
+        git(repo, "worktree", "remove", str(scratch))
+        return commits_a_feature(path, prompt)
+
+    worker, _ = work(server, FakeRunner(a_person_moves_a_branch), repo, once=True)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    assert git(repo, "log", "-1", "--format=%s", "unrelated") == "A person's commit"
+
+
 @pytest.mark.parametrize("verify", [PASSES, FAILS], ids=["passing", "failing"])
-def test_what_the_verify_command_moved_is_restored_too(
+def test_what_the_verify_command_moves_stays_in_the_clone(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
@@ -1320,58 +1398,143 @@ def test_what_the_verify_command_moved_is_restored_too(
     moves_main = "import subprocess; subprocess.run('git update-ref refs/heads/main HEAD'.split())"
     command = f"{python(moves_main)} && {verify}"
 
-    work(server, FakeRunner(), repo, once=True, verify=command)
+    worker, _ = work(server, FakeRunner(), repo, once=True, verify=command)
 
     assert git(repo, "rev-parse", "main") == main_before
-    assert board.requests("POST", "/api/board/card-1/handover") == []
-    [release] = board.requests("POST", "/api/board/card-1/release")
-    assert release["outcome"] == "blocked"
-    assert release["note"].startswith("The agent moved main; restored them")
+    if verify == PASSES:
+        assert worker.summary.handed_over == ["VP-1"]
+    else:
+        [release] = board.requests("POST", "/api/board/card-1/release")
+        assert release["outcome"] == "failed"
+        assert release["note"].startswith("The verify command exited with code 1")
+        # The agent's commits are on the branch for the next attempt.
+        assert git(repo, "log", "--format=%s", "main..vp-1") == "Add the feature"
 
 
-def test_another_tasks_branch_the_agent_moved_is_restored(
+def test_a_verify_command_that_changes_the_clones_configuration_blocks_the_task(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
 ) -> None:
-    board.add_task("Overreaches into another task")
-    other = repo.parent / "app-worktrees" / "vp-9"
-    git(repo, "worktree", "add", "--quiet", "-b", "vp-9", str(other))
-    other_before = git(repo, "rev-parse", "vp-9")
+    board.add_task("Verified by code that reconfigures git")
+    configures = python(
+        "open('.git/config', 'a').write('[core]\\\\n\\\\tpager = less\\\\n')",
+    )
 
-    def moves_the_other_branch(path: Path, prompt: str) -> tuple[int, str]:
-        commits_a_feature(path, prompt)
-        git(path, "update-ref", "refs/heads/vp-9", "HEAD")
-        return 0, result_block(summary="Done.")
+    work(server, FakeRunner(), repo, once=True, verify=configures)
 
-    work(server, FakeRunner(moves_the_other_branch), repo, once=True)
-
-    assert git(repo, "rev-parse", "vp-9") == other_before
     [release] = board.requests("POST", "/api/board/card-1/release")
     assert release["outcome"] == "blocked"
-    assert release["note"].startswith("The agent moved vp-9; restored them")
+    assert "changed the clone's git metadata (config)" in release["note"]
+    assert not worktrees.branch_exists(repo, "vp-1")
 
 
-def test_a_moved_branch_that_cannot_be_told_from_the_users_work_is_left_and_blocks(
+def test_the_work_survives_the_removal_of_the_clone(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
 ) -> None:
-    board.add_task("Ambiguous")
+    board.add_task("Add the feature")
 
-    def moves_main_while_the_user_stages(path: Path, prompt: str) -> tuple[int, str]:
-        commits_a_feature(path, prompt)
-        git(path, "update-ref", "refs/heads/main", "HEAD")
-        (repo / "staged.txt").write_text("staged by the user\n")
-        git(repo, "add", "staged.txt")
-        return 0, result_block(summary="Done.")
+    work(server, FakeRunner(), repo, once=True)
 
-    work(server, FakeRunner(moves_main_while_the_user_stages), repo, once=True)
+    assert not (repo.parent / "app-worktrees" / "vp-1").exists()
+    head = board.card("VP-1")["headSha"]
+    assert git(repo, "rev-parse", "vp-1") == head
+    # Every object of the branch is in the repository's own store.
+    git(repo, "fsck", "--full", "--no-dangling")
+    assert git(repo, "show", "vp-1:feature.txt") == "implemented"
+    assert git(repo, "log", "--format=%s", "main..vp-1") == "Add the feature"
 
-    assert git(repo, "log", "-1", "--format=%s", "main") == "Add the feature"
+
+def test_a_rework_whose_branch_moved_during_the_run_is_blocked_instead_of_overwritten(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add a cache")
+    board.card("VP-1")["branchName"] = "issue-7"
+    git(repo, "branch", "issue-7")
+    moved: list[str] = []
+
+    def branch_moves_meanwhile(path: Path, prompt: str) -> tuple[int, str]:
+        git(repo, "checkout", "--quiet", "issue-7")
+        git(repo, "commit", "--quiet", "--allow-empty", "-m", "Someone else's rework")
+        git(repo, "checkout", "--quiet", "main")
+        moved.append(git(repo, "rev-parse", "issue-7"))
+        return commits_a_feature(path, prompt)
+
+    worker, _ = work(server, FakeRunner(branch_moves_meanwhile), repo, once=True)
+
+    assert worker.summary.handed_over == []
     [release] = board.requests("POST", "/api/board/card-1/release")
     assert release["outcome"] == "blocked"
-    assert release["note"].startswith("main moved during the run, in a checkout with changes")
+    assert release["note"].startswith("The branch issue-7 moved in")
+    assert "not overwriting it" in release["note"]
+    assert git(repo, "rev-parse", "issue-7") == moved[0]
+    # The run's work is kept in its clone for a look.
+    clone = repo.parent / "app-worktrees" / "issue-7"
+    assert git(clone, "log", "-1", "--format=%s") == "Add the feature"
+
+
+def test_a_rework_continues_from_where_the_branch_moved_on_before_the_run(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add a cache")
+    git(repo, "branch", "vp-1")
+    work(server, FakeRunner(), repo, once=True, keep_worktree=True)
+    # Someone continues the branch in the repository after the hand-over.
+    git(repo, "checkout", "--quiet", "vp-1")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "A person's fix")
+    git(repo, "checkout", "--quiet", "main")
+    board.card("VP-1").update(column="planned", assignee=None, claimedAt=None)
+    board.card("VP-1")["branchName"] = "vp-1"
+
+    def adds_more(path: Path, prompt: str) -> tuple[int, str]:
+        (path / "more.txt").write_text("more\n")
+        return 0, result_block(summary="Added more.")
+
+    work(server, FakeRunner(adds_more), repo, once=True)
+
+    assert git(repo, "log", "--format=%s", "main..vp-1").splitlines() == [
+        "Add a cache",
+        "A person's fix",
+        "Add the feature",
+    ]
+
+
+def test_a_failed_run_is_continued_in_its_clone_with_what_it_left(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Second try")
+
+    def commits_then_crashes(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        (path / "half.txt").write_text("half done\n")
+        return 1, "crashed"
+
+    work(server, FakeRunner(commits_then_crashes), repo, once=True)
+
+    clone = repo.parent / "app-worktrees" / "vp-1"
+    # The commits came back, the clone is kept with what was left uncommitted.
+    assert git(repo, "log", "--format=%s", "main..vp-1") == "Add the feature"
+    assert (clone / "half.txt").is_file()
+    seen: list[bool] = []
+
+    def finishes(path: Path, prompt: str) -> tuple[int, str]:
+        seen.append((path / "half.txt").is_file())
+        return 0, result_block(summary="Finished it.")
+
+    work(server, FakeRunner(finishes), repo, once=True)
+
+    assert seen == [True]
+    assert board.card("VP-1")["column"] == "review"
+    assert git(repo, "show", "vp-1:half.txt") == "half done"
+    assert not clone.exists()
 
 
 def test_an_agent_that_left_its_branch_blocks_the_task(
@@ -1804,7 +1967,7 @@ def review_path(repo: Path, task: str = "vp-1", name: str = REVIEWER) -> Path:
     return repo.parent / "app-worktrees" / worktrees.worktree_folder(f"review-{task}-{name}")
 
 
-def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
+def test_a_review_judges_the_handed_over_commit_in_a_detached_clone(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
@@ -1819,6 +1982,7 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
     seen: dict[str, Any] = {}
 
     def looks(path: Path, prompt: str) -> tuple[int, str]:
+        seen["git dir"] = (path / ".git").is_dir()
         seen["head"] = git(path, "rev-parse", "HEAD")
         seen["branch"] = subprocess.run(
             ["git", "symbolic-ref", "--quiet", "HEAD"],
@@ -1835,13 +1999,17 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
     assert (claim["mode"], claim["assignee"]) == ("review", REVIEWER)
     [registration] = [body for _, path, body in board.calls if path == "/api/workers"]
     assert registration is not None and registration["mode"] == "review"
-    # The commit under review, detached, in a worktree of the reviewer's own.
+    # The commit under review, detached, in a clone of the reviewer's own.
     start = runner.starts[0]
-    assert start["workspace"] == review_path(repo)
-    assert (seen["head"], seen["branch"]) == (sha, 1)
-    # The agent gets all of the git directory read-only: it has nothing to commit.
-    git_dir = (repo / ".git").resolve()
-    assert (str(git_dir), str(git_dir), "ro") in start["mounts"]
+    assert start["workspace"] == review_path(repo).resolve()
+    assert (seen["git dir"], seen["head"], seen["branch"]) == (True, sha, 1)
+    # The agent gets all of the clone's git directory read-only: it has nothing to commit.
+    # Of the repository, it only gets the objects the clone borrows, read-only too.
+    dot_git = review_path(repo).resolve() / ".git"
+    objects = (repo / ".git" / "objects").resolve()
+    assert (str(dot_git), "/workspace/.git", "ro") in start["mounts"]
+    assert {mode for _, _, mode in start["mounts"]} == {"ro"}
+    assert (str(objects), worktrees.container_path(objects), "ro") in start["mounts"]
     prompt = start["prompt"]
     assert "Review the work on task VP-1" in prompt
     assert "Build the feature described here." in prompt
@@ -1868,9 +2036,10 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
     assert report["branchName"] == "issue-7"
     assert report["commits"] == []
     assert "failureReason" not in report
-    # The worktree is gone, and no branch was made or moved.
+    # The clone is gone, and no branch was made or moved.
     assert not review_path(repo).exists()
     assert worktrees.branch_refs(repo) == branches
+    assert worktrees.worktree_paths(repo) == [repo.resolve()]
     assert worker.summary.approved == ["VP-1"]
     assert worker.summary.ended_because == "No task in review left to claim"
 
@@ -1905,7 +2074,7 @@ def test_a_rework_verdict_sends_the_feedback_and_the_task_back(
     assert worker.summary.reworked == ["VP-1"]
 
 
-def test_reviewers_with_different_names_each_approve_in_their_own_worktree(
+def test_reviewers_with_different_names_each_approve_in_their_own_clone(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
@@ -1982,7 +2151,7 @@ def test_a_passing_verify_leaves_the_verdict_to_the_agent(
         ("switches", "switched to the branch issue-7 and committed"),
     ],
 )
-def test_a_review_that_changes_the_repository_is_thrown_away_and_fails(
+def test_a_review_that_changes_its_clone_fails_and_nothing_comes_back(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
@@ -1990,10 +2159,11 @@ def test_a_review_that_changes_the_repository_is_thrown_away_and_fails(
     said: str,
 ) -> None:
     sha = handed_over(board, repo)
+    before = worktrees.branch_refs(repo)
 
     def meddles(path: Path, prompt: str) -> tuple[int, str]:
         if doing == "switches":
-            git(path, "checkout", "--quiet", "issue-7")
+            git(path, "-c", "branch.autoSetupMerge=false", "checkout", "--quiet", "issue-7")
         (path / "fix.txt").write_text("fixed\n")
         if doing != "writes":
             git(path, "add", "fix.txt")
@@ -2004,34 +2174,40 @@ def test_a_review_that_changes_the_repository_is_thrown_away_and_fails(
 
     [verdict] = board.requests("POST", "/api/board/card-1/review")
     assert verdict["verdict"] == "failed"
-    assert verdict["note"].startswith(f"The agent {said} in the review worktree")
+    assert verdict["note"] == (
+        f"The agent {said} in the review clone, which a review must not do; none of it "
+        "reaches the repository"
+    )
     assert board.card("VP-1")["column"] == "review"
     assert git(repo, "rev-parse", "issue-7") == sha
-    # Kept on request, but back at the reviewed commit without the changes.
-    path = review_path(repo)
-    assert git(path, "rev-parse", "HEAD") == sha
-    assert git(path, "status", "--porcelain") == ""
+    assert worktrees.branch_refs(repo) == before
+    assert not (repo / "fix.txt").exists()
     assert board.runs[0]["outcome"] == "failed"
 
 
-def test_a_review_that_moves_other_refs_has_them_restored_and_fails(
+def test_a_review_that_moves_refs_in_its_clone_fails_and_they_stay_there(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
 ) -> None:
     sha = handed_over(board, repo)
+    before = worktrees.branch_refs(repo)
     main = git(repo, "rev-parse", "main")
 
     def moves_refs(path: Path, prompt: str) -> tuple[int, str]:
         git(path, "update-ref", "refs/heads/issue-7", main)
+        git(path, "update-ref", "-d", "refs/heads/main")
+        git(path, "tag", "v1")
         return 0, result_block("approve", summary="Approved.")
 
     review(server, FakeRunner(moves_refs), repo)
 
     [verdict] = board.requests("POST", "/api/board/card-1/review")
     assert verdict["verdict"] == "failed"
-    assert verdict["note"] == "The agent moved issue-7; restored them"
+    assert verdict["note"].startswith("The agent moved issue-7, main, refs/tags/v1 in the review")
     assert git(repo, "rev-parse", "issue-7") == sha
+    assert worktrees.branch_refs(repo) == before
+    assert not review_path(repo).exists()
 
 
 def test_a_verify_command_that_commits_or_redirects_git_fails_the_review(
@@ -2043,10 +2219,10 @@ def test_a_verify_command_that_commits_or_redirects_git_fails_the_review(
     handed_over(board, repo, "Second")
     commits = python(
         "import subprocess as s; open('cache.txt', 'w').write('x');"
-        " s.run(['git', 'checkout', '-q', 'issue-7']);"
+        " s.run(['git', '-c', 'branch.autoSetupMerge=false', 'checkout', '-q', 'issue-7']);"
         " s.run(['git', 'commit', '-qam', 'Sneaky', '--allow-empty'])",
     )
-    redirects = python("import os; os.remove('.git'); open('.git', 'w').write('gitdir: /x')")
+    redirects = python("import os; os.rename('.git', '.x'); open('.git', 'w').write('gitdir: /x')")
 
     review(server, FakeRunner(says("approve", summary="Good.")), repo, verify=commits, once=True)
     review(server, FakeRunner(says("approve", summary="Good.")), repo, verify=redirects, once=True)
@@ -2054,12 +2230,12 @@ def test_a_verify_command_that_commits_or_redirects_git_fails_the_review(
     [first] = board.requests("POST", "/api/board/card-1/review")
     assert first["verdict"] == "failed"
     assert first["note"].startswith(
-        "The verify command switched to the branch issue-7 and committed in the review worktree",
+        "The verify command switched to the branch issue-7 and committed in the review clone",
     )
     assert git(repo, "rev-parse", "issue-7") == sha
     [second] = board.requests("POST", "/api/board/card-2/review")
     assert second["verdict"] == "failed"
-    assert "changed the worktree's git metadata" in second["note"]
+    assert "changed the clone's git metadata" in second["note"]
     # Kept for a look: git does not run in it again.
     assert review_path(repo, "vp-2").exists()
 
@@ -3020,143 +3196,50 @@ def test_host_git_ignores_a_repository_named_in_the_environment(
     monkeypatch.setenv("GIT_INDEX_FILE", str(other / ".git" / "index"))
 
     assert worktrees.repository_root(repo) == repo.resolve()
-    worktree = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
+    clone = worktrees.prepare_clone(repo, tmp_path / "worktrees", "issue-1", "main")
+    worktrees.write_back(repo, clone)
 
     assert worktrees.branch_exists(repo, "issue-1")
     assert not worktrees.branch_exists(other, "issue-1")
-    assert worktree.path == (tmp_path / "worktrees" / "issue-1").resolve()
+    assert clone.path == (tmp_path / "worktrees" / "issue-1").resolve()
 
 
-def test_the_agent_cannot_switch_or_stage_in_other_checkouts(repo: Path, tmp_path: Path) -> None:
-    git(repo, "worktree", "add", "--quiet", "-b", "mine", str(tmp_path / "mine"))
-    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
-    git_dir = (repo / ".git").resolve()
-
-    readonly = {host for host, _, mode in worktrees.agent_mounts(repo, task.path) if mode == "ro"}
-
-    assert {str(git_dir / "HEAD"), str(git_dir / "index")} <= readonly
-    assert {str(git_dir / "worktrees" / "mine" / name) for name in ("HEAD", "index")} <= readonly
-    # The task's own HEAD and index stay writable for its commits.
-    own = worktrees.admin_dir(task.path)
-    assert not {str(own / "HEAD"), str(own / "index")} & readonly
-
-
-def test_the_agent_cannot_write_per_worktree_configuration(repo: Path, tmp_path: Path) -> None:
-    git(repo, "config", "extensions.worktreeConfig", "true")
-    git(repo, "worktree", "add", "--quiet", "-b", "mine", str(tmp_path / "mine"))
-    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
-    git_dir = (repo / ".git").resolve()
-    own = worktrees.admin_dir(task.path)
-
-    readonly = {host for host, _, mode in worktrees.agent_mounts(repo, task.path) if mode == "ro"}
-
-    configs = [git_dir, git_dir / "worktrees" / "mine", own]
-    assert {str(path / "config.worktree") for path in configs} <= readonly
-    assert all((path / "config.worktree").read_text() == "" for path in configs)
-
-
-def test_the_agent_cannot_move_or_unlock_other_worktrees(repo: Path, tmp_path: Path) -> None:
-    git(repo, "worktree", "add", "--quiet", "-b", "mine", str(tmp_path / "mine"))
-    git(repo, "worktree", "add", "--quiet", "-b", "kept", str(tmp_path / "kept"))
-    git(repo, "worktree", "lock", str(tmp_path / "kept"))
-    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
-    others = (repo / ".git" / "worktrees").resolve()
-
-    readonly = {host for host, _, mode in worktrees.agent_mounts(repo, task.path) if mode == "ro"}
-
-    for name in ("mine", "kept"):
-        assert {str(others / name / file) for file in ("gitdir", "commondir")} <= readonly
-    assert str(others / "kept" / "locked") in readonly
-
-
-def test_changed_pointers_or_locks_of_other_worktrees_are_refused(
+def test_clones_share_the_objects_and_commit_as_the_repository_does(
     repo: Path,
     tmp_path: Path,
 ) -> None:
-    for name in ("mine", "kept", "done"):
-        git(repo, "worktree", "add", "--quiet", "-b", name, str(tmp_path / name))
-    git(repo, "worktree", "lock", str(tmp_path / "kept"))
-    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
-    others = repo / ".git" / "worktrees"
-    before = worktrees.pointers(task.path)
-    # Another worker removes its worktree meanwhile: not the agent's doing.
-    git(repo, "worktree", "remove", str(tmp_path / "done"))
-    worktrees.verify_pointers(task.path, before)
+    clone = worktrees.prepare_clone(repo, tmp_path / "trees", "vp-9", "main")
 
-    (others / "mine" / "gitdir").write_text(f"{task.path / '.git'}\n")
-    (others / "mine" / "locked").write_text("")
-    (others / "kept" / "locked").unlink()
-
-    with pytest.raises(worktrees.GitError) as raised:
-        worktrees.verify_pointers(task.path, before)
-    assert "(kept/locked, mine/gitdir, mine/locked)" in str(raised.value)
+    assert (clone.path / ".git").is_dir()
+    assert worktrees.alternates(clone.path) == [(repo / ".git" / "objects").resolve()]
+    assert worktrees.worktree_paths(repo) == [repo.resolve()]
+    (clone.path / "change.txt").write_text("x\n")
+    worktrees.commit_all(clone.path, "Change")
+    assert git(clone.path, "log", "-1", "--format=%an <%ae>") == "Test <test@example.com>"
 
 
-def test_where_a_branch_was_checked_out_before_the_run_counts(
-    repo: Path,
-    tmp_path: Path,
-) -> None:
-    other = tmp_path / "vp-9"
-    git(repo, "worktree", "add", "--quiet", "-b", "vp-9", str(other))
-    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "vp-1", "main")
-    refs = worktrees.branch_refs(repo)
-    checked_out = worktrees.checkouts(repo)
-    commits_a_feature(task.path, "")
-    # The agent moves vp-9 to its own commit, and has the worktree list name its own
-    # worktree, whose index holds that commit, as where vp-9 is checked out.
-    git(task.path, "update-ref", "refs/heads/vp-9", "HEAD")
-    (repo / ".git" / "worktrees" / "vp-9" / "gitdir").write_text(f"{task.path / '.git'}\n")
+def test_the_agent_cannot_reconfigure_the_clone(repo: Path, tmp_path: Path) -> None:
+    clone = worktrees.prepare_clone(repo, tmp_path / "trees", "issue-1", "main")
+    dot_git = clone.path / ".git"
 
-    restored, left = worktrees.restore_refs(repo, refs, "vp-1", checked_out)
+    mounts = worktrees.agent_mounts(clone.path)
 
-    assert (restored, left) == (["vp-9"], [])
-    assert git(repo, "rev-parse", "vp-9") == refs["refs/heads/vp-9"]
-
-
-def test_a_branch_checked_out_only_after_the_run_started_is_left_and_blocks(
-    board: FakeBoard,
-    server: FakeBoardServer,
-    repo: Path,
-) -> None:
-    board.add_task("Makes up a checkout")
-    git(repo, "branch", "release")
-    release_before = git(repo, "rev-parse", "release")
-
-    def moves_release_behind_a_made_up_checkout(path: Path, prompt: str) -> tuple[int, str]:
-        commits_a_feature(path, prompt)
-        git(path, "update-ref", "refs/heads/release", "HEAD")
-        made_up = repo / ".git" / "worktrees" / "made-up"
-        made_up.mkdir()
-        (made_up / "HEAD").write_text("ref: refs/heads/release\n")
-        (made_up / "commondir").write_text("../..\n")
-        (made_up / "gitdir").write_text(f"{path / '.git'}\n")
-        return 0, "Done."
-
-    work(server, FakeRunner(moves_release_behind_a_made_up_checkout), repo, once=True)
-
-    assert git(repo, "rev-parse", "release") != release_before
-    assert board.requests("POST", "/api/board/card-1/handover") == []
-    [release] = board.requests("POST", "/api/board/card-1/release")
-    assert release["outcome"] == "blocked"
-    assert release["note"].startswith("release moved during the run, in a checkout")
-
-
-def test_other_worktrees_whose_pointer_leads_nowhere_are_not_pruned(
-    repo: Path,
-    tmp_path: Path,
-) -> None:
-    git(repo, "worktree", "add", "--quiet", "-b", "mine", str(tmp_path / "mine"))
-    mine = repo / ".git" / "worktrees" / "mine"
-    (mine / "gitdir").write_text(f"{tmp_path / 'nowhere' / '.git'}\n")
-    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "vp-1", "main")
-    # The worker's own worktree, whose folder was removed, is still made again.
-    shutil.rmtree(task.path)
-
-    again = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "vp-1", "main")
-
-    assert again.path == task.path
-    assert worktrees.current_branch(again.path) == "vp-1"
-    assert (mine / "HEAD").is_file()
+    readonly = {target for _, target, mode in mounts if mode == "ro"}
+    assert {
+        "/workspace/.git/config",
+        "/workspace/.git/hooks",
+        "/workspace/.git/info",
+        "/workspace/.git/objects/info/alternates",
+    } <= readonly
+    # Besides the clone itself, mounted writable by the runner, nothing is writable.
+    assert all(mode == "ro" for _, _, mode in mounts)
+    assert not any(host == str(repo / ".git") for host, _, _ in mounts)
+    before = worktrees.pointers(clone.path)
+    worktrees.verify_pointers(clone.path, before)
+    with (dot_git / "config").open("a") as config:
+        config.write("[core]\n\tpager = less\n")
+    with pytest.raises(worktrees.GitError, match=r"git metadata \(config\)"):
+        worktrees.verify_pointers(clone.path, before)
 
 
 def test_windows_git_paths_are_translated_for_the_linux_container(
@@ -3173,21 +3256,21 @@ def test_windows_git_paths_are_translated_for_the_linux_container(
     with pytest.raises(worktrees.GitError, match="use a local drive"):
         worktrees.container_path(PureWindowsPath(r"\\server\share\app\.git"))
 
-    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
-    own_pointer = (task.path / ".git").read_text()
+    clone = worktrees.prepare_clone(repo, tmp_path / "worktrees", "issue-1", "main")
+    alternates = clone.path / ".git" / "objects" / "info" / "alternates"
+    own_pointer = alternates.read_text()
     # As on a Windows host, where no host path is a container path.
     monkeypatch.setattr(worktrees, "container_path", lambda path: f"/c{PurePath(path).as_posix()}")
 
-    mounts = worktrees.agent_mounts(repo, task.path)
+    mounts = worktrees.agent_mounts(clone.path)
 
-    git_dir = (repo / ".git").resolve()
-    admin = worktrees.admin_dir(task.path)
-    assert (str(git_dir), f"/c{git_dir.as_posix()}", "rw") in mounts
+    objects = (repo / ".git" / "objects").resolve()
+    assert mounts[0] == (str(objects), f"/c{objects.as_posix()}", "ro")
     host, target, mode = mounts[-1]
-    assert (target, mode) == ("/workspace/.git", "ro")
-    assert Path(host).read_text() == f"gitdir: /c{admin.as_posix()}\n"
-    # The worktree's own pointer, which git on the host reads, is left as it was.
-    assert (task.path / ".git").read_text() == own_pointer
+    assert (target, mode) == ("/workspace/.git/objects/info/alternates", "ro")
+    assert Path(host).read_text() == f"/c{objects.as_posix()}\n"
+    # The clone's own pointer, which git on the host reads, is left as it was.
+    assert alternates.read_text() == own_pointer
 
 
 def test_the_users_checkout_is_not_taken_over_from_a_worktree_folder_around_it(
@@ -3200,35 +3283,52 @@ def test_the_users_checkout_is_not_taken_over_from_a_worktree_folder_around_it(
 
     # The worktree folder holds the user's checkout, and a worktree it did not make.
     with pytest.raises(worktrees.GitError, match="not working in someone else's checkout"):
-        worktrees.prepare_worktree(repo, tmp_path, "vp-1", "main")
+        worktrees.prepare_clone(repo, tmp_path, "vp-1", "main")
     with pytest.raises(worktrees.GitError, match="not working in someone else's checkout"):
-        worktrees.prepare_worktree(repo, tmp_path, "vp-2", "main")
+        worktrees.prepare_clone(repo, tmp_path, "vp-2", "main")
+    with pytest.raises(worktrees.GitError, match="holds the repository's own checkout"):
+        worktrees.prepare_clone(repo, tmp_path, repo.name, "main")
     assert worktrees.current_branch(repo) == "vp-1"
+    assert (elsewhere / ".git").is_file()
 
 
-def test_worktree_helpers_prepare_and_clean_up(repo: Path, tmp_path: Path) -> None:
-    fresh = worktrees.prepare_worktree(repo, tmp_path / "trees", "vp-9", "main")
-    assert fresh.continued is False
+def test_clone_helpers_prepare_write_back_and_clean_up(repo: Path, tmp_path: Path) -> None:
+    trees = tmp_path / "trees"
+    fresh = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    assert (fresh.continued, fresh.tip) == (False, None)
     assert worktrees.current_branch(fresh.path) == "vp-9"
+    assert not worktrees.branch_exists(repo, "vp-9")
     (fresh.path / "change.txt").write_text("x\n")
     assert worktrees.has_changes(fresh.path)
     worktrees.commit_all(fresh.path, "Change")
     assert [commit["subject"] for commit in worktrees.commits_since(fresh.path, fresh.start)] == [
         "Change",
     ]
+    head = worktrees.write_back(repo, fresh)
+    assert git(repo, "rev-parse", "vp-9") == head
+    # No tag or other branch of the clone comes along.
+    git(fresh.path, "tag", "agent-tag")
+    git(fresh.path, "branch", "agent-branch")
+    assert worktrees.write_back(repo, fresh) == head
+    assert git(repo, "tag", "--list") == ""
+    assert not worktrees.branch_exists(repo, "agent-branch")
 
-    again = worktrees.prepare_worktree(repo, tmp_path / "trees", "vp-9", "main")
-    assert (again.path, again.continued) == (fresh.path, True)
+    # Where the branch is as the repository has it, the clone is worked on as it is.
+    (fresh.path / "left.txt").write_text("left\n")
+    again = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    assert (again.path, again.continued, again.tip) == (fresh.path, True, head)
+    assert (again.path / "left.txt").is_file()
     with pytest.raises(worktrees.BranchExistsError):
-        worktrees.prepare_worktree(repo, tmp_path / "trees", "vp-9", "main", "refuse")
+        worktrees.prepare_clone(repo, trees, "vp-9", "main", "refuse")
     with pytest.raises(worktrees.GitError, match="Invalid branch name"):
-        worktrees.prepare_worktree(repo, tmp_path / "trees", "bad..name", "main")
+        worktrees.prepare_clone(repo, trees, "bad..name", "main")
 
     with pytest.raises(worktrees.GitError, match="outside"):
-        worktrees.remove_worktree(repo, tmp_path / "elsewhere", fresh.path)
-    worktrees.remove_worktree(repo, tmp_path / "trees", fresh.path)
+        worktrees.remove_clone(tmp_path / "elsewhere", fresh.path)
+    worktrees.remove_clone(trees, fresh.path)
     assert not fresh.path.exists()
     assert worktrees.branch_exists(repo, "vp-9")
+    git(repo, "fsck", "--full", "--no-dangling")
 
 
 def test_git_on_the_host_does_not_look_into_nested_repositories(repo: Path) -> None:
@@ -3266,35 +3366,108 @@ def test_git_on_the_host_does_not_look_into_nested_repositories(repo: Path) -> N
     assert worktrees.commit_all(repo, "Nothing") is None
 
 
-def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) -> None:
+def test_a_clone_left_behind_is_replaced_only_when_nothing_in_it_would_be_lost(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    trees = tmp_path / "trees"
+    clone = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    git(clone.path, "commit", "--quiet", "--allow-empty", "-m", "First")
+    worktrees.write_back(repo, clone)
+    # The branch moved on in the repository: a clean clone behind it is replaced.
+    git(repo, "checkout", "--quiet", "vp-9")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Moved on")
+    git(repo, "checkout", "--quiet", "main")
+    replaced = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    assert replaced.start == git(repo, "rev-parse", "vp-9")
+
+    # Commits that are not in the repository, and changes, are never thrown away.
+    git(replaced.path, "commit", "--quiet", "--allow-empty", "-m", "Not brought back")
+    with pytest.raises(worktrees.GitError, match="holds commits that are not in"):
+        worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    git(replaced.path, "reset", "--quiet", "--hard", "HEAD~1")
+    git(repo, "checkout", "--quiet", "vp-9")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Moved on again")
+    git(repo, "checkout", "--quiet", "main")
+    (replaced.path / "wip.txt").write_text("work in progress\n")
+    with pytest.raises(worktrees.GitError, match="holds uncommitted changes"):
+        worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    assert (replaced.path / "wip.txt").is_file()
+
+    # A clone whose configuration was changed is not run git in.
+    with (replaced.path / ".git" / "config").open("a") as config:
+        config.write("[core]\n\tpager = less\n")
+    with pytest.raises(worktrees.GitError, match="its configuration sets core.pager"):
+        worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    # Nor is a folder the worker did not make.
+    (trees / "vp-8").mkdir()
+    (trees / "vp-8" / "mine.txt").write_text("mine\n")
+    with pytest.raises(worktrees.GitError, match="in use"):
+        worktrees.prepare_clone(repo, trees, "vp-8", "main")
+
+
+def test_a_worktree_of_an_earlier_version_is_retired_when_it_holds_no_changes(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Started by an earlier version")
+    board.add_task("Also started by an earlier version")
+    trees = repo.parent / "app-worktrees"
+    for branch in ("vp-1", "vp-2"):
+        git(repo, "worktree", "add", "--quiet", "-b", branch, str(trees / branch))
+        git(trees / branch, "commit", "--quiet", "--allow-empty", "-m", f"Earlier {branch}")
+    (trees / "vp-2" / "wip.txt").write_text("work in progress\n")
+
+    work(server, FakeRunner(), repo, task="VP-1")
+    work(server, FakeRunner(), repo, task="VP-2")
+
+    # The clean one made way for a clone, its branch continued.
+    assert board.card("VP-1")["column"] == "review"
+    assert git(repo, "log", "--format=%s", "main..vp-1").splitlines() == [
+        "Add the feature",
+        "Earlier vp-1",
+    ]
+    # The one with changes is left as it is, and the task blocked.
+    [release] = board.requests("POST", "/api/board/card-2/release")
+    assert release["outcome"] == "blocked"
+    assert "a worktree an earlier version of vp board work left" in release["note"]
+    assert (trees / "vp-2" / "wip.txt").read_text() == "work in progress\n"
+    assert worktrees.worktree_paths(repo) == [repo.resolve(), (trees / "vp-2").resolve()]
+
+
+def test_review_clones_are_detached_and_replaced(repo: Path, tmp_path: Path) -> None:
     sha = git(repo, "rev-parse", "main")
     branches = worktrees.branch_refs(repo)
+    trees = tmp_path / "trees"
 
-    path = worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a@b", sha)
+    path = worktrees.prepare_review_clone(repo, trees, "review-vp-1-a@b", sha)
 
-    assert path == (tmp_path / "trees" / "review-vp-1-a-b").resolve()
+    assert path == (trees / "review-vp-1-a-b").resolve()
+    assert (path / ".git").is_dir()
     assert worktrees.current_branch(path) is None
     assert git(path, "rev-parse", "HEAD") == sha
     (path / "left.txt").write_text("left\n")
-    # A review worktree left behind is replaced, and no branch is ever made.
-    again = worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a@b", sha)
+    git(path, "commit", "--quiet", "--allow-empty", "-m", "Left behind")
+    # A review clone left behind is replaced, and no branch is ever made.
+    again = worktrees.prepare_review_clone(repo, trees, "review-vp-1-a@b", sha)
     assert again == path and not (path / "left.txt").exists()
+    assert git(path, "rev-parse", "HEAD") == sha
     assert worktrees.branch_refs(repo) == branches
-    (tmp_path / "trees" / "taken").mkdir()
-    (tmp_path / "trees" / "taken" / "file").write_text("mine\n")
+    # So is a review worktree of an earlier version.
+    old = trees / "review-vp-2-a-b"
+    git(repo, "worktree", "add", "--quiet", "--detach", str(old), sha)
+    assert worktrees.prepare_review_clone(repo, trees, "review-vp-2-a@b", sha) == old.resolve()
+    assert worktrees.worktree_paths(repo) == [repo.resolve()]
+    (trees / "taken").mkdir()
+    (trees / "taken" / "file").write_text("mine\n")
     with pytest.raises(worktrees.GitError, match="in use"):
-        worktrees.prepare_review_worktree(repo, tmp_path / "trees", "taken", sha)
+        worktrees.prepare_review_clone(repo, trees, "taken", sha)
     with pytest.raises(worktrees.GitError, match="own checkout"):
-        worktrees.prepare_review_worktree(repo, repo.parent, repo.name, sha)
-
-    git(path, "checkout", "--quiet", "-b", "agent-branch")
-    (path / "README.md").write_text("changed\n")
-    worktrees.discard_changes(path, sha)
-    assert worktrees.current_branch(path) is None
-    assert git(path, "status", "--porcelain") == ""
+        worktrees.prepare_review_clone(repo, repo.parent, repo.name, sha)
     assert worktrees.commit_exists(repo, sha)
     assert not worktrees.commit_exists(repo, "0" * 40)
 
-    mounts = worktrees.agent_mounts(repo, path, read_only=True)
-    git_dir = (repo / ".git").resolve()
-    assert mounts[0] == (str(git_dir), str(git_dir), "ro")
+    mounts = worktrees.agent_mounts(path, read_only=True)
+    assert (str(path / ".git"), "/workspace/.git", "ro") in mounts
+    assert {mode for _, _, mode in mounts} == {"ro"}

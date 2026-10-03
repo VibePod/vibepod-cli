@@ -1,14 +1,15 @@
 """`vp board work`: an agent works through the planned tasks of a board project.
 
-For each task the worker claims it on the board, checks its branch out in a worktree of its
-own, runs the agent headless with the task as the prompt, runs an optional verify command, and
-hands the task over to Review, or gives it back to Planned (or blocks it) with a note. Every run
-leaves a report on its task.
+For each task the worker claims it on the board, checks its branch out in a clone of the
+repository of its own, runs the agent headless with the task as the prompt in that clone, runs
+an optional verify command, brings the branch back into the repository, and hands the task
+over to Review, or gives it back to Planned (or blocks it) with a note. Every run leaves a
+report on its task.
 
 In review mode the worker claims tasks in Review instead. It checks the commit the hand-over
-named out, detached, in a worktree of its own, has the agent judge the work without changing
-anything, and sends the verdict: approve, rework with feedback, or a question. The review
-must leave the repository as it found it; whatever the agent changed is thrown away.
+named out, detached, in a clone of its own, has the agent judge the work without changing
+anything, and sends the verdict: approve, rework with feedback, or a question. Nothing of a
+review comes back into the repository; whatever the agent changed goes with its clone.
 
 The worker is registered with the board while it runs and reports what it does in heartbeats.
 Their replies carry the board's instructions: pause (take no new task), stop (end the run, give
@@ -116,7 +117,7 @@ class RunnerError(Exception):
 
 
 class AgentStopError(RunnerError):
-    """The agent could not be stopped and may still be working in the worktree. Its task
+    """The agent could not be stopped and may still be working in its clone. Its task
     stays claimed until the lease runs out instead of going to another worker meanwhile."""
 
 
@@ -130,7 +131,7 @@ class TaskProblem(Exception):
 
 
 class ReviewProblem(Exception):
-    """A review that went wrong, such as one whose agent changed the repository; it ends as
+    """A review that went wrong, such as one whose agent committed in its clone; it ends as
     failed, with the message as the reason, and the task stays in Review for others."""
 
 
@@ -283,7 +284,7 @@ class ReviewResult:
     head_sha: str | None = None
     commit: str | None = None
     verify: VerifyResult | None = None
-    # Kept for a look rather than removed: git must not run in it.
+    # The clone is kept for a look rather than removed, since git must not run in it.
     keep_worktree: bool = False
 
 
@@ -492,8 +493,8 @@ def build_review_prompt(
         "",
         "## How to review",
         "",
-        f"- You are in a git worktree with commit `{commit}` of the branch `{branch}` checked "
-        "out, detached.",
+        f"- You are in a clone of the repository with commit `{commit}` of the branch "
+        f"`{branch}` checked out, detached.",
         f"- The work branched off `{base}`: read it with `git diff {base_commit}...HEAD` and "
         f"`git log {base_commit}..HEAD`.",
         "- Check it against the description and each acceptance criterion, and run the "
@@ -542,7 +543,8 @@ def build_prompt(
         "",
         "## How to work",
         "",
-        f"- You are in a git worktree on the branch `{branch}`. Make every change here.",
+        f"- You are in a clone of the repository, on the branch `{branch}`. Make every "
+        "change here.",
         "- Commit your work with clear messages as you go. Do not push, and do not switch or "
         "create branches.",
         "- Run the relevant tests or checks before you finish.",
@@ -1000,7 +1002,7 @@ class BoardWorker:
         self._set("working", step=STEP_PREPARING)
         result = TaskResult()
         repo: Path | None = None
-        worktree: worktrees.Worktree | None = None
+        worktree: worktrees.TaskClone | None = None
         # A task sent back from Review keeps the branch it was handed over on, and a task that
         # asked a question keeps the branch its draft is on: both continue there, whatever
         # --existing says.
@@ -1022,7 +1024,7 @@ class BoardWorker:
                     )
                 # Checking a branch out can take long in a large repository.
                 with self._keepalive():
-                    worktree = worktrees.prepare_worktree(
+                    worktree = worktrees.prepare_clone(
                         repo,
                         self._worktree_dir(repo),
                         result.branch,
@@ -1034,6 +1036,7 @@ class BoardWorker:
                 else:
                     self.say("info", f"Working on branch {worktree.branch} in {worktree.path}")
                 self._run(task, repo, worktree, result, started, earlier, rework)
+                self._write_back(repo, worktree, result)
             except worktrees.BranchExistsError as exc:
                 raise TaskProblem(f"{exc}; not continuing on it (--existing refuse)") from exc
             except worktrees.GitError as exc:
@@ -1102,7 +1105,7 @@ class BoardWorker:
         self,
         task: dict[str, Any],
         repo: Path,
-        worktree: worktrees.Worktree,
+        worktree: worktrees.TaskClone,
         result: TaskResult,
         started: float,
         earlier: Sequence[dict[str, Any]] = (),
@@ -1111,12 +1114,10 @@ class BoardWorker:
         deadline = started + self.options.timeout_seconds if self.options.timeout_seconds else None
         self._set("working", step=STEP_AGENT)
         with self._keepalive():
-            mounts = worktrees.agent_mounts(repo, worktree.path)
+            mounts = worktrees.agent_mounts(worktree.path)
             pointers = worktrees.pointers(worktree.path)
-            refs = worktrees.branch_refs(repo)
-            checked_out = worktrees.checkouts(repo)
-            # A stop or cancel that came while the worktree was prepared ends the run before
-            # the agent starts, rather than once it already writes to the worktree.
+            # A stop or cancel that came while the clone was prepared ends the run before the
+            # agent starts, rather than once it already writes to the clone.
             if self._ended_early(self._interruption(deadline) or "exit", result):
                 return
             run = self.runner.start(
@@ -1133,7 +1134,7 @@ class BoardWorker:
         logs = run.logs()
         result.summary = summarize_logs(logs)
         with self._keepalive():
-            self._check_after_run(repo, worktree, pointers, refs, checked_out)
+            self._check_after_run(worktree, pointers)
         if self._ended_early(ended, result):
             return
         # Some agents exit cleanly when a limit stops them, so a run that left no work is
@@ -1199,7 +1200,7 @@ class BoardWorker:
             # The verify command ran code the agent wrote, which may have changed what the
             # agent itself must not: checked again before git on the host goes on.
             with self._keepalive():
-                self._check_after_run(repo, worktree, pointers, refs, checked_out)
+                self._check_after_run(worktree, pointers)
             if self._ended_early(result.verify.ended, result):
                 return
             if result.verify.exit_code != 0:
@@ -1210,7 +1211,7 @@ class BoardWorker:
                 )
                 return
             # What the verify command changed or committed, such as formatted files or
-            # updated snapshots, goes with the work instead of being lost with the worktree.
+            # updated snapshots, goes with the work instead of being lost with the clone.
             with self._keepalive():
                 worktrees.commit_all(
                     worktree.path,
@@ -1221,47 +1222,41 @@ class BoardWorker:
         result.head = worktrees.git(worktree.path, "rev-parse", "HEAD")
         result.outcome, result.reason, result.release = "done", None, None
 
-    def _did_work(self, worktree: worktrees.Worktree) -> bool:
+    def _did_work(self, worktree: worktrees.TaskClone) -> bool:
         return worktrees.has_changes(worktree.path) or bool(
             worktrees.commits_since(worktree.path, worktree.start),
         )
 
-    def _check_after_run(
-        self,
-        repo: Path,
-        worktree: worktrees.Worktree,
-        pointers: dict[str, str | None],
-        refs: dict[str, str],
-        checked_out: dict[str, Path],
-    ) -> None:
+    def _check_after_run(self, clone: worktrees.TaskClone, pointers: dict[str, str]) -> None:
         """What the agent must not have done, checked before git on the host touches the
-        worktree: redirect it to another git directory, move other branches or tags, or leave
-        its own branch."""
-        worktrees.verify_pointers(worktree.path, pointers)
-        restored, left = worktrees.restore_refs(
-            repo,
-            refs,
-            worktree.branch,
-            checked_out,
-        )
-        if restored:
+        clone: redirect it to another git directory, change its configuration, or leave its
+        own branch. Whatever else it did to branches and tags stays in its clone."""
+        try:
+            worktrees.verify_pointers(clone.path, pointers)
+        except worktrees.GitError as exc:
+            raise TaskProblem(f"{exc}; the clone at {clone.path} needs a look") from exc
+        on = worktrees.current_branch(clone.path)
+        if on != clone.branch:
             raise TaskProblem(
-                f"The agent moved {', '.join(restored)}; restored them, and the work on "
-                f"{worktree.branch} needs a look",
+                f"The agent left the branch {clone.branch} (now on {on or 'a detached HEAD'}); "
+                f"the clone at {clone.path} needs a look",
             )
-        if left:
-            raise TaskProblem(
-                f"{', '.join(left)} moved during the run, in a checkout with changes staged or "
-                f"made during the run; "
-                f"left as they are: check whether the agent moved them, and the work on "
-                f"{worktree.branch}",
-            )
-        on = worktrees.current_branch(worktree.path)
-        if on != worktree.branch:
-            raise TaskProblem(
-                f"The agent left the branch {worktree.branch} (now on {on or 'a detached HEAD'}); "
-                f"the worktree at {worktree.path} needs a look",
-            )
+
+    def _write_back(self, repo: Path, clone: worktrees.TaskClone, result: TaskResult) -> None:
+        """Brings the task's branch back from the clone into the repository, after a run whose
+        clone passed its checks, whatever the run came to: the work so far stays on the branch
+        for the next run, as a question's draft does. A branch that moved in the repository
+        meanwhile is not overwritten: the task is blocked for a look instead."""
+        try:
+            with self._keepalive():
+                worktrees.write_back(repo, clone)
+        except worktrees.GitError as exc:
+            reason = str(exc)
+            if result.outcome != "done" and result.reason:
+                reason += f". The run itself ended: {result.reason}"
+            result.reason = reason
+            if result.outcome == "done" or result.release is not None:
+                result.outcome, result.release = "failed", "blocked"
 
     def _conversation(self, task: dict[str, Any]) -> list[dict[str, Any]]:
         return self._history(task, conversation)
@@ -1351,7 +1346,7 @@ class BoardWorker:
         started_at: datetime,
         started: float,
         repo: Path | None,
-        worktree: worktrees.Worktree | None,
+        worktree: worktrees.TaskClone | None,
     ) -> None:
         if result.outcome == "done":
             # The board's last word before the hand-over: a stop or cancel still wins.
@@ -1364,7 +1359,7 @@ class BoardWorker:
                 result.outcome, result.reason = "cancelled", self.cancel_reason
             result.release = None
         if self.stop_failed is not None:
-            # The agent may still be writing to the worktree: the claim stays until its lease
+            # The agent may still be writing to the clone: the claim stays until its lease
             # runs out, so that no other worker starts on the task meanwhile.
             result.release = None
         card_ref = str(card["id"])
@@ -1431,9 +1426,9 @@ class BoardWorker:
             and not self.options.keep_worktree
         ):
             try:
-                worktrees.remove_worktree(repo, self._worktree_dir(repo), worktree.path)
+                worktrees.remove_clone(self._worktree_dir(repo), worktree.path)
             except worktrees.GitError as exc:
-                self.say("warning", f"Could not remove the worktree: {exc}")
+                self.say("warning", f"Could not remove the clone: {exc}")
         self.task = None
         self.cancel_reason = None
         self._set("idle")
@@ -1603,8 +1598,8 @@ class BoardWorker:
         repo: Path,
         result: ReviewResult,
     ) -> tuple[Path, str, str]:
-        """Checks the commit under review out in a worktree of the reviewer's own. Says
-        where, and the base the work is diffed against, by name and commit."""
+        """Checks the commit under review out in a clone of the reviewer's own. Says where,
+        and the base the work is diffed against, by name and commit."""
         branch = result.branch
         if not branch:
             raise TaskProblem("The card names no branch to review")
@@ -1622,7 +1617,7 @@ class BoardWorker:
         base = self.options.base or worktrees.current_branch(repo) or "HEAD"
         base_commit = worktrees.resolve_commit(repo, base)
         key = str(task.get("key") or task["id"]).lower()
-        path = worktrees.prepare_review_worktree(
+        path = worktrees.prepare_review_clone(
             repo,
             self._worktree_dir(repo),
             f"review-{key}-{self.options.name}",
@@ -1645,11 +1640,10 @@ class BoardWorker:
         earlier = self._history(task, review_history)
         self._set("working", step=STEP_AGENT)
         with self._keepalive():
-            mounts = worktrees.agent_mounts(repo, path, read_only=True)
+            mounts = worktrees.agent_mounts(path, read_only=True)
             pointers = worktrees.pointers(path)
-            refs = worktrees.branch_refs(repo)
-            checked_out = worktrees.checkouts(repo)
-            # A stop or cancel that came while the worktree was prepared ends the review
+            refs = worktrees.branch_refs(path)
+            # A stop or cancel that came while the clone was prepared ends the review
             # before the agent starts.
             if self._review_ended_early(self._interruption(deadline) or "exit", result):
                 return
@@ -1667,7 +1661,7 @@ class BoardWorker:
         logs = run.logs()
         result.summary = summarize_logs(logs)
         with self._keepalive():
-            self._check_review(repo, path, result, pointers, refs, checked_out)
+            self._check_review(path, result, pointers, refs)
         if self._review_ended_early(ended, result):
             return
         said = parse_result(logs, REVIEW_STATUSES)
@@ -1688,15 +1682,7 @@ class BoardWorker:
             # The verify command ran the code under review, which may have changed what the
             # review must not: checked again before git on the host goes on.
             with self._keepalive():
-                self._check_review(
-                    repo,
-                    path,
-                    result,
-                    pointers,
-                    refs,
-                    checked_out,
-                    "The verify command",
-                )
+                self._check_review(path, result, pointers, refs, "The verify command")
             if self._review_ended_early(result.verify.ended, result):
                 return
             if result.verify.exit_code != 0:
@@ -1752,75 +1738,43 @@ class BoardWorker:
 
     def _check_review(
         self,
-        repo: Path,
         path: Path,
         result: ReviewResult,
-        pointers: dict[str, str | None],
+        pointers: dict[str, str],
         refs: dict[str, str],
-        checked_out: dict[str, Path],
         who: str = "The agent",
     ) -> None:
-        """The review must leave the repository as it found it. What the agent committed,
-        switched to or left changed in the worktree is thrown away, refs it moved are put
-        back, and the review fails. Nothing of git runs in a worktree whose pointers into
-        the git directory changed. Checked again after the verify command, which runs the
-        code under review, and may leave files behind, such as caches, but nothing else."""
+        """A review changes nothing. Nothing of its clone comes back into the repository, but
+        a review whose agent committed, switched branches, moved refs or left changes there
+        fails. Nothing of git runs in a clone whose git directory or configuration changed: it
+        is kept for a look. Checked again after the verify command, which runs the code under
+        review, and may leave files behind, such as caches, but nothing else."""
         assert result.commit is not None
         try:
             worktrees.verify_pointers(path, pointers)
         except worktrees.GitError as exc:
             result.keep_worktree = True
-            reason = f"{exc}; the worktree at {path} needs a look"
-            try:
-                self._check_refs(repo, refs, checked_out, who)
-            except ReviewProblem as problem:
-                reason += f". {problem}"
-            raise ReviewProblem(reason) from exc
+            raise ReviewProblem(f"{exc}; the review clone at {path} needs a look") from exc
         changed: list[str] = []
         on = worktrees.current_branch(path)
         if on is not None:
             changed.append(f"switched to the branch {on}")
         if worktrees.git(path, "rev-parse", "HEAD") != result.commit:
             changed.append("committed")
+        after = worktrees.branch_refs(path)
+        moved = sorted(
+            ref.removeprefix("refs/heads/")
+            for ref in refs.keys() | after.keys()
+            if refs.get(ref) != after.get(ref) and ref != f"refs/heads/{on}"
+        )
+        if moved:
+            changed.append(f"moved {', '.join(moved)}")
         if who == "The agent" and worktrees.has_changes(path):
             changed.append("left uncommitted changes")
         if changed:
-            worktrees.discard_changes(path, result.commit)
-            created = f"refs/heads/{on}"
-            if on is not None and created not in refs:
-                # A branch the agent made for its commits; nobody else knows it.
-                worktrees.git(repo, "update-ref", "-d", created)
-        try:
-            self._check_refs(repo, refs, checked_out, who)
-        except ReviewProblem as problem:
-            if not changed:
-                raise
             raise ReviewProblem(
-                f"{who} {_and(changed)} in the review worktree; threw that away. {problem}",
-            ) from problem
-        if changed:
-            raise ReviewProblem(
-                f"{who} {_and(changed)} in the review worktree, which a review must not "
-                "do; threw that away",
-            )
-
-    def _check_refs(
-        self,
-        repo: Path,
-        refs: dict[str, str],
-        checked_out: dict[str, Path],
-        who: str,
-    ) -> None:
-        """Puts back the branches and tags moved during a review: none of them is the
-        reviewer's to move, the reviewed branch least of all."""
-        restored, left = worktrees.restore_refs(repo, refs, "", checked_out)
-        if restored:
-            raise ReviewProblem(f"{who} moved {', '.join(restored)}; restored them")
-        if left:
-            raise ReviewProblem(
-                f"{', '.join(left)} moved during the review, in a checkout with changes "
-                "staged or made during the review; left as they are: check whether the "
-                "review moved them",
+                f"{who} {_and(changed)} in the review clone, which a review must not do; "
+                "none of it reaches the repository",
             )
 
     def _review_ended_early(self, ended: str, result: ReviewResult) -> bool:
@@ -1965,9 +1919,9 @@ class BoardWorker:
             and not result.keep_worktree
         ):
             try:
-                worktrees.remove_worktree(repo, self._worktree_dir(repo), path)
+                worktrees.remove_clone(self._worktree_dir(repo), path)
             except worktrees.GitError as exc:
-                self.say("warning", f"Could not remove the review worktree: {exc}")
+                self.say("warning", f"Could not remove the review clone: {exc}")
         self.task = None
         self.cancel_reason = None
         self._set("idle")
