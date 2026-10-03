@@ -122,7 +122,7 @@ class TestSessionLogger:
                     stale = cursor.fetchall()
                     other = real_connect(str(db_path))
                     other.execute(
-                        "ALTER TABLE sessions ADD COLUMN profile TEXT NOT NULL DEFAULT 'default'"
+                        "ALTER TABLE sessions ADD COLUMN profile TEXT NOT NULL DEFAULT 'default'",
                     )
                     other.commit()
                     other.close()
