@@ -180,6 +180,11 @@ llm:
   api_key: "" # Auth token (set to "ollama" for Ollama)
   model: "" # Model name passed to the agent
 
+# vibepod-board connection for `vp board work` (see Board automation)
+board:
+  url: "" # Board URL, such as http://localhost:3000
+  token: "" # Project-scoped board API token; never passed to agents
+
 logging:
   enabled: true
   image: vibepod/datasette:latest
@@ -216,6 +221,8 @@ These variables override the corresponding config keys without editing any file:
 | `VP_LLM_BASE_URL`      | `llm.base_url`      | `VP_LLM_BASE_URL=http://localhost:11434` |
 | `VP_LLM_API_KEY`       | `llm.api_key`       | `VP_LLM_API_KEY=ollama`                  |
 | `VP_LLM_MODEL`         | `llm.model`         | `VP_LLM_MODEL=qwen3:14b`                 |
+| `VP_BOARD_URL`         | `board.url`         | `VP_BOARD_URL=http://localhost:3000`     |
+| `VP_BOARD_TOKEN`       | `board.token`       | `VP_BOARD_TOKEN=vbp_...`                 |
 | `VP_CONFIG_DIR`        | _(config root)_     | `VP_CONFIG_DIR=/custom/path`             |
 | `VP_PROFILE`           | `profile`           | `VP_PROFILE=work`                        |
 

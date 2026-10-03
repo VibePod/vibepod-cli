@@ -7,7 +7,8 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -456,70 +457,43 @@ def task_run_command(
     )
 
 
-def task_create(
-    agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
-    prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
-    workspace: Annotated[
-        Path,
-        typer.Option("-w", "--workspace", help="Workspace directory"),
-    ] = Path("."),
-    env: Annotated[
-        list[str] | None,
-        typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
-    ] = None,
-    name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
-    network: Annotated[
-        str | None,
-        typer.Option("--network", help="Additional Docker network to connect the container to"),
-    ] = None,
-    timeout: Annotated[
-        str,
-        typer.Option(
-            "--timeout",
-            help=(
-                "Maximum task runtime before graceful stop. "
-                "Use s/m/h suffixes, or 'none' to opt out."
-            ),
-        ),
-    ] = DEFAULT_TASK_TIMEOUT,
-    pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
-    no_overlay: Annotated[
-        bool,
-        typer.Option("--no-overlay", help="Skip the project overlay image"),
-    ] = False,
-    rebuild_overlay: Annotated[
-        bool,
-        typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
-    ] = False,
-    no_herdr: Annotated[
-        bool,
-        typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
-    ] = False,
-    ikwid: Annotated[
-        bool,
-        typer.Option(
-            "--ikwid",
-            help="I Know What I'm Doing: enable auto-approval flags for supported agents",
-        ),
-    ] = False,
-    profile: Annotated[
-        str | None,
-        typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
-    ] = None,
+@dataclass(frozen=True)
+class LaunchedTask:
+    """A task container that was started and recorded in the task store."""
+
+    record: TaskRecord
+    container: Any
+    manager: DockerManager
+    store: TaskStore
+
+
+def launch_task(
+    agent: str,
+    prompt: str,
+    workspace: Path = Path("."),
+    env: list[str] | None = None,
+    name: str | None = None,
+    network: str | None = None,
+    pull: bool = False,
+    no_overlay: bool = False,
+    rebuild_overlay: bool = False,
+    no_herdr: bool = False,
+    ikwid: bool = False,
+    profile: str | None = None,
     provider_names: list[str] | None = None,
     passthrough_args: list[str] | None = None,
-    deprecated_alias: bool = False,
-) -> None:
-    """Start an agent task in the background and print its id.
+    extra_mounts: list[tuple[str, str, str]] | None = None,
+    allow_check_path: Path | None = None,
+    forbidden_env_values: Collection[str] = (),
+) -> LaunchedTask:
+    """Starts a headless agent task and records it, without waiting for it.
 
-    Extra arguments after `--` are forwarded to the agent's command, after the
-    prompt (matches the documented invocation for `claude -p`, `codex exec`, etc).
+    `vp task create` prints the task and leaves it running; `vp board work` waits for it.
+    `extra_mounts` adds volumes, `allow_check_path` checks another directory against the
+    allow list than the workspace (a worktree inherits its repository's permission), and
+    env entries whose value is in `forbidden_env_values` never reach the container.
     """
     passthrough_args = list(passthrough_args or [])
-    if deprecated_alias:
-        warning("`vp task run` is deprecated; use `vp task create`.")
-    timeout_seconds = _parse_task_timeout(timeout)
-
     config = get_config()
     try:
         active_profile = resolve_profile(profile, config)
@@ -579,30 +553,32 @@ def task_create(
             error(str(exc) if isinstance(exc, ValueError) else "Cannot access provider credentials")
             raise typer.Exit(1) from exc
 
-    if is_protected_dir(workspace_path):
+    # A worktree the board runner created inherits the permission of its repository.
+    allowed_path = allow_check_path.expanduser().resolve() if allow_check_path else workspace_path
+    if is_protected_dir(allowed_path):
         error(
-            f"'{workspace_path}' is a protected directory (home or root) and cannot be "
+            f"'{allowed_path}' is a protected directory (home or root) and cannot be "
             "added to the allow list. Change to a project directory first.",
         )
         raise typer.Exit(1)
 
-    if not is_dir_allowed(workspace_path):
+    if not is_dir_allowed(allowed_path):
         if not sys.stdin.isatty():
             error(
-                f"'{workspace_path}' is not in the allowed directories list. "
+                f"'{allowed_path}' is not in the allowed directories list. "
                 "Run `vp config allow-dir` to add it.",
             )
             raise typer.Exit(1)
         if not Confirm.ask(
-            f"'{workspace_path}' is not allowed for `vp task`. Would you like to allow it?",
+            f"'{allowed_path}' is not allowed for `vp task`. Would you like to allow it?",
             default=True,
         ):
             error("Directory not allowed. Aborting.")
             raise typer.Exit(1)
         try:
-            add_allowed_dir(workspace_path)
+            add_allowed_dir(allowed_path)
         except OSError as exc:
-            error(f"Could not update allow list for '{workspace_path}': {exc}")
+            error(f"Could not update allow list for '{allowed_path}': {exc}")
             raise typer.Exit(1) from exc
 
     init_commands = agent_init_commands(selected, agent_cfg)
@@ -659,6 +635,10 @@ def task_create(
                 targets = [env_var] if isinstance(env_var, str) else env_var
                 for target in targets:
                     merged_env.setdefault(target, value)
+
+    # Secrets the agent must never see, such as the board token of `vp board work`.
+    for key in [key for key, value in merged_env.items() if value in forbidden_env_values]:
+        merged_env.pop(key)
 
     image = effective_agent_image(selected, config)
 
@@ -778,6 +758,7 @@ def task_create(
         mount_socket=bool(socket_mount_probe()) if callable(socket_mount_probe) else True,
     )
     extra_volumes.extend(herdr_volumes)
+    extra_volumes.extend(extra_mounts or [])
     # Checked before the proxy is provisioned so a bad target leaves nothing
     # to roll back; the proxy CA target is reserved up front for the same reason.
     check_custom_volume_targets(
@@ -957,6 +938,91 @@ def task_create(
             release_agent(selected)
             clear_pane_metadata(selected)
         raise
+    return LaunchedTask(record=record, container=container, manager=manager, store=store)
+
+
+def task_create(
+    agent: Annotated[str, typer.Argument(help="Agent to run headlessly")],
+    prompt: Annotated[str, typer.Argument(help="Prompt to send to the agent")],
+    workspace: Annotated[
+        Path,
+        typer.Option("-w", "--workspace", help="Workspace directory"),
+    ] = Path("."),
+    env: Annotated[
+        list[str] | None,
+        typer.Option("-e", "--env", help="Environment variable KEY=VALUE", show_default=False),
+    ] = None,
+    name: Annotated[str | None, typer.Option("--name", help="Custom container name")] = None,
+    network: Annotated[
+        str | None,
+        typer.Option("--network", help="Additional Docker network to connect the container to"),
+    ] = None,
+    timeout: Annotated[
+        str,
+        typer.Option(
+            "--timeout",
+            help=(
+                "Maximum task runtime before graceful stop. "
+                "Use s/m/h suffixes, or 'none' to opt out."
+            ),
+        ),
+    ] = DEFAULT_TASK_TIMEOUT,
+    pull: Annotated[bool, typer.Option("--pull", help="Pull latest image before run")] = False,
+    no_overlay: Annotated[
+        bool,
+        typer.Option("--no-overlay", help="Skip the project overlay image"),
+    ] = False,
+    rebuild_overlay: Annotated[
+        bool,
+        typer.Option("--rebuild-overlay", help="Force rebuilding the project overlay image"),
+    ] = False,
+    no_herdr: Annotated[
+        bool,
+        typer.Option("--no-herdr", help="Skip herdr terminal-multiplexer wiring"),
+    ] = False,
+    ikwid: Annotated[
+        bool,
+        typer.Option(
+            "--ikwid",
+            help="I Know What I'm Doing: enable auto-approval flags for supported agents",
+        ),
+    ] = False,
+    profile: Annotated[
+        str | None,
+        typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
+    ] = None,
+    provider_names: list[str] | None = None,
+    passthrough_args: list[str] | None = None,
+    deprecated_alias: bool = False,
+) -> None:
+    """Start an agent task in the background and print its id.
+
+    Extra arguments after `--` are forwarded to the agent's command, after the
+    prompt (matches the documented invocation for `claude -p`, `codex exec`, etc).
+    """
+    passthrough_args = list(passthrough_args or [])
+    if deprecated_alias:
+        warning("`vp task run` is deprecated; use `vp task create`.")
+    timeout_seconds = _parse_task_timeout(timeout)
+
+    launched = launch_task(
+        agent=agent,
+        prompt=prompt,
+        workspace=workspace,
+        env=env,
+        name=name,
+        network=network,
+        pull=pull,
+        no_overlay=no_overlay,
+        rebuild_overlay=rebuild_overlay,
+        no_herdr=no_herdr,
+        ikwid=ikwid,
+        profile=profile,
+        provider_names=provider_names,
+        passthrough_args=passthrough_args,
+    )
+    record = launched.record
+    container = launched.container
     success(f"Task started: {record.id}")
     info(f"  container: {container.name}")
     if timeout_seconds is None:

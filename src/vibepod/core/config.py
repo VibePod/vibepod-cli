@@ -200,6 +200,11 @@ def _default_config() -> dict[str, Any]:
             "api_key": "",
             "model": "",
         },
+        # vibepod-board connection for `vp board work`.
+        "board": {
+            "url": "",
+            "token": "",
+        },
         "aliases": DEFAULT_ALIASES.copy(),
     }
 
@@ -247,6 +252,8 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
         "VP_LLM_BASE_URL": ("llm.base_url", str),
         "VP_LLM_API_KEY": ("llm.api_key", str),
         "VP_LLM_MODEL": ("llm.model", str),
+        "VP_BOARD_URL": ("board.url", str),
+        "VP_BOARD_TOKEN": ("board.token", str),
     }
 
     for env_key, (config_path, converter) in mappings.items():
