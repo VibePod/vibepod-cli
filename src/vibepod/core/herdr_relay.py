@@ -221,15 +221,18 @@ class HerdrEventRelay:
             self._thread.join(timeout=5)
             self._thread = None
             # lines written after the last tick still belong to this run
-            self.poll()
+            self._safe_poll()
         shutil.rmtree(self.host_dir, ignore_errors=True)
 
     def _loop(self) -> None:
         while not self._stop.wait(self._interval):
-            try:
-                self.poll()
-            except Exception as exc:  # noqa: BLE001 - the relay must never kill the run
-                logger.debug("herdr relay: poll failed: %s", exc)
+            self._safe_poll()
+
+    def _safe_poll(self) -> None:
+        try:
+            self.poll()
+        except Exception as exc:  # noqa: BLE001 - the relay must never kill the run
+            logger.debug("herdr relay: poll failed: %s", exc)
 
     def poll(self) -> int:
         """Forward every complete new line; return how many were forwarded."""
