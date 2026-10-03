@@ -330,34 +330,70 @@ vp run claude -p 127.0.0.1:3090:3081 -p 6000:6000/udp
 
 ## Mounting volumes
 
-Only the workspace (at `/workspace`) and the agent's config directory are mounted by default. `agents.<agent>.volumes` adds more mounts using the same syntax as `docker run -v`, `SOURCE:TARGET[:MODE]`:
+Custom volumes expose extra host files or persistent caches to an agent. Set `agents.<agent>.volumes` in the global config (`~/.config/vibepod/config.yaml`) or the project's `.vibepod/config.yaml`. The list applies to both `vp run` and `vp task` containers for that agent. A project-level list replaces the global list; `volumes: []` clears it for a project.
 
-```yaml
-# .vibepod/config.yaml
-agents:
-  claude:
-    volumes:
-      - "~/datasets:/datasets:ro" # host path, read-only
-      - "../shared-lib:/shared-lib" # relative to the workspace, read-write
-      - "pip-cache:/root/.cache/pip" # Docker named volume (created on first use)
-```
+### Add volumes step by step
 
-- **SOURCE** is either a host path or a Docker named volume. Host paths may be absolute, start with `~`, or be relative. In config, relative paths resolve against the workspace. The host path must already exist: VibePod rejects a missing one rather than letting Docker create it as a root-owned directory. A source without a `/` (like `pip-cache`) is a named volume.
-- **TARGET** must be an absolute container path. It cannot be `/`, and it cannot be a path VibePod already mounts (`/workspace`, the agent config directory, `/etc/vibepod-proxy-ca`, and so on). A path nested inside one of those, such as `/workspace/data`, is allowed.
-- **MODE** is `rw` (default) or `ro`. It can be combined with the SELinux relabel options `z`/`Z`, e.g. `ro,z`.
+1. From your workspace directory, create the host directories to share. Bind sources must exist before launch:
 
-The list applies to both `vp run` and `vp task` containers. Like other agent keys, a project-level `volumes` list replaces the global one for that agent.
+    ```bash
+    mkdir -p .vibepod data output
+    printf 'example input\n' > data/sample.txt
+    ```
 
-!!! warning "Project configs can mount any host path"
-    A committed `.vibepod/config.yaml` can mount any path your user can read
-    (for example `~/.ssh`) into the agent container. Review the `volumes`
-    of a project you did not write before running an agent in it.
+2. Add this complete example to `.vibepod/config.yaml`. If you already have a config, merge these settings into it. Replace `claude` with your agent's configuration key when using another agent:
 
-`vp run` (and the agent alias commands) also accept a repeatable `-v/--volume` flag with the same syntax. Unlike `--publish`, the flag **adds** to the configured list. A flag entry replaces only the configured entry mounted at the same container path. Relative flag paths resolve against the current directory:
+    ```yaml
+    version: 1
+    agents:
+      claude:
+        volumes:
+          - "./data:/datasets:ro"
+          - "./output:/results:rw"
+          - "pip-cache:/root/.cache/pip:rw"
+    ```
+
+3. Inspect the merged settings and launch the agent from that workspace:
+
+    ```bash
+    vp config show
+    vp run claude
+    ```
+
+4. Ask the agent to read `/datasets/sample.txt` and write a result to `/results/result.txt`. The input is read-only through `/datasets`; the result appears in the host's `output/result.txt`. The runtime creates the named volume `pip-cache` on first use and reuses it on later launches. Its contents persist when the agent container is removed. Choose a cache target that matches the cache location your agent or tool actually uses.
+
+Mounts are set when a container is created. Restart `vp run` or create a new task container to apply changes to an existing session.
+
+### Mount syntax and options
+
+Each entry is a quoted string in `SOURCE:TARGET[:MODE]` format:
+
+- **SOURCE** is an existing host file or directory, or a runtime-managed named volume. Host paths may be absolute (`/srv/datasets`), start with `~` (`~/datasets`), or be relative (`./data`, `../shared-lib`). Config paths resolve against the workspace, **not** the `.vibepod` directory. Use `./data` for a local directory: a bare name such as `data` or `pip-cache` means a named volume. Volume names must start with a letter or digit and contain only letters, digits, `_`, `.`, or `-`. VibePod rejects missing host paths rather than letting the runtime create them.
+- **TARGET** must be an absolute Linux container path, regardless of host platform. It cannot be `/` or an exact path VibePod already mounts, such as `/workspace`, the agent's config directory, or `/etc/vibepod-proxy-ca`. Other managed targets depend on enabled features. Nested mounts such as `/workspace/data` are allowed, but hide the underlying contents at that path while mounted. Duplicate targets in the final custom list are rejected; paths are normalized before collision checks.
+- **MODE** is `rw` (read-write, the default) or `ro` (read-only). Supported additional options are `z` and `Z` for SELinux relabeling, combined with commas, for example `ro,z` or `rw,Z`. Other runtime options such as `cached`, `delegated`, or `U` are not accepted; neither are `ro` and `rw` together.
+
+### One-off mounts
+
+`vp run` (and agent alias commands) accept a repeatable `-v/--volume` flag with the same syntax. The flag **adds** to the configured list; a flag entry replaces only the configured entry at the same container path. Relative flag paths resolve against the current directory:
 
 ```bash
-vp run claude -v ~/datasets:/datasets:ro -v pip-cache:/root/.cache/pip
+vp run claude -v "./alternate-data:/datasets:ro" -v "~/shared:/shared:ro"
 ```
+
+With the configuration above, this replaces `/datasets` and adds `/shared`, while keeping `/results` and the pip cache. Create both host directories before running the command. For `vp task` containers, use the configuration list.
+
+### Permissions, security, and platform behavior
+
+- A read-write bind mount lets the agent change or delete host files directly. Prefer `ro` for reference data and grant write access only where needed. Read-only mounts still expose their contents; avoid mounting credentials or other secrets unless required for the task. `ro` applies only to that mount: in the example, `data` is also reachable through the writable `/workspace/data` path. For data that must be protected from writes, use a source outside the workspace and ensure it has no other writable mount.
+- Mount mode does not grant filesystem permissions. The container's runtime user needs permission to read the source and, for `rw`, write to it. For permission errors, check host ownership and permissions as well as mount mode. VibePod uses `keep-id` with rootless Podman; see [Using Podman](quickstart.md#using-podman-instead-of-docker). Named volumes also need permissions suitable for the tool using them.
+- On SELinux hosts, `z` requests a shared label for multiple containers; `Z` requests a private label for one container. Relabeling changes host labels: use it only on directories intended for container access and avoid system directories. A private label can interfere with concurrent containers sharing the source.
+- With Docker Desktop or a Podman machine, bind sources must be accessible to the runtime's VM. Check its file-sharing settings if an existing host path fails to mount. With a remote runtime, VibePod checks source existence locally, but the runtime mounts paths on its own host; it does not upload local files.
+- On native Windows, drive-qualified sources are supported. Use YAML single quotes to preserve backslashes, for example `'C:\Users\me\datasets:/datasets:ro'`. Inside WSL, use paths visible in WSL, such as `/mnt/c/Users/me/datasets`. Container targets remain Linux paths.
+
+!!! warning "Review project volume settings before launch"
+    A committed `.vibepod/config.yaml` can request mounts of sensitive host paths
+    such as `~/.ssh`. Review its `volumes` settings before running an agent in
+    a project you did not write, including settings inherited from global config.
 
 ## The built-in proxy
 
