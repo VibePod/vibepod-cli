@@ -1,4 +1,5 @@
-"""`vp board work`: let an agent work through the planned tasks of a vibepod-board project."""
+"""`vp board work`: let an agent work through the planned tasks of a vibepod-board project, or
+review the tasks in its Review column."""
 
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protec
 from vibepod.core.board_client import BoardApiError, BoardClient, resolve_board_settings
 from vibepod.core.board_worker import (
     DEFAULT_BRANCH_TEMPLATE,
+    MODE_REVIEW,
     AgentStopError,
     BoardWorker,
     FileProfileLock,
@@ -47,6 +49,11 @@ app = typer.Typer(
     help="Work through vibepod-board projects with agents",
     no_args_is_help=True,
 )
+
+
+class WorkMode(str, Enum):
+    IMPLEMENT = "implement"
+    REVIEW = "review"
 
 
 class ExistingMode(str, Enum):
@@ -230,14 +237,28 @@ def _repo_allowed(path: Path) -> bool:
 @app.command("work")
 def board_work(
     project: Annotated[str, typer.Argument(help="Board project key, such as VP")],
-    agent: Annotated[str, typer.Option("--agent", "-a", help="Agent that implements the tasks")],
+    agent: Annotated[
+        str,
+        typer.Option("--agent", "-a", help="Agent that implements or reviews the tasks"),
+    ],
+    mode: Annotated[
+        WorkMode,
+        typer.Option(
+            "--mode",
+            help="implement planned tasks, or review the tasks in Review: rework or PR ready",
+        ),
+    ] = WorkMode.IMPLEMENT,
     board_url: Annotated[
         str | None,
         typer.Option("--board-url", help="Board URL; defaults to board.url or VP_BOARD_URL"),
     ] = None,
     name: Annotated[
         str | None,
-        typer.Option("--name", help="Worker name on the board; defaults to <agent>@<host>"),
+        typer.Option(
+            "--name",
+            help="Worker name on the board; defaults to <agent>@<host>, or <agent>-review@<host> "
+            "for a review worker. Each reviewer name counts as one approval",
+        ),
     ] = None,
     label: Annotated[
         list[str] | None,
@@ -283,27 +304,29 @@ def board_work(
         str | None,
         typer.Option(
             "--base",
-            help="Where new branches start; defaults to the repository's current branch",
+            help="Where new branches start, and what reviews diff against; defaults to the "
+            "repository's current branch",
         ),
     ] = None,
     branch_template: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--branch-template",
             help="Branch name from {issue}, {number}, {key} and {project}; tasks without a "
-            "GitHub issue use {key}, such as vp-12",
+            f"GitHub issue use {{key}}, such as vp-12  [default: {DEFAULT_BRANCH_TEMPLATE}]",
         ),
-    ] = DEFAULT_BRANCH_TEMPLATE,
+    ] = None,
     existing: Annotated[
-        ExistingMode,
+        ExistingMode | None,
         typer.Option(
             "--existing",
-            help="When the task's branch or worktree exists: continue or refuse",
+            help="When the task's branch or worktree exists: continue or refuse  "
+            "[default: continue]",
         ),
-    ] = ExistingMode.CONTINUE,
+    ] = None,
     keep_worktree: Annotated[
         bool,
-        typer.Option("--keep-worktree", help="Keep worktrees after the hand-over"),
+        typer.Option("--keep-worktree", help="Keep worktrees after the hand-over or review"),
     ] = False,
     profile: Annotated[
         str | None,
@@ -341,12 +364,13 @@ def board_work(
         ),
     ] = None,
     on_fail: Annotated[
-        OnFail,
+        OnFail | None,
         typer.Option(
             "--on-fail",
-            help="Where failed and timed-out tasks go: planned (counts an attempt) or blocked",
+            help="Where failed and timed-out tasks go: planned (counts an attempt) or blocked  "
+            "[default: planned]",
         ),
-    ] = OnFail.PLANNED,
+    ] = None,
     max_attempts: Annotated[
         int | None,
         typer.Option("--max-attempts", min=1, help="Failed attempts before a task is blocked"),
@@ -368,7 +392,30 @@ def board_work(
     Each task gets its own branch and worktree. The agent runs headless with the task as
     its prompt; after an optional --verify command passes, the task moves to Review with
     its branch. Failed and timed-out tasks go back to Planned (or blocked) with a note.
+
+    With --mode review the worker claims tasks in Review instead, and the agent judges the
+    work on the branch, in a worktree of its own, without changing it: approve, or send it
+    back for rework with feedback. A failing --verify command always sends it back.
     """
+    reviewing = mode == WorkMode.REVIEW
+    if reviewing:
+        meaningless = [
+            option
+            for option, value in (
+                ("--branch-template", branch_template),
+                ("--existing", existing),
+                ("--on-fail", on_fail),
+                ("--max-attempts", max_attempts),
+            )
+            if value is not None
+        ]
+        if meaningless:
+            error(
+                f"{', '.join(meaningless)} cannot be used with --mode review: a review works on "
+                "the branch the task was handed over on, and never fails a task.",
+            )
+            raise typer.Exit(1)
+    branch_template = branch_template or DEFAULT_BRANCH_TEMPLATE
     config = get_config()
     try:
         settings = resolve_board_settings(config, board_url)
@@ -413,13 +460,14 @@ def board_work(
     options = WorkOptions(
         project=project,
         agent=selected,
-        name=name or f"{selected}@{host}",
+        name=name or (f"{selected}-review@{host}" if reviewing else f"{selected}@{host}"),
         machine=host,
+        mode=mode.value,
         repo=repo_path,
         worktree_dir=worktree_dir.expanduser().resolve() if worktree_dir else None,
         base=base,
         branch_template=branch_template,
-        existing=existing.value,
+        existing=(existing or ExistingMode.CONTINUE).value,
         keep_worktree=keep_worktree,
         labels=tuple(label or ()),
         min_readiness=min_readiness,
@@ -429,7 +477,7 @@ def board_work(
         poll_seconds=float(poll_seconds) if poll_seconds else None,
         timeout_seconds=timeout_seconds,
         verify=verify,
-        on_fail=on_fail.value,
+        on_fail=(on_fail or OnFail.PLANNED).value,
         max_attempts=max_attempts,
         usage_limit_wait_seconds=usage_wait,
     )
@@ -471,13 +519,24 @@ def board_work(
         error(getattr(exc, "message", str(exc)))
         raise typer.Exit(1) from exc
     except KeyboardInterrupt as exc:
-        warning("Interrupted; the task in progress went back to Planned.")
+        if reviewing:
+            warning("Interrupted; the review in progress was given up.")
+        else:
+            warning("Interrupted; the task in progress went back to Planned.")
         raise typer.Exit(130) from exc
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 
-    info(f"Handed over {len(summary.handed_over)} task(s), gave back {len(summary.returned)}.")
+    if options.mode == MODE_REVIEW:
+        info(
+            f"Approved {len(summary.approved)} task(s), sent {len(summary.reworked)} back for "
+            f"rework; {len(summary.returned)} review(s) ended without either.",
+        )
+    else:
+        info(
+            f"Handed over {len(summary.handed_over)} task(s), gave back {len(summary.returned)}.",
+        )
     if summary.ended_because.startswith(
         ("The agent could not be started", "The agent could not be stopped"),
     ):
