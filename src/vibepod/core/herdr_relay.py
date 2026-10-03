@@ -5,7 +5,8 @@ the herdr unix socket, but regular files do cross it. In-container reporters
 then append one ``pane.report_agent`` params object per line to
 ``HERDR_EVENTS_FILE``; the attached ``vp run`` on the host tails that file and
 forwards each valid line to the herdr socket. The container is not trusted:
-only known fields, the run's own pane and the known states are forwarded.
+only known fields, the run's own pane, source and agent, and the known states
+are forwarded.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from vibepod.core.config import get_config_root
+from vibepod.core.herdr import agent_label
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,8 @@ ALLOWED_STATES = frozenset({"working", "blocked", "idle"})
 REQUIRED_FIELDS = ("pane_id", "source", "agent", "state")
 OPTIONAL_FIELDS = ("display_agent", "agent_session_id")
 POLL_INTERVAL = 0.25
+#: Relayed reports must carry the identity the run's own reporters use.
+RELAY_SOURCE = "vibepod"
 
 # The container can replace the events file, so it is opened without following
 # a symlink (Windows lacks O_NOFOLLOW: see _open_events_file) and without
@@ -61,8 +65,12 @@ def relay_root() -> Path:
     return get_config_root() / "herdr-relay"
 
 
-def validate_event(line: bytes, pane_id: str) -> dict[str, Any] | None:
-    """Return the ``pane.report_agent`` params for a valid line, else None."""
+def validate_event(line: bytes, pane_id: str, agent: str) -> dict[str, Any] | None:
+    """Return the ``pane.report_agent`` params for a valid line, else None.
+
+    The line must report *agent* in *pane_id* under the VibePod source, so the
+    container cannot leave state under identities the run never releases.
+    """
     if len(line) > MAX_LINE_BYTES:
         return None
     try:
@@ -79,6 +87,10 @@ def validate_event(line: bytes, pane_id: str) -> dict[str, Any] | None:
     if any(not event.get(key) for key in REQUIRED_FIELDS):
         return None
     if event["pane_id"] != pane_id or event["state"] not in ALLOWED_STATES:
+        return None
+    if event["source"] != RELAY_SOURCE or event["agent"] != agent:
+        return None
+    if event.get("display_agent", agent_label(agent)) != agent_label(agent):
         return None
     return event
 
@@ -170,10 +182,12 @@ class HerdrEventRelay:
         pane_id: str,
         send: Sender,
         *,
+        agent: str,
         root: Path | None = None,
         interval: float = POLL_INTERVAL,
     ) -> None:
         self.pane_id = pane_id
+        self.agent = agent
         self._send = send
         self._root = root or relay_root()
         self.host_dir = self._root / f"{os.getpid()}-{secrets.token_hex(4)}"
@@ -239,7 +253,7 @@ class HerdrEventRelay:
         with self._lock:
             forwarded = 0
             for line in self._read_lines():
-                event = validate_event(line, self.pane_id)
+                event = validate_event(line, self.pane_id, self.agent)
                 if event is None:
                     self.dropped += 1
                     logger.debug("herdr relay: dropped invalid event %r", line[:200])
