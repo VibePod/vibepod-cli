@@ -1805,7 +1805,9 @@ def review_path(repo: Path, task: str = "vp-1", name: str = REVIEWER) -> Path:
 
 
 def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     sha = handed_over(
         board,
@@ -1819,7 +1821,9 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
     def looks(path: Path, prompt: str) -> tuple[int, str]:
         seen["head"] = git(path, "rev-parse", "HEAD")
         seen["branch"] = subprocess.run(
-            ["git", "symbolic-ref", "--quiet", "HEAD"], cwd=path, capture_output=True
+            ["git", "symbolic-ref", "--quiet", "HEAD"],
+            cwd=path,
+            capture_output=True,
         ).returncode
         return 0, result_block("approve", summary="Meets the criteria.")
 
@@ -1872,7 +1876,9 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
 
 
 def test_a_rework_verdict_sends_the_feedback_and_the_task_back(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     sha = handed_over(board, repo)
     runner = FakeRunner(
@@ -1880,7 +1886,7 @@ def test_a_rework_verdict_sends_the_feedback_and_the_task_back(
             "rework",
             summary="The tests are missing.",
             feedback=["Add a test for the empty input.", "- Handle a missing file."],
-        )
+        ),
     )
 
     worker, _ = review(server, runner, repo)
@@ -1900,13 +1906,18 @@ def test_a_rework_verdict_sends_the_feedback_and_the_task_back(
 
 
 def test_reviewers_with_different_names_each_approve_in_their_own_worktree(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.required_approvals = 2
     sha = handed_over(board, repo)
 
     first, _ = review(
-        server, FakeRunner(says("approve", summary="Good.")), repo, keep_worktree=True
+        server,
+        FakeRunner(says("approve", summary="Good.")),
+        repo,
+        keep_worktree=True,
     )
     assert board.card("VP-1")["column"] == "review"
     # The same reviewer does not get the same commit again.
@@ -1930,7 +1941,9 @@ def test_reviewers_with_different_names_each_approve_in_their_own_worktree(
 
 
 def test_a_failing_verify_is_always_a_rework_with_its_output(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     handed_over(board, repo)
     failing = python("print('2 tests failed'); raise SystemExit(1)")
@@ -1948,7 +1961,9 @@ def test_a_failing_verify_is_always_a_rework_with_its_output(
 
 
 def test_a_passing_verify_leaves_the_verdict_to_the_agent(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     handed_over(board, repo)
 
@@ -1968,7 +1983,11 @@ def test_a_passing_verify_leaves_the_verdict_to_the_agent(
     ],
 )
 def test_a_review_that_changes_the_repository_is_thrown_away_and_fails(
-    board: FakeBoard, server: FakeBoardServer, repo: Path, doing: str, said: str
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    doing: str,
+    said: str,
 ) -> None:
     sha = handed_over(board, repo)
 
@@ -1996,7 +2015,9 @@ def test_a_review_that_changes_the_repository_is_thrown_away_and_fails(
 
 
 def test_a_review_that_moves_other_refs_has_them_restored_and_fails(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     sha = handed_over(board, repo)
     main = git(repo, "rev-parse", "main")
@@ -2014,7 +2035,9 @@ def test_a_review_that_moves_other_refs_has_them_restored_and_fails(
 
 
 def test_needs_input_blocks_the_task_in_review_with_the_question(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     handed_over(board, repo)
     question = "Should an empty file count as implemented?"
@@ -2045,7 +2068,11 @@ def test_needs_input_blocks_the_task_in_review_with_the_question(
     ],
 )
 def test_a_review_without_a_verdict_fails(
-    board: FakeBoard, server: FakeBoardServer, repo: Path, output: str, reason: str
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    output: str,
+    reason: str,
 ) -> None:
     sha = handed_over(board, repo)
 
@@ -2059,7 +2086,10 @@ def test_a_review_without_a_verdict_fails(
 
 @pytest.mark.parametrize("missing", ["branch", "commit"])
 def test_a_review_of_a_missing_branch_or_commit_is_blocked(
-    board: FakeBoard, server: FakeBoardServer, repo: Path, missing: str
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    missing: str,
 ) -> None:
     handed_over(board, repo)
     if missing == "branch":
@@ -2083,7 +2113,9 @@ def test_a_review_of_a_missing_branch_or_commit_is_blocked(
 
 
 def test_a_review_whose_task_was_handed_over_again_ends_quietly(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     handed_over(board, repo)
 
@@ -2103,7 +2135,9 @@ def test_a_review_whose_task_was_handed_over_again_ends_quietly(
 
 
 def test_another_reviewers_rework_cancels_the_review_without_a_verdict(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.required_approvals = 2
     sha = handed_over(board, repo)
@@ -2136,7 +2170,9 @@ def test_another_reviewers_rework_cancels_the_review_without_a_verdict(
 
 
 def test_a_review_cancelled_from_the_board_ends_without_a_verdict(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     handed_over(board, repo)
 
@@ -2157,7 +2193,9 @@ def test_a_review_cancelled_from_the_board_ends_without_a_verdict(
 
 
 def test_a_stop_gives_the_review_up_and_ends_the_worker(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     handed_over(board, repo)
     board.on_heartbeat = lambda beat: (
@@ -2185,7 +2223,9 @@ def test_a_timed_out_review_fails(board: FakeBoard, server: FakeBoardServer, rep
 
 
 def test_a_usage_limit_gives_the_review_up_and_pauses(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     handed_over(board, repo)
 
@@ -2202,7 +2242,9 @@ def test_a_usage_limit_gives_the_review_up_and_pauses(
 
 
 def test_the_review_prompt_carries_the_task_history(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     handed_over(board, repo)
     board.history["idea-1"] = [
@@ -2234,7 +2276,9 @@ def test_the_review_prompt_carries_the_task_history(
 
 
 def test_a_board_without_reviews_gets_its_implementation_claim_back(
-    board: FakeBoard, server: FakeBoardServer, repo: Path
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
 ) -> None:
     board.reviews_supported = False
     board.add_task("Planned")
@@ -2252,17 +2296,23 @@ def test_a_board_without_reviews_gets_its_implementation_claim_back(
 def test_reads_a_reviewers_verdict() -> None:
     reviews = ("approve", "rework", "needs_input", "failed")
     prompt = build_review_prompt(
-        {"key": "VP-1", "title": "Echoed"}, "issue-7", "abc", "main", "def"
+        {"key": "VP-1", "title": "Echoed"},
+        "issue-7",
+        "abc",
+        "main",
+        "def",
     )
     assert parse_result(prompt, reviews) is None
     assert parse_result(result_block("approve"), reviews) == AgentResult("approve")
     assert parse_result(result_block("approve")) is None
     assert parse_result(result_block("rework", summary="Bad."), reviews) is None
     assert parse_result(result_block("rework", feedback="Fix X."), reviews) == AgentResult(
-        "rework", feedback="Fix X."
+        "rework",
+        feedback="Fix X.",
     )
     assert parse_result(result_block("rework", feedback=["A", "", "B"]), reviews) == AgentResult(
-        "rework", feedback="- A\n- B"
+        "rework",
+        feedback="- A\n- B",
     )
 
 
@@ -2763,7 +2813,9 @@ def test_vp_board_work_reviews_under_a_reviewer_name(
     ],
 )
 def test_vp_board_work_refuses_implementation_options_in_review_mode(
-    monkeypatch, tmp_path: Path, option: list[str]
+    monkeypatch,
+    tmp_path: Path,
+    option: list[str],
 ) -> None:
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setenv("VP_BOARD_URL", "http://127.0.0.1:9")
