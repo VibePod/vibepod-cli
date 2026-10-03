@@ -286,7 +286,8 @@ RESULT_TAG = "vibepod-result"
 # A block never spans another opening tag, so a mention of the tag in the agent's prose
 # cannot swallow the real block after it.
 RESULT_BLOCK = re.compile(
-    rf"<{RESULT_TAG}>((?:(?!<{RESULT_TAG}>).)*?)</{RESULT_TAG}>", re.DOTALL | re.IGNORECASE
+    rf"<{RESULT_TAG}>((?:(?!<{RESULT_TAG}>).)*?)</{RESULT_TAG}>",
+    re.DOTALL | re.IGNORECASE,
 )
 RESULT_STATUSES = ("done", "needs_input", "failed")
 # How much of the earlier conversation of a task goes into the prompt.
@@ -826,7 +827,7 @@ class BoardWorker:
                 if rework and not worktrees.branch_exists(repo, result.branch):
                     raise TaskProblem(
                         f"The rework needs the branch {result.branch} it was handed over on, "
-                        f"and it is not in {repo}"
+                        f"and it is not in {repo}",
                     )
                 # Checking a branch out can take long in a large repository.
                 with self._keepalive():
