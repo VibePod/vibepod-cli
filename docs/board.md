@@ -202,12 +202,14 @@ For each task, a review worker:
 A review must leave the repository as it found it. The agent gets the git
 directory read-only, and if it committed, switched branches, moved refs or
 left changes in its worktree anyway, all of it is thrown away and the review
-fails with that reason.
+fails with that reason. The same check runs again after `--verify`, which runs
+the code under review; files it leaves behind, such as caches, are fine.
 
 When the task moved on during the review, because it was handed over again or
 another reviewer sent it back, the review ends without a verdict. Pause, stop,
 cancel, `--parallel`, the profile lock and usage limits work as for
-implementation workers. `--branch-template`, `--existing`, `--on-fail` and
+implementation workers, and a review the board cannot renew is given up before
+its lease runs out. `--branch-template`, `--existing`, `--on-fail` and
 `--max-attempts` have no meaning for a review and are refused with
 `--mode review`.
 
