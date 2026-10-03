@@ -214,14 +214,25 @@ def agent_mounts(
     """The volumes the agent container needs besides the worktree: the git directory the
     worktree points into, at the same path so git works in the container. It stays writable
     for commits, but what makes git run programs (config, hooks, info) and the worktree's
-    pointers into it are read-only, since git on the host reads them after the run."""
+    pointers into it are read-only, since git on the host reads them after the run. So are
+    the HEAD and index of the other checkouts, such as the user's own, which the agent has
+    no business switching or staging in."""
     common = common_git_dir(repo)
     mounts = [(str(common), str(common), "rw")]
     for name in ("hooks", "info"):
         (common / name).mkdir(exist_ok=True)
         mounts.append((str(common / name), str(common / name), "ro"))
     admin = admin_dir(worktree)
-    for file in (common / "config", admin / "commondir", admin / "gitdir"):
+    others = [common]
+    if (common / "worktrees").is_dir():
+        others += sorted(
+            path
+            for path in (common / "worktrees").iterdir()
+            if path.is_dir() and path.resolve() != admin
+        )
+    files = [common / "config", admin / "commondir", admin / "gitdir"]
+    files += [other / name for other in others for name in ("HEAD", "index")]
+    for file in files:
         if file.is_file():
             mounts.append((str(file), str(file), "ro"))
     mounts.append((str(worktree / ".git"), f"{workspace_mount}/.git", "ro"))

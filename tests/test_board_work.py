@@ -257,8 +257,8 @@ def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
     git_dir = (repo / ".git").resolve()
     worktree = (repo.parent / "app-worktrees" / "vp-1").resolve()
     admin = git_dir / "worktrees" / "vp-1"
-    # The git directory is writable for commits; what makes git run programs, and the
-    # worktree's pointers into it, are not.
+    # The git directory is writable for commits; what makes git run programs, the
+    # worktree's pointers into it, and the HEAD and index of the user's checkout are not.
     assert start["mounts"] == [
         (str(git_dir), str(git_dir), "rw"),
         (str(git_dir / "hooks"), str(git_dir / "hooks"), "ro"),
@@ -266,6 +266,8 @@ def test_the_prompt_carries_the_task_and_the_git_dir_is_mounted(
         (str(git_dir / "config"), str(git_dir / "config"), "ro"),
         (str(admin / "commondir"), str(admin / "commondir"), "ro"),
         (str(admin / "gitdir"), str(admin / "gitdir"), "ro"),
+        (str(git_dir / "HEAD"), str(git_dir / "HEAD"), "ro"),
+        (str(git_dir / "index"), str(git_dir / "index"), "ro"),
         (str(worktree / ".git"), "/workspace/.git", "ro"),
     ]
     assert start["allow"] == repo.resolve()
@@ -1766,6 +1768,20 @@ def test_host_git_ignores_a_repository_named_in_the_environment(
     assert worktrees.branch_exists(repo, "issue-1")
     assert not worktrees.branch_exists(other, "issue-1")
     assert worktree.path == (tmp_path / "worktrees" / "issue-1").resolve()
+
+
+def test_the_agent_cannot_switch_or_stage_in_other_checkouts(repo: Path, tmp_path: Path) -> None:
+    git(repo, "worktree", "add", "--quiet", "-b", "mine", str(tmp_path / "mine"))
+    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
+    git_dir = (repo / ".git").resolve()
+
+    readonly = {host for host, _, mode in worktrees.agent_mounts(repo, task.path) if mode == "ro"}
+
+    assert {str(git_dir / "HEAD"), str(git_dir / "index")} <= readonly
+    assert {str(git_dir / "worktrees" / "mine" / name) for name in ("HEAD", "index")} <= readonly
+    # The task's own HEAD and index stay writable for its commits.
+    own = worktrees.admin_dir(task.path)
+    assert not {str(own / "HEAD"), str(own / "index")} & readonly
 
 
 def test_worktree_helpers_prepare_and_clean_up(repo: Path, tmp_path: Path) -> None:
