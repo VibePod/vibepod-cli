@@ -30,7 +30,7 @@ from vibepod.core.agents import (
     validate_rootless_runtime,
 )
 from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protected_dir
-from vibepod.core.config import get_config
+from vibepod.core.config import deep_merge, get_config, load_project_config
 from vibepod.core.docker import DockerClientError, DockerManager, _is_latest_tag
 from vibepod.core.herdr import (
     PANE_LABEL as _HERDR_PANE_LABEL,
@@ -140,7 +140,15 @@ from vibepod.core.provider_runtime import (
 )
 from vibepod.core.proxy_filter import remove_container_policy
 from vibepod.core.resume import show_resume_hint
-from vibepod.core.sandbox import SANDBOX_HELP, SandboxError, prepare_sandbox, resolve_sandbox
+from vibepod.core.sandbox import (
+    SANDBOX_HELP,
+    SEPARATE_BACKENDS,
+    SandboxError,
+    check_capabilities,
+    prepare_sandbox,
+    resolve_sandbox,
+    sandbox_options_config,
+)
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, last_error, route_to_stderr, success, warning
 
@@ -631,15 +639,50 @@ def run(
             error(str(exc) if isinstance(exc, ValueError) else "Cannot access provider credentials")
             raise typer.Exit(1) from exc
 
-    _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
-
     # Reject unsupported wiring before any herdr hint or workspace processing:
     # the allow-dir prompt below persists a workspace to the allow list, which
     # must never happen for an agent/config this launch is about to refuse.
     try:
         if not provider_names:
             validate_llm_support(selected_agent, config)
-        selected_runtime = msb.resolve_runtime(config, runtime)
+        sandbox_settings = resolve_sandbox(
+            config,
+            workspace.expanduser().resolve(),
+            sandbox,
+            runtime,
+        )
+        selected_runtime = sandbox_settings.type
+        workspace_config = load_project_config(workspace.expanduser().resolve())
+        effective_agent = {
+            **config.get("agents", {}).get(selected_agent, {}),
+            **workspace_config.get("agents", {}).get(selected_agent, {}),
+        }
+        config = sandbox_options_config(config, workspace.expanduser().resolve())
+        if selected_runtime == "microsandbox":
+            if "VP_PROXY_ENABLED" not in os.environ and "proxy" in workspace_config:
+                config = deep_merge(config, {"proxy": workspace_config["proxy"]})
+            if "logging" in workspace_config:
+                config = deep_merge(config, {"logging": workspace_config["logging"]})
+        check_capabilities(
+            sandbox_settings,
+            workspace_mount=True,
+            ports=bool(publish or effective_agent.get("ports")),
+            proxy_metrics=bool(config.get("proxy", {}).get("enabled", True)),
+            session_logging=bool(config.get("logging", {}).get("enabled", True)),
+            acp=acp,
+            overlays=(
+                not no_overlay
+                and _overlay_enabled(
+                    workspace.expanduser().resolve(),
+                    selected_agent,
+                    effective_agent,
+                )
+                and find_overlay_dockerfile(workspace.expanduser().resolve(), selected_agent)
+                is not None
+            ),
+            init_commands=bool(effective_agent.get("init")),
+            herdr_socket=_herdr_pane_reporting_enabled(config, no_herdr=no_herdr or acp),
+        )
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
@@ -653,6 +696,8 @@ def run(
             network=network,
             paste_images=paste_images,
         )
+
+    _reexec_with_herdr_hint(selected_agent, config, no_herdr=no_herdr or acp)
 
     acp_channel: AcpClientChannel | None = None
     if acp:
@@ -880,11 +925,20 @@ def run(
     try:
         sandbox_plan = prepare_sandbox(
             manager,
-            resolve_sandbox(config, workspace_path, sandbox),
+            sandbox_settings,
         )
     except SandboxError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
+    if not sandbox_plan.host_socket_mounts and _herdr_pane_reporting_enabled(
+        config,
+        no_herdr=no_herdr or acp,
+    ):
+        error(
+            "The gvisor sandbox cannot mount the herdr socket; "
+            "enable --host-uds=open or --no-herdr.",
+        )
+        raise typer.Exit(1)
     for note in sandbox_plan.notes:
         warning(f"sandbox: {note}")
     agent_userns_mode = "keep-id" if rootless_podman else None
@@ -1347,16 +1401,14 @@ def _check_microsandbox_launch(
     if unsupported:
         error(
             f"{', '.join(unsupported)} cannot be used with the microsandbox runtime: "
-            "these features need Docker. Use `--runtime docker` for this run.",
+            "these features need Docker. Use `--sandbox none` for this run.",
         )
         raise typer.Exit(1)
     try:
-        settings = msb.load_settings(config)
+        settings, binary = SEPARATE_BACKENDS["microsandbox"].prepare(config)
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
-    try:
-        binary = msb.ensure_available(settings)
     except msb.MicrosandboxError as exc:
         error(str(exc))
         raise typer.Exit(EXIT_DOCKER_NOT_RUNNING) from exc
@@ -1388,10 +1440,16 @@ def _run_microsandbox(
     ikwid: bool,
 ) -> None:
     """Launch the agent image as a microsandbox microVM through `msb run`."""
+    try:
+        msb.port_args(ports)
+        msb.mount_args(custom_volumes)
+    except msb.MicrosandboxError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     if init_commands:
         error(
             f"agents.{agent}.init is not supported with the microsandbox runtime yet. "
-            "Bake the setup into the image, or use `--runtime docker`.",
+            "Bake the setup into the image, or use `--sandbox none`.",
         )
         raise typer.Exit(1)
     if (
@@ -1402,7 +1460,7 @@ def _run_microsandbox(
         error(
             "Project overlays are built with Docker and are not supported with the "
             "microsandbox runtime. Pass --no-overlay, set "
-            f"agents.{agent}.overlay: false, or use `--runtime docker`.",
+            f"agents.{agent}.overlay: false, or use `--sandbox none`.",
         )
         raise typer.Exit(1)
     if detach and agent == "claude" and "setup-token" in passthrough_args:
@@ -1416,20 +1474,6 @@ def _run_microsandbox(
             f"{agent} images are published for {spec.platform}; microsandbox runs "
             "images for the host architecture only.",
         )
-
-    agent_auto_pull = agent_cfg.get("auto_pull")
-    auto_pull_enabled = (
-        agent_auto_pull if agent_auto_pull is not None else bool(config.get("auto_pull", False))
-    )
-    if pull or (auto_pull_enabled and _is_latest_tag(image)):
-        info(f"Pulling image with microsandbox: {image}")
-        try:
-            msb.pull_image(binary, image)
-        except msb.MicrosandboxError as exc:
-            if pull:
-                error(str(exc))
-                raise typer.Exit(1) from exc
-            warning(f"{exc} Using the cached image if there is one.")
 
     extra_args: list[str] = []
     if ikwid:
@@ -1445,7 +1489,7 @@ def _run_microsandbox(
         if command is None:
             error(
                 f"{agent} uses its image's default command, which the microsandbox "
-                "runtime cannot extend with extra arguments. Use `--runtime docker`.",
+                "runtime cannot extend with extra arguments. Use `--sandbox none`.",
             )
             raise typer.Exit(1)
         command = [*command, *extra_args]
@@ -1473,8 +1517,19 @@ def _run_microsandbox(
     volumes.extend(extra_volumes)
     volumes.extend(custom_volumes)
 
-    if bool(config.get("proxy", {}).get("enabled", True)):
-        info("The VibePod proxy runs on Docker and is skipped with the microsandbox runtime.")
+    agent_auto_pull = agent_cfg.get("auto_pull")
+    auto_pull_enabled = (
+        agent_auto_pull if agent_auto_pull is not None else bool(config.get("auto_pull", False))
+    )
+    if pull or (auto_pull_enabled and _is_latest_tag(image)):
+        info(f"Pulling image with microsandbox: {image}")
+        try:
+            msb.pull_image(binary, image)
+        except msb.MicrosandboxError as exc:
+            if pull:
+                error(str(exc))
+                raise typer.Exit(1) from exc
+            warning(f"{exc} Using the cached image if there is one.")
 
     labels = {
         CONTAINER_LABEL_MANAGED: "true",
@@ -1482,6 +1537,7 @@ def _run_microsandbox(
         "vibepod.workspace": str(workspace_path),
         "vibepod.version": __version__,
         "vibepod.runtime": msb.RUNTIME_MICROSANDBOX,
+        "vibepod.sandbox": "microsandbox",
         "vibepod.profile": profile,
     }
     if provider_names:
@@ -1512,7 +1568,7 @@ def _run_microsandbox(
             detach=detach,
         )
         info(f"Starting {agent} with image {image} in a microsandbox microVM")
-        exit_code = msb.run_foreground(argv)
+        exit_code = SEPARATE_BACKENDS["microsandbox"].launch(argv)
     except msb.MicrosandboxError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc

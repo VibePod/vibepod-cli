@@ -76,7 +76,11 @@ def _write_project(workspace: Path, body: str) -> None:
 
 def test_default_config_disables_sandbox(tmp_path) -> None:
     config = _default_config()
-    assert config["sandbox"] == {"mode": "none", "gvisor": {"runtime": "runsc"}}
+    assert config["sandbox"] == {
+        "type": "none",
+        "gvisor": {"runtime": "runsc"},
+        "microsandbox": {"binary": "msb", "cpus": None, "memory": None, "args": []},
+    }
     assert resolve_sandbox(config, tmp_path) == SandboxSettings(mode="none", runtime="runsc")
 
 
@@ -105,7 +109,7 @@ def test_env_overrides_project_and_cli_overrides_env(monkeypatch, tmp_path) -> N
 
 def test_env_var_maps_to_config_key(monkeypatch) -> None:
     monkeypatch.setenv("VP_SANDBOX", "gvisor")
-    assert _apply_env(_default_config())["sandbox"]["mode"] == "gvisor"
+    assert _apply_env(_default_config())["sandbox"]["type"] == "gvisor"
 
 
 @pytest.mark.parametrize("value", ["firecracker", "runsc", "yes"])
@@ -238,9 +242,60 @@ def test_doctor_sandbox_fails_without_runtime(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(docker_mod, "DockerManager", lambda: _Engine())
     monkeypatch.setattr(doctor_cmd, "get_config", lambda: {})
 
-    result = CliRunner().invoke(app, ["doctor", "sandbox", "-w", str(tmp_path)])
+    result = CliRunner().invoke(app, ["doctor", "sandbox", "gvisor", "-w", str(tmp_path)])
 
     output = " ".join(result.output.split())
     assert result.exit_code == 1
-    assert "configured sandbox: none" in output
+    assert "configured sandbox: gvisor" in output
     assert "not registered with Docker" in output
+
+
+def test_canonical_config_overrides_legacy_in_same_layer(monkeypatch, tmp_path):
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "global"))
+    monkeypatch.chdir(tmp_path)
+    _write_project(tmp_path, "runtime: microsandbox\nsandbox:\n  type: gvisor\n  mode: none\n")
+    from vibepod.core.config import get_config
+
+    config = get_config()
+    assert config["sandbox"]["type"] == "gvisor"
+    assert "mode" not in config["sandbox"]
+    assert "runtime" not in config
+    assert resolve_sandbox(config, tmp_path).type == "gvisor"
+
+
+def test_selection_precedence_across_aliases(monkeypatch, tmp_path):
+    _write_project(tmp_path, "sandbox: microsandbox\n")
+    monkeypatch.setenv("VP_RUNTIME", "docker")
+    assert resolve_sandbox({"sandbox": "gvisor"}, tmp_path).type == "none"
+    monkeypatch.setenv("VP_SANDBOX", "gvisor")
+    assert resolve_sandbox({}, tmp_path).type == "gvisor"
+    assert resolve_sandbox({}, tmp_path, legacy_runtime="microsandbox").type == "microsandbox"
+    assert resolve_sandbox({}, tmp_path, "none", "microsandbox").type == "none"
+
+
+def test_version_reports_selected_sandbox_json(monkeypatch, tmp_path):
+    import json
+
+    from vibepod.commands import update
+
+    monkeypatch.setattr(update, "_runtime_info", lambda: ("Docker", "test"))
+    monkeypatch.setattr(update, "get_config", lambda: {"sandbox": {"type": "microsandbox"}})
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(app, ["version", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["sandbox"] == "microsandbox"
+
+
+def test_version_json_keeps_legacy_warning_on_stderr(monkeypatch, tmp_path):
+    import json
+
+    from vibepod.commands import update
+
+    monkeypatch.setattr(update, "_runtime_info", lambda: (None, "unavailable"))
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "global"))
+    monkeypatch.chdir(tmp_path)
+    _write_project(tmp_path, "runtime: microsandbox\n")
+    result = CliRunner().invoke(app, ["version", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["sandbox"] == "microsandbox"
+    assert result.stderr.count("runtime is deprecated") == 1

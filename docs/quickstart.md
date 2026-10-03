@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Python 3.10+
-- Docker **or** Podman (running), **or** [microsandbox](microsandbox.md) for
+- Docker **or** Podman (running), **or** [microsandbox](sandbox.md#microsandbox) for
   microVM isolation
 
 ### Using microsandbox instead of Docker
@@ -12,12 +12,14 @@ With [microsandbox](https://microsandbox.dev) installed (`msb` on a KVM-capable
 Linux host or an Apple Silicon Mac), agents run as microVMs:
 
 ```bash
-vp config init --runtime microsandbox   # or `vp config init -i`
-vp doctor microsandbox
-vp run claude
+vp config init --sandbox microsandbox   # or `vp config init -i`
+vp doctor sandbox microsandbox
+VP_PROXY_ENABLED=false vp run claude
 ```
 
-See [microsandbox runtime](microsandbox.md) for options and limitations.
+Set `logging.enabled: false` in `.vibepod/config.yaml` before running.
+
+See [microsandbox runtime](sandbox.md#microsandbox) for options and limitations.
 
 ### Using Podman instead of Docker
 

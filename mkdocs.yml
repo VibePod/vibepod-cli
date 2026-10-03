@@ -63,7 +63,6 @@ nav:
       - Recipes: overlays/recipes.md
   - Board automation: board.md
   - Herdr integration: herdr.md
-  - microsandbox runtime: microsandbox.md
   - Editor integration (ACP): acp.md
   - Agent sandbox (gVisor): sandbox.md
   - Configuration: configuration.md

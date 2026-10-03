@@ -29,6 +29,11 @@ def success(message: str) -> None:
     console.print(f"[green]{message}[/green]")
 
 
+def deprecation_warning(message: str) -> None:
+    """Print a single-line warning without corrupting JSON or protocol stdout."""
+    Console(stderr=True).print(f"[yellow]{message}[/yellow]", soft_wrap=True)
+
+
 def warning(message: str) -> None:
     console.print(f"[yellow]{message}[/yellow]")
 

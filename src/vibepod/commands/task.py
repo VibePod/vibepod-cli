@@ -61,12 +61,17 @@ from vibepod.core.launch import (
     terminal_env_defaults,
     update_container_mapping,
 )
-from vibepod.core.microsandbox import RUNTIME_DOCKER, resolve_runtime
 from vibepod.core.profiles import resolve_profile
 from vibepod.core.provider_launch import prepare_launch
 from vibepod.core.provider_runtime import WRAPPED_AGENTS, bootstrap_volume, wrap_provider_command
 from vibepod.core.proxy_filter import remove_container_policy
-from vibepod.core.sandbox import SANDBOX_HELP, SandboxError, prepare_sandbox, resolve_sandbox
+from vibepod.core.sandbox import (
+    SANDBOX_HELP,
+    SandboxError,
+    check_capabilities,
+    prepare_sandbox,
+    resolve_sandbox,
+)
 from vibepod.core.tasks import (
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
@@ -522,16 +527,11 @@ def launch_task(
     spec = get_agent_spec(selected)
     try:
         validate_llm_support(selected, config)
-        selected_runtime = resolve_runtime(config)
+        sandbox_settings = resolve_sandbox(config, workspace.expanduser().resolve(), sandbox)
+        check_capabilities(sandbox_settings, task=True)
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
-    if selected_runtime != RUNTIME_DOCKER:
-        error(
-            f"`vp task` does not support the {selected_runtime} runtime yet; tasks run "
-            "on Docker. Run it with `VP_RUNTIME=docker vp task create ...`.",
-        )
-        raise typer.Exit(1)
     if not spec.headless_prefix and not spec.headless_command:
         supported = ", ".join(
             agent
@@ -677,10 +677,18 @@ def launch_task(
         error(str(exc))
         raise typer.Exit(1) from exc
     try:
-        sandbox_plan = prepare_sandbox(manager, resolve_sandbox(config, workspace_path, sandbox))
+        sandbox_plan = prepare_sandbox(manager, sandbox_settings)
     except SandboxError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
+    if not sandbox_plan.host_socket_mounts and pane_reporting_enabled(
+        config,
+        no_herdr=no_herdr,
+    ):
+        error(
+            "The gvisor sandbox cannot mount the herdr socket; use --host-uds=open or --no-herdr.",
+        )
+        raise typer.Exit(1)
     for note in sandbox_plan.notes:
         warning(f"sandbox: {note}")
     agent_userns_mode = "keep-id" if rootless_podman else None

@@ -55,7 +55,11 @@ class MicrosandboxSettings:
 
 def resolve_runtime(config: dict[str, Any], override: str | None = None) -> str:
     """Return the selected runtime (flag > config/VP_RUNTIME), validated."""
-    raw = override if override is not None else config.get("runtime", DEFAULT_RUNTIME)
+    sandbox = config.get("sandbox")
+    selected = sandbox.get("type", sandbox.get("mode")) if isinstance(sandbox, dict) else sandbox
+    raw = override if override is not None else config.get("runtime", selected or DEFAULT_RUNTIME)
+    if raw in {"none", "gvisor"}:
+        raw = "docker"
     if raw is None:
         return DEFAULT_RUNTIME
     value = str(raw).strip().lower()
@@ -104,7 +108,10 @@ def normalize_cpus(value: Any, *, source: str = "microsandbox.cpus") -> int | No
 
 def load_settings(config: dict[str, Any]) -> MicrosandboxSettings:
     """Read and validate the ``microsandbox`` config section."""
+    sandbox = config.get("sandbox")
     section = config.get("microsandbox")
+    if isinstance(sandbox, dict) and "microsandbox" in sandbox:
+        section = sandbox["microsandbox"]
     if section is None:
         return MicrosandboxSettings()
     if not isinstance(section, dict):

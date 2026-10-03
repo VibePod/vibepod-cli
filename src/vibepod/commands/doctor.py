@@ -15,7 +15,7 @@ import typer
 from vibepod.core.agents import agent_config_dir
 from vibepod.core.config import get_config
 from vibepod.core.profiles import resolve_profile
-from vibepod.utils.console import console, error, info, success, warning
+from vibepod.utils.console import console, deprecation_warning, error, info, success, warning
 
 app = typer.Typer(help="Inspect agent auth and config state")
 
@@ -710,9 +710,15 @@ def herdr_doctor(
 
 @app.command("microsandbox")
 def microsandbox_doctor() -> None:
+    """Deprecated alias for vp doctor sandbox microsandbox."""
+    deprecation_warning("vp doctor microsandbox is deprecated; use vp doctor sandbox microsandbox.")
+    sandbox_doctor(workspace=Path("."), sandbox_type="microsandbox")
+
+
+def _microsandbox_doctor(config: dict[str, Any]) -> None:
     """Check that the microsandbox runtime can launch agents on this host.
 
-    Validates the ``runtime``/``microsandbox`` config, locates the ``msb`` CLI,
+    Validates the ``sandbox.microsandbox`` config, locates the ``msb`` CLI,
     checks the host virtualization prerequisites (KVM on Linux, Apple Silicon
     on macOS), and runs ``msb doctor`` for the runtime's own checks.
     """
@@ -720,21 +726,9 @@ def microsandbox_doctor() -> None:
 
     from vibepod.core import microsandbox as msb
 
-    config = get_config()
     failures = 0
 
     console.print("[bold]Configuration[/bold]")
-    try:
-        runtime = msb.resolve_runtime(config)
-        console.print(f"  runtime: {runtime}")
-        if runtime != msb.RUNTIME_MICROSANDBOX:
-            info(
-                "  vp run uses Docker; select microsandbox with "
-                "`vp config init --runtime microsandbox` or `vp run --runtime microsandbox`",
-            )
-    except ValueError as exc:
-        error(f"  {exc}")
-        failures += 1
     try:
         settings = msb.load_settings(config)
     except ValueError as exc:
@@ -784,35 +778,44 @@ def microsandbox_doctor() -> None:
         error(f"{failures} problem(s) found")
         raise typer.Exit(1)
     success("microsandbox is ready for `vp run`")
+
+
 @app.command("sandbox")
 def sandbox_doctor(
+    sandbox_type: Annotated[
+        str | None,
+        typer.Argument(help="Sandbox type to check (default: selected type)"),
+    ] = None,
     workspace: Annotated[
         Path,
         typer.Option("-w", "--workspace", help="Workspace whose sandbox setting to show"),
     ] = Path("."),
 ) -> None:
-    """Check whether the gVisor (runsc) agent sandbox can run on this engine.
-
-    Shows the sandbox the workspace would launch with and validates the gVisor
-    prerequisites (Linux host, rootful engine, registered runtime and its flags)
-    even when the sandbox is not enabled.
-    """
+    """Check the selected sandbox's prerequisites, or name a type to check."""
     from vibepod.core.docker import DockerClientError, DockerManager
     from vibepod.core.sandbox import (
         SandboxError,
-        SandboxSettings,
         prepare_sandbox,
         resolve_sandbox,
         runtime_flag,
+        sandbox_options_config,
     )
 
     workspace_path = workspace.expanduser().resolve()
     try:
-        settings = resolve_sandbox(get_config(), workspace_path)
+        config = get_config()
+        settings = resolve_sandbox(config, workspace_path, sandbox_type)
+        config = sandbox_options_config(config, workspace_path)
     except SandboxError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
-    console.print(f"  configured sandbox: {settings.mode}")
+    console.print(f"  configured sandbox: {settings.type}")
+    if settings.type == "none":
+        success("No additional sandbox selected; agents use the normal Docker/Podman container.")
+        return
+    if settings.type == "microsandbox":
+        _microsandbox_doctor(config)
+        return
     console.print(f"  gVisor runtime:     {settings.runtime}")
 
     try:
@@ -833,7 +836,7 @@ def sandbox_doctor(
             console.print(f"  host-uds:           {runtime_flag(args, 'host-uds') or 'none'}")
 
     try:
-        plan = prepare_sandbox(manager, SandboxSettings(mode="gvisor", runtime=settings.runtime))
+        plan = prepare_sandbox(manager, settings)
     except SandboxError as exc:
         error(f"gVisor sandbox unavailable: {exc}")
         raise typer.Exit(1) from exc

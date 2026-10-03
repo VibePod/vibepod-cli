@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import platform
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
 from vibepod import __version__
+from vibepod.core.config import get_config
 from vibepod.core.docker import (
     DockerClientError,
     DockerException,
     DockerManager,
     _version_is_podman,
 )
+from vibepod.core.sandbox import resolve_sandbox
 
 
 def _runtime_info() -> tuple[str | None, str]:
@@ -35,6 +38,7 @@ def version(
     runtime_name, runtime_version = _runtime_info()
     info = {
         "vibepod": __version__,
+        "sandbox": resolve_sandbox(get_config(), Path.cwd()).type,
         "python": platform.python_version(),
         "runtime": runtime_name,
         # Kept for backward compatibility: the engine version regardless of runtime.
@@ -51,3 +55,4 @@ def version(
     print(f"VibePod CLI: {info['vibepod']}")
     print(f"Python:      {info['python']}")
     print(f"Runtime:     {runtime_display}")
+    print(f"Sandbox:     {info['sandbox']}")

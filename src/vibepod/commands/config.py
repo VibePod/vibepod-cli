@@ -28,7 +28,8 @@ from vibepod.core.config import (
     get_global_config_path,
     get_project_config_path,
 )
-from vibepod.utils.console import console, error, success, warning
+from vibepod.core.sandbox import SANDBOX_TYPES, resolve_sandbox
+from vibepod.utils.console import console, deprecation_warning, error, success, warning
 
 app = typer.Typer(help="Manage configuration")
 
@@ -53,11 +54,11 @@ def _prompt_runtime_settings(
     msb_memory: str | None,
 ) -> tuple[str, int | None, str | None]:
     """Ask for the runtime and its microsandbox resources on a TTY."""
-    current = str(get_config().get("runtime") or msb.DEFAULT_RUNTIME)
+    current = resolve_sandbox(get_config(), Path.cwd()).type
     runtime = Prompt.ask(
-        "Sandbox runtime",
-        choices=list(msb.RUNTIMES),
-        default=runtime or (current if current in msb.RUNTIMES else msb.DEFAULT_RUNTIME),
+        "Sandbox type",
+        choices=list(SANDBOX_TYPES),
+        default=("none" if runtime == "docker" else runtime) or current,
     )
     if runtime == msb.RUNTIME_MICROSANDBOX:
         while True:
@@ -109,7 +110,9 @@ def _apply_runtime_settings(
             raise typer.Exit(1)
         return None
     try:
-        selected = msb.resolve_runtime({}, runtime)
+        selected = "none" if runtime == "docker" else runtime
+        if selected not in SANDBOX_TYPES:
+            raise ValueError(f"Invalid --runtime value '{runtime}'; expected {SANDBOX_TYPES}")
         cpus = msb.normalize_cpus(msb_cpus, source="--msb-cpus")
         memory = msb.normalize_memory(msb_memory, source="--msb-memory")
     except ValueError as exc:
@@ -122,9 +125,15 @@ def _apply_runtime_settings(
         error("--msb-binary cannot be empty.")
         raise typer.Exit(1)
 
-    project_config["runtime"] = selected
+    project_config.pop("runtime", None)
+    sandbox_section = project_config.get("sandbox")
+    if not isinstance(sandbox_section, dict):
+        sandbox_section = {}
+    sandbox_section.pop("mode", None)
+    sandbox_section["type"] = selected
+    project_config["sandbox"] = sandbox_section
     if selected == msb.RUNTIME_MICROSANDBOX:
-        section = project_config.get("microsandbox")
+        section = sandbox_section.get("microsandbox", project_config.pop("microsandbox", None))
         if not isinstance(section, dict):
             section = {}
         if msb_binary is not None:
@@ -134,7 +143,7 @@ def _apply_runtime_settings(
         if memory is not None:
             section["memory"] = memory
         if section:
-            project_config["microsandbox"] = section
+            sandbox_section["microsandbox"] = section
     return selected
 
 
@@ -162,6 +171,10 @@ def init(
         str | None,
         typer.Option("--runtime", help="Sandbox runtime to store: docker or microsandbox"),
     ] = None,
+    sandbox: Annotated[
+        str | None,
+        typer.Option("--sandbox", help="Sandbox type to store: none, gvisor, microsandbox"),
+    ] = None,
     msb_binary: Annotated[
         str | None,
         typer.Option("--msb-binary", help="Path or name of the microsandbox `msb` CLI"),
@@ -181,6 +194,13 @@ def init(
 ) -> None:
     """Create a minimal project config or add a specific agent config."""
     project_path = get_project_config_path()
+    if runtime is not None:
+        deprecation_warning("--runtime is deprecated; use --sandbox.")
+    if sandbox is not None:
+        if sandbox not in SANDBOX_TYPES:
+            error(f"Invalid --sandbox value '{sandbox}'; expected {SANDBOX_TYPES}")
+            raise typer.Exit(1)
+        runtime = sandbox
     if interactive:
         if not sys.stdin.isatty():
             error("--interactive needs a terminal; pass --runtime and --msb-* options instead.")

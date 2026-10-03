@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from vibepod.constants import CONTAINER_LABEL_MANAGED, EXIT_DOCKER_NOT_RUNNING
+from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager
 from vibepod.core.resume import show_resume_hint
+from vibepod.core.sandbox import SandboxError, check_capabilities, resolve_sandbox
 from vibepod.utils.console import error, info, warning
 
 
@@ -28,6 +31,11 @@ def attach(
     Use this to rejoin an agent session after the terminal that started it
     was closed. Find candidate containers with `vp list`.
     """
+    try:
+        check_capabilities(resolve_sandbox(get_config(), Path.cwd()), attach=True)
+    except SandboxError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     try:
         manager = DockerManager()
     except DockerClientError as exc:

@@ -1,8 +1,7 @@
-"""Opt-in agent sandboxes that swap the agent container's OCI runtime.
+"""Unified sandbox selection, capabilities and three backend integration contracts.
 
-``sandbox.mode: gvisor`` runs the agent container under gVisor's ``runsc``
-runtime. Images, mounts, the proxy sidecar and published ports stay the same;
-only the agent container gets the runtime (see docs/sandbox.md).
+OCI backends contribute engine options, separate backends replace the engine
+launch, and process backends wrap the agent command. See docs/sandbox.md.
 """
 
 from __future__ import annotations
@@ -11,16 +10,21 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-from vibepod.core.config import load_project_config
+from vibepod.core.config import deep_merge, load_project_config
+from vibepod.utils.console import deprecation_warning
 
-SANDBOX_MODES = ("none", "gvisor")
+if TYPE_CHECKING:
+    from vibepod.core.microsandbox import MicrosandboxSettings
+
+SANDBOX_TYPES = ("none", "gvisor", "microsandbox")
+SANDBOX_MODES = SANDBOX_TYPES
 DEFAULT_GVISOR_RUNTIME = "runsc"
 SANDBOX_LABEL = "vibepod.sandbox"
 
 SANDBOX_HELP = (
-    "Agent sandbox for this run: none or gvisor (overrides the `sandbox` config; "
+    "Agent sandbox for this run: none, gvisor or microsandbox (overrides the `sandbox` config; "
     "see https://vibepod.dev/docs/sandbox/)"
 )
 
@@ -31,17 +35,32 @@ class SandboxError(ValueError):
     """Raised when the requested sandbox cannot be used on this engine."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class SandboxSettings:
-    mode: str = "none"
+    type: str = "none"
     runtime: str = DEFAULT_GVISOR_RUNTIME
+
+    def __init__(
+        self,
+        type: str = "none",
+        runtime: str = DEFAULT_GVISOR_RUNTIME,
+        *,
+        mode: str | None = None,
+    ) -> None:
+        object.__setattr__(self, "type", mode if mode is not None else type)
+        object.__setattr__(self, "runtime", runtime)
+
+    @property
+    def mode(self) -> str:
+        """Compatibility accessor for the original gVisor integration."""
+        return self.type
 
 
 @dataclass(frozen=True)
 class SandboxPlan:
     """What a launch has to pass to ``run_agent`` for the chosen sandbox."""
 
-    mode: str = "none"
+    type: str = "none"
     runtime: str | None = None
     security_opt: list[str] = field(default_factory=list)
     host_socket_mounts: bool = True
@@ -49,40 +68,54 @@ class SandboxPlan:
     notes: list[str] = field(default_factory=list)
 
     @property
+    def mode(self) -> str:
+        return self.type
+
+    @property
     def suffix(self) -> str:
         """Fragment appended to the "Starting ..." line."""
-        return f" in the {self.mode} sandbox (runtime {self.runtime})" if self.runtime else ""
+        return f" in the {self.type} sandbox (runtime {self.runtime})" if self.runtime else ""
 
     @property
     def labels(self) -> dict[str, str]:
-        return {SANDBOX_LABEL: self.mode} if self.mode != "none" else {}
+        return {SANDBOX_LABEL: self.type} if self.type != "none" else {}
 
 
 NO_SANDBOX = SandboxPlan()
 
 
-def _normalize_mode(value: Any, source: str) -> str:
+def _normalize_type(value: Any, source: str) -> str:
     mode = str(value).strip().lower()
     if mode in {"", "off", "false"}:
         mode = "none"
-    if mode not in SANDBOX_MODES:
+    if mode not in SANDBOX_TYPES:
         raise SandboxError(
-            f"Invalid sandbox '{value}' from {source}; expected one of: {', '.join(SANDBOX_MODES)}",
+            f"Invalid sandbox '{value}' from {source}; expected one of: {', '.join(SANDBOX_TYPES)}",
         )
     return mode
 
 
-def _apply_section(settings: dict[str, Any], section: Any, source: str) -> None:
+def _apply_section(
+    settings: dict[str, Any],
+    section: Any,
+    source: str,
+    *,
+    warn_deprecated: bool = True,
+) -> None:
     if section is None:
         return
     if isinstance(section, str):
         # Shorthand: `sandbox: gvisor`.
-        settings["mode"] = _normalize_mode(section, source)
+        settings["type"] = _normalize_type(section, source)
         return
     if not isinstance(section, dict):
         raise SandboxError(f"Config key 'sandbox' in {source} must be a mapping or a mode name")
     if "mode" in section and section["mode"] is not None:
-        settings["mode"] = _normalize_mode(section["mode"], source)
+        if warn_deprecated:
+            deprecation_warning("sandbox.mode is deprecated; use sandbox.type.")
+        settings["type"] = _normalize_type(section["mode"], source)
+    if "type" in section and section["type"] is not None:
+        settings["type"] = _normalize_type(section["type"], source)
     gvisor = section.get("gvisor")
     if isinstance(gvisor, dict) and gvisor.get("runtime"):
         settings["runtime"] = str(gvisor["runtime"]).strip()
@@ -92,6 +125,7 @@ def resolve_sandbox(
     config: dict[str, Any],
     workspace: Path,
     cli_value: str | None = None,
+    legacy_runtime: str | None = None,
 ) -> SandboxSettings:
     """Return the sandbox for this launch.
 
@@ -100,15 +134,54 @@ def resolve_sandbox(
     The workspace file is read again because get_config() merges the project
     file of the *current* directory, not the one ``-w`` points at.
     """
-    settings: dict[str, Any] = {"mode": "none", "runtime": DEFAULT_GVISOR_RUNTIME}
-    _apply_section(settings, config.get("sandbox"), "config")
-    _apply_section(settings, load_project_config(workspace).get("sandbox"), "project config")
+    settings: dict[str, Any] = {"type": "none", "runtime": DEFAULT_GVISOR_RUNTIME}
+    for source, layer in (("config", config), ("project config", load_project_config(workspace))):
+        warn_deprecated = source == "config" or workspace.resolve() != Path.cwd().resolve()
+        legacy = layer.get("runtime")
+        if legacy is not None:
+            if warn_deprecated:
+                deprecation_warning("runtime is deprecated; use sandbox.type.")
+            settings["type"] = _legacy_type(legacy, source)
+        _apply_section(settings, layer.get("sandbox"), source, warn_deprecated=warn_deprecated)
+    env_runtime = os.environ.get("VP_RUNTIME")
+    if env_runtime is not None:
+        deprecation_warning("VP_RUNTIME is deprecated; use VP_SANDBOX.")
+        settings["type"] = _legacy_type(env_runtime, "VP_RUNTIME")
     env_value = os.environ.get("VP_SANDBOX")
     if env_value is not None:
-        settings["mode"] = _normalize_mode(env_value, "VP_SANDBOX")
+        settings["type"] = _normalize_type(env_value, "VP_SANDBOX")
+    if legacy_runtime is not None:
+        deprecation_warning("--runtime is deprecated; use --sandbox.")
+        settings["type"] = _legacy_type(legacy_runtime, "--runtime")
     if cli_value is not None:
-        settings["mode"] = _normalize_mode(cli_value, "--sandbox")
-    return SandboxSettings(mode=settings["mode"], runtime=settings["runtime"] or "runsc")
+        settings["type"] = _normalize_type(cli_value, "--sandbox")
+    return SandboxSettings(type=settings["type"], runtime=settings["runtime"] or "runsc")
+
+
+def _legacy_type(value: Any, source: str) -> str:
+    value = str(value).strip().lower()
+    if value not in {"docker", "microsandbox"}:
+        raise SandboxError(f"Invalid {source} runtime '{value}'; expected docker or microsandbox")
+    return "none" if value == "docker" else value
+
+
+def sandbox_options_config(config: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    """Merge backend options from the launched workspace, preserving global options.
+
+    Selection is resolved separately so environment and CLI precedence stay intact.
+    The legacy top-level microsandbox options remain accepted.
+    """
+    project = load_project_config(workspace)
+    section = project.get("sandbox")
+    options: dict[str, Any] = {}
+    if isinstance(section, dict):
+        options = {name: section[name] for name in SANDBOX_TYPES if name in section}
+    if "microsandbox" in project and "microsandbox" not in options:
+        options["microsandbox"] = project["microsandbox"]
+    base = config.get("sandbox")
+    if isinstance(base, str):
+        config = {**config, "sandbox": {"type": base}}
+    return deep_merge(config, {"sandbox": options})
 
 
 def runtime_flag(args: list[str], name: str) -> str | None:
@@ -136,13 +209,13 @@ def _probe(manager: Any, name: str, default: Any) -> Any:
     return probe() if callable(probe) else default
 
 
-def prepare_sandbox(manager: Any, settings: SandboxSettings) -> SandboxPlan:
+def _prepare_gvisor(manager: Any, settings: SandboxSettings) -> SandboxPlan:
     """Validate the engine for *settings* and return the launch plan.
 
     Raises SandboxError with an actionable message when a prerequisite is
     missing, before any network, proxy or image is provisioned.
     """
-    if settings.mode == "none":
+    if settings.type == "none":
         return NO_SANDBOX
     runtime = settings.runtime
     if not sys.platform.startswith("linux"):
@@ -224,10 +297,113 @@ def prepare_sandbox(manager: Any, settings: SandboxSettings) -> SandboxPlan:
         security_opt.append("label=disable")
 
     return SandboxPlan(
-        mode=settings.mode,
+        type=settings.type,
         runtime=runtime,
         security_opt=security_opt,
         host_socket_mounts=host_socket_mounts,
         socket_skip_reason=socket_skip_reason,
         notes=notes,
     )
+
+
+@dataclass(frozen=True)
+class SandboxCapabilities:
+    workspace_mount: bool = True
+    proxy_metrics: bool = True
+    session_logging: bool = True
+    ports: bool = True
+    attach: bool = True
+    task: bool = True
+    acp: bool = True
+    overlays: bool = True
+    init_commands: bool = True
+    herdr_socket: bool = True
+
+
+class OCIRuntimeSandbox(Protocol):
+    """Contribute engine create options after checking the OCI runtime."""
+
+    def prepare(self, manager: Any, settings: SandboxSettings) -> SandboxPlan: ...
+
+
+class SeparateBackendSandbox(Protocol):
+    """Check and launch through a backend independent of Docker/Podman."""
+
+    def prepare(self, config: dict[str, Any]) -> tuple[MicrosandboxSettings, str]: ...
+
+    def launch(self, argv: list[str]) -> int: ...
+
+
+class ProcessSandbox(Protocol):
+    """Validate a process sandbox and wrap the final agent command."""
+
+    def check(self, config: dict[str, Any]) -> None: ...
+
+    def wrap(self, command: list[str]) -> list[str]: ...
+
+
+class GVisorSandbox:
+    def prepare(self, manager: Any, settings: SandboxSettings) -> SandboxPlan:
+        return _prepare_gvisor(manager, settings)
+
+
+class MicrosandboxBackend:
+    def prepare(self, config: dict[str, Any]) -> tuple[MicrosandboxSettings, str]:
+        from vibepod.core import microsandbox
+
+        settings = microsandbox.load_settings(config)
+        return settings, microsandbox.ensure_available(settings)
+
+    def launch(self, argv: list[str]) -> int:
+        from vibepod.core import microsandbox
+
+        return microsandbox.run_foreground(argv)
+
+
+CAPABILITIES = {
+    "none": SandboxCapabilities(),
+    "gvisor": SandboxCapabilities(),  # host socket support is checked in the launch plan
+    "microsandbox": SandboxCapabilities(
+        proxy_metrics=False,
+        session_logging=False,
+        attach=False,
+        task=False,
+        acp=False,
+        overlays=False,
+        init_commands=False,
+        herdr_socket=False,
+    ),
+}
+OCI_SANDBOXES: dict[str, OCIRuntimeSandbox] = {"gvisor": GVisorSandbox()}
+SEPARATE_BACKENDS: dict[str, SeparateBackendSandbox] = {"microsandbox": MicrosandboxBackend()}
+PROCESS_SANDBOXES: dict[str, ProcessSandbox] = {}
+
+
+def check_capabilities(settings: SandboxSettings, **requested: bool) -> None:
+    """Reject requested unsupported features before launch side effects."""
+    capabilities = CAPABILITIES[settings.type]
+    unsupported = [
+        name for name, used in requested.items() if used and not getattr(capabilities, name)
+    ]
+    if unsupported:
+        features = ", ".join(name.replace("_", " ") for name in unsupported)
+        hints = {
+            "proxy_metrics": "set proxy.enabled: false",
+            "session_logging": "set logging.enabled: false",
+            "overlays": "pass --no-overlay",
+            "herdr_socket": "pass --no-herdr",
+        }
+        remedies = "; ".join(hints[name] for name in unsupported if name in hints)
+        remedy = f"{remedies}, or " if remedies else "disable these features or "
+        raise SandboxError(
+            f"The {settings.type} sandbox does not support {features}; {remedy}use --sandbox none.",
+        )
+
+
+def prepare_sandbox(manager: Any, settings: SandboxSettings) -> SandboxPlan:
+    if settings.type == "none":
+        return NO_SANDBOX
+    backend = OCI_SANDBOXES.get(settings.type)
+    if backend is None:
+        raise SandboxError(f"{settings.type} uses a separate backend, not an OCI runtime")
+    return backend.prepare(manager, settings)

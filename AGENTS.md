@@ -34,22 +34,14 @@ Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
 
-## Runtimes
+## Sandboxes
 
-`vp run` has two runtimes (`runtime` config / `VP_RUNTIME` / `--runtime`):
-Docker (default, `core/docker.py`) and microsandbox microVMs driven through the
-`msb` CLI (`core/microsandbox.py`, `run.py::_run_microsandbox`, `docs/microsandbox.md`).
-A new Docker-only launch feature must be rejected or skipped explicitly on the
-microsandbox path (see `_check_microsandbox_launch`); `vp task` is Docker-only.
-
-## Agent sandbox (gVisor)
-
-`sandbox.mode: gvisor` / `--sandbox` only swaps the agent container's OCI
-runtime; all engine checks live in `src/vibepod/core/sandbox.py` and run before
-any network/proxy is provisioned. On Docker the runtime must carry
-`--network=host` (gVisor netstack cannot reach Docker's 127.0.0.11 DNS on
-`vibepod-network`, google/gvisor#7469); Podman's `/info` lists `runsc` even
-when it is not installed and never reports runtime flags. See `docs/sandbox.md`.
+`core/sandbox.py` owns selection, capabilities and the OCI, separate-backend,
+and process-wrapper interfaces. Add launch features to its capability check;
+unsupported combinations must fail before provisioning. See `docs/sandbox.md`.
+For gVisor, Docker needs runsc `--network=host` because its netstack cannot
+reach Docker's embedded DNS (google/gvisor#7469). Podman's runtime list does
+not prove runsc is installed and does not expose its flags.
 
 ## Tests
 

@@ -31,7 +31,6 @@ def _default_config() -> dict[str, Any]:
     return {
         "version": 1,
         "default_agent": "claude",
-        "runtime": "docker",
         "auto_pull": True,
         "auto_clean": True,
         "auto_remove": True,
@@ -197,17 +196,10 @@ def _default_config() -> dict[str, Any]:
                 "deny": [],
             },
         },
-        "microsandbox": {
-            "binary": "msb",
-            "cpus": None,
-            "memory": None,
-            "args": [],
-        },
         "sandbox": {
-            "mode": "none",
-            "gvisor": {
-                "runtime": "runsc",
-            },
+            "type": "none",
+            "gvisor": {"runtime": "runsc"},
+            "microsandbox": {"binary": "msb", "cpus": None, "memory": None, "args": []},
         },
         "llm": {
             "enabled": False,
@@ -293,7 +285,7 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
     mappings: dict[str, tuple[str, Any]] = {
         "VP_DEFAULT_AGENT": ("default_agent", str),
-        "VP_RUNTIME": ("runtime", str),
+        "VP_RUNTIME": ("sandbox.type", lambda x: "none" if x.strip().lower() == "docker" else x),
         "VP_AUTO_PULL": ("auto_pull", lambda x: x.lower() == "true"),
         "VP_AUTO_CLEAN": ("auto_clean", lambda x: x.lower() == "true"),
         "VP_LOG_LEVEL": ("log_level", str),
@@ -301,7 +293,7 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
         "VP_DATASETTE_PORT": ("logging.ui_port", int),
         "VP_PROXY_ENABLED": ("proxy.enabled", lambda x: x.lower() == "true"),
         "VP_PROXY_FILTER_MODE": ("proxy.filter.mode", str),
-        "VP_SANDBOX": ("sandbox.mode", str),
+        "VP_SANDBOX": ("sandbox.type", str),
         "VP_LLM_ENABLED": ("llm.enabled", lambda x: x.lower() == "true"),
         "VP_LLM_BASE_URL": ("llm.base_url", str),
         "VP_LLM_API_KEY": ("llm.api_key", str),
@@ -343,15 +335,44 @@ def load_project_config(workspace: Path) -> dict[str, Any]:
     return _load_yaml(workspace / PROJECT_CONFIG_FILE)
 
 
+def _sandbox_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize legacy selections per layer before merging defaults."""
+    from vibepod.utils.console import deprecation_warning
+
+    sandbox = config.get("sandbox")
+    if isinstance(sandbox, str):
+        sandbox = {"type": sandbox}
+        config["sandbox"] = sandbox
+    if isinstance(sandbox, dict) and "mode" in sandbox:
+        deprecation_warning("sandbox.mode is deprecated; use sandbox.type.")
+        sandbox.setdefault("type", sandbox.pop("mode"))
+    if "runtime" in config:
+        deprecation_warning("runtime is deprecated; use sandbox.type.")
+        raw_runtime = config.pop("runtime")
+        runtime = "docker" if raw_runtime is None else str(raw_runtime).strip().lower()
+        if runtime not in {"docker", "microsandbox"}:
+            raise ValueError(f"Invalid runtime '{runtime}'; expected docker or microsandbox")
+        if sandbox is None:
+            config["sandbox"] = {"type": "none" if runtime == "docker" else runtime}
+        elif isinstance(sandbox, dict):
+            sandbox.setdefault("type", "none" if runtime == "docker" else runtime)
+    if "microsandbox" in config:
+        legacy_options = config.pop("microsandbox")
+        section = config.setdefault("sandbox", {})
+        if isinstance(section, dict):
+            section.setdefault("microsandbox", legacy_options)
+    return config
+
+
 def get_config() -> dict[str, Any]:
     """Return merged effective config."""
     ensure_config_dirs()
     config = _default_config()
-    config = deep_merge(config, _load_yaml(get_global_config_path()))
+    config = deep_merge(config, _sandbox_config(_load_yaml(get_global_config_path())))
 
     project_path = get_project_config_path()
     if project_path.exists():
-        config = deep_merge(config, _load_yaml(project_path))
+        config = deep_merge(config, _sandbox_config(_load_yaml(project_path)))
 
     config = _apply_env(config)
     return config

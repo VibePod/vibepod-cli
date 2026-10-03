@@ -70,6 +70,10 @@ def project(monkeypatch, tmp_path: Path) -> Path:
     """A hermetic config dir plus an allowed workspace as the cwd."""
     monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.delenv("VP_RUNTIME", raising=False)
+    monkeypatch.setenv("VP_PROXY_ENABLED", "false")
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text("logging:\n  enabled: false\n")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     monkeypatch.chdir(workspace)
@@ -101,8 +105,13 @@ def test_runtime_defaults_to_docker(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("VP_RUNTIME", raising=False)
     config = get_config()
-    assert config["runtime"] == "docker"
-    assert config["microsandbox"] == {"binary": "msb", "cpus": None, "memory": None, "args": []}
+    assert config["sandbox"]["type"] == "none"
+    assert config["sandbox"]["microsandbox"] == {
+        "binary": "msb",
+        "cpus": None,
+        "memory": None,
+        "args": [],
+    }
     assert msb.resolve_runtime(config) == "docker"
 
 
@@ -402,7 +411,7 @@ def test_run_propagates_msb_exit_code(monkeypatch, fake_msb, project: Path) -> N
 @pytest.mark.parametrize(
     ("args", "message"),
     [
-        (["--acp"], "--acp cannot be used with the microsandbox runtime"),
+        (["--acp"], "microsandbox sandbox does not support acp"),
         (["--network", "dev"], "--network cannot be used with the microsandbox runtime"),
         (["--paste-images"], "--paste-images cannot be used"),
     ],
@@ -434,7 +443,7 @@ def test_run_reports_invalid_config(fake_msb, project: Path) -> None:
 def test_run_rejects_unknown_runtime(project: Path) -> None:
     result = runner.invoke(app, ["run", "claude", "--runtime", "lxc"])
     assert result.exit_code == 1
-    assert "Invalid --runtime value 'lxc'" in result.output
+    assert "Invalid --runtime runtime 'lxc'" in result.output
 
 
 def test_run_rejects_init_commands(fake_msb, project: Path) -> None:
@@ -444,7 +453,7 @@ def test_run_rejects_init_commands(fake_msb, project: Path) -> None:
     )
     result = runner.invoke(app, ["run", "claude"])
     assert result.exit_code == 1
-    assert "agents.claude.init is not supported" in " ".join(result.output.split())
+    assert "does not support init commands" in " ".join(result.output.split())
     assert fake_msb["calls"]() == []
 
 
@@ -456,7 +465,7 @@ def test_run_rejects_overlay_unless_skipped(fake_msb, project: Path) -> None:
 
     result = runner.invoke(app, ["run", "claude"])
     assert result.exit_code == 1
-    assert "--no-overlay" in result.output
+    assert "does not support overlays" in result.output
 
     result = runner.invoke(app, ["run", "claude", "--no-overlay"])
     assert result.exit_code == 0, result.output
@@ -481,7 +490,7 @@ def test_task_refuses_microsandbox_runtime(fake_msb, project: Path) -> None:
     _write_project_config(project, {"runtime": "microsandbox"})
     result = runner.invoke(app, ["task", "create", "claude", "hello"])
     assert result.exit_code == 1
-    assert "VP_RUNTIME=docker" in result.output
+    assert "does not support task" in result.output
 
 
 # --- vp config init ----------------------------------------------------------------
@@ -499,8 +508,7 @@ def test_config_init_with_microsandbox(fake_msb, project: Path) -> None:
     assert result.exit_code == 0, result.output
     assert _project_config(project) == {
         "version": 1,
-        "runtime": "microsandbox",
-        "microsandbox": {"cpus": 2, "memory": "4G"},
+        "sandbox": {"type": "microsandbox", "microsandbox": {"cpus": 2, "memory": "4G"}},
     }
     assert "not ready" not in result.output
     assert msb.resolve_runtime(get_config()) == "microsandbox"
@@ -512,7 +520,7 @@ def test_config_init_updates_existing_project(fake_msb, project: Path) -> None:
     assert result.exit_code == 0, result.output
     data = _project_config(project)
     assert data["default_agent"] == "codex"
-    assert data["runtime"] == "microsandbox"
+    assert data["sandbox"]["type"] == "microsandbox"
 
 
 def test_config_init_with_agent_and_runtime(fake_msb, project: Path) -> None:
@@ -520,7 +528,7 @@ def test_config_init_with_agent_and_runtime(fake_msb, project: Path) -> None:
     assert result.exit_code == 0, result.output
     data = _project_config(project)
     assert "claude" in data["agents"]
-    assert data["runtime"] == "microsandbox"
+    assert data["sandbox"]["type"] == "microsandbox"
 
 
 def test_config_init_warns_when_host_not_ready(monkeypatch, project: Path, tmp_path) -> None:
@@ -553,7 +561,7 @@ def test_config_init_rejects_invalid_runtime_options(project: Path, args, messag
 def test_config_init_docker_runtime(project: Path) -> None:
     result = runner.invoke(app, ["config", "init", "--runtime", "docker"])
     assert result.exit_code == 0, result.output
-    assert _project_config(project) == {"version": 1, "runtime": "docker"}
+    assert _project_config(project) == {"version": 1, "sandbox": {"type": "none"}}
 
 
 def test_config_init_interactive(monkeypatch, fake_msb, project: Path) -> None:
@@ -565,8 +573,7 @@ def test_config_init_interactive(monkeypatch, fake_msb, project: Path) -> None:
     assert result.exit_code == 0, result.output
     assert _project_config(project) == {
         "version": 1,
-        "runtime": "microsandbox",
-        "microsandbox": {"cpus": 4, "memory": "8G"},
+        "sandbox": {"type": "microsandbox", "microsandbox": {"cpus": 4, "memory": "8G"}},
     }
 
 
@@ -604,3 +611,110 @@ def test_doctor_fails_without_kvm_or_binary(monkeypatch, project: Path, tmp_path
     assert result.exit_code == 1
     assert "/dev/kvm is missing" in result.output
     assert "2 problem(s) found" in result.output
+
+
+@pytest.mark.parametrize("selection", ["config", "shorthand", "flag", "env"])
+def test_canonical_selection_uses_separate_backend(monkeypatch, fake_msb, project, selection):
+    config = {"auto_pull": False}
+    args = ["run", "claude"]
+    if selection == "config":
+        config["sandbox"] = {"type": "microsandbox", "microsandbox": {"cpus": 3}}
+    elif selection == "shorthand":
+        config["sandbox"] = "microsandbox"
+    elif selection == "flag":
+        args += ["--sandbox", "microsandbox"]
+    else:
+        monkeypatch.setenv("VP_SANDBOX", "microsandbox")
+    _write_project_config(project, config)
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert "deprecated" not in result.output
+    launch = fake_msb["calls"]()[-1]
+    assert launch["argv"][0] == "run"
+    assert yaml.safe_load(launch["conf"])["labels"]["vibepod.sandbox"] == "microsandbox"
+    if selection == "config":
+        assert _pairs(launch["argv"], "--cpus") == ["3"]
+
+
+@pytest.mark.parametrize("feature", ["proxy", "logging", "init", "overlay", "herdr"])
+def test_capabilities_fail_before_backend_probe(monkeypatch, fake_msb, project, feature):
+    config = {"sandbox": {"type": "microsandbox"}}
+    if feature == "proxy":
+        monkeypatch.delenv("VP_PROXY_ENABLED")
+    elif feature == "logging":
+        config["logging"] = {"enabled": True}
+    elif feature == "init":
+        config["agents"] = {"claude": {"init": ["touch /workspace/started"]}}
+    elif feature == "overlay":
+        overlay = project / ".vibepod" / "overlay" / "Dockerfile"
+        overlay.parent.mkdir(parents=True)
+        overlay.write_text("FROM scratch\n")
+    else:
+        monkeypatch.setattr(run, "_herdr_pane_reporting_enabled", lambda *a, **kw: True)
+    _write_project_config(project, config)
+    result = runner.invoke(app, ["run", "claude"])
+    assert result.exit_code == 1
+    assert "does not support" in result.output
+    assert fake_msb["calls"]() == []
+
+
+def test_named_doctor_ignores_disabled_selection(fake_msb, project):
+    _write_project_config(project, {"sandbox": "none"})
+    result = runner.invoke(app, ["doctor", "sandbox", "microsandbox"])
+    assert result.exit_code == 0, result.output
+    assert "configured sandbox: microsandbox" in result.output
+    assert [call["argv"] for call in fake_msb["calls"]()] == [["--version"], ["doctor"]]
+
+
+def test_attach_refuses_microsandbox_before_engine_access(fake_msb, project):
+    _write_project_config(project, {"sandbox": "microsandbox"})
+    result = runner.invoke(app, ["attach"])
+    assert result.exit_code == 1
+    assert "does not support attach" in result.output
+
+
+def test_config_init_canonical_options(fake_msb, project):
+    result = runner.invoke(
+        app,
+        ["config", "init", "--sandbox", "microsandbox", "--msb-memory", "2G"],
+    )
+    assert result.exit_code == 0, result.output
+    assert _project_config(project) == {
+        "version": 1,
+        "sandbox": {"type": "microsandbox", "microsandbox": {"memory": "2G"}},
+    }
+    assert "deprecated" not in result.output
+
+
+def test_workspace_sandbox_options_merge_with_global_config(
+    monkeypatch,
+    fake_msb,
+    project,
+    tmp_path,
+):
+    from vibepod.core.config import get_global_config_path
+
+    global_config = get_global_config_path()
+    global_config.parent.mkdir(parents=True, exist_ok=True)
+    global_config.write_text(
+        yaml.safe_dump(
+            {
+                "sandbox": {"microsandbox": {"binary": fake_msb["binary"], "memory": "2G"}},
+                "logging": {"enabled": True},
+            },
+        ),
+    )
+    other_workspace = tmp_path / "other"
+    other_workspace.mkdir()
+    _write_project_config(
+        other_workspace,
+        {
+            "sandbox": {"type": "microsandbox", "microsandbox": {"cpus": 4}},
+            "logging": {"enabled": False},
+        },
+    )
+    result = runner.invoke(app, ["run", "claude", "-w", str(other_workspace)])
+    assert result.exit_code == 0, result.output
+    argv = fake_msb["calls"]()[-1]["argv"]
+    assert _pairs(argv, "--memory") == ["2G"]
+    assert _pairs(argv, "--cpus") == ["4"]

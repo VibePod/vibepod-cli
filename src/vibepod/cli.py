@@ -128,7 +128,7 @@ def run_command(
         str | None,
         typer.Option(
             "--runtime",
-            help="Sandbox runtime for this run: docker or microsandbox (overrides config)",
+            help="Deprecated alias for --sandbox: docker (none) or microsandbox",
         ),
     ] = None,
     sandbox: Annotated[
@@ -271,7 +271,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             str | None,
             typer.Option(
                 "--runtime",
-                help="Sandbox runtime for this run: docker or microsandbox (overrides config)",
+                help="Deprecated alias for --sandbox: docker (none) or microsandbox",
             ),
         ] = None,
         sandbox: Annotated[
