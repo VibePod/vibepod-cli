@@ -50,6 +50,11 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Tutorials:
+      - Overview: tutorials/index.md
+      - Compare two agents: tutorials/compare-agents.md
+      - Share a team setup: tutorials/team-setup.md
+      - Use your own model provider: tutorials/own-model-provider.md
   - Development: development.md
   - Agents: agents/index.md
   - Profiles: profiles.md

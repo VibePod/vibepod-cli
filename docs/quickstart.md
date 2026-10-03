@@ -253,6 +253,7 @@ This starts a Datasette container and opens `http://localhost:8001` in your brow
 
 ## Next Steps
 
+- [Follow a tutorial](tutorials/index.md) — compare agents, share a team setup, or use your own model provider.
 - [Configure an agent](agents/index.md) — set API keys and per-agent options.
 - [Install skills](skills/index.md) — add reusable prompts/recipes to agents.
 - [Configuration reference](configuration.md) — tune defaults, the proxy, and logging.
