@@ -161,6 +161,16 @@ def test_list_filters_by_agent(tmp_path: Path) -> None:
     assert all(r.agent == "claude" for r in claude_only)
 
 
+def test_list_filter_includes_legacy_agent_rows(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    store.create(**_new_kwargs(agent="devstral", container_id="c1"))
+    store.create(**_new_kwargs(agent="vibe", container_id="c2"))
+    store.create(**_new_kwargs(agent="claude", container_id="c3"))
+
+    vibe = store.list(agent="vibe")
+    assert sorted(r.container_id for r in vibe) == ["c1", "c2"]
+
+
 def test_list_limit_applies(tmp_path: Path) -> None:
     store = _make_store(tmp_path)
     for i in range(5):
