@@ -39,6 +39,7 @@ from vibepod.core.herdr import (
     release_agent,
     report_pane_metadata,
 )
+from vibepod.core.image_metadata import collect_image_metadata
 from vibepod.core.launch import (
     PROXY_CA_MOUNT_PATH,
     agent_custom_volumes,
@@ -929,6 +930,7 @@ def task_create(
             TASK_STATUS_RUNNING if container.status == "running" else TASK_STATUS_STARTING
         )
 
+        image_meta = collect_image_metadata(container, image)
         store = _task_store()
         try:
             record = store.create(
@@ -938,6 +940,9 @@ def task_create(
                 container_id=container.id,
                 container_name=container.name,
                 image=image,
+                image_tag=image_meta.image_tag,
+                image_hash=image_meta.image_hash,
+                agent_version=image_meta.agent_version,
                 vibepod_version=__version__,
                 status=initial_status,
                 started_at=_state_timestamp(state, "StartedAt"),
