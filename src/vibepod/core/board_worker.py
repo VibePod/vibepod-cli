@@ -18,6 +18,7 @@ import os
 import re
 import signal
 import socket
+import string
 import subprocess
 import sys
 import tempfile
@@ -250,12 +251,21 @@ def branch_name(template: str, task: dict[str, Any]) -> str:
         "key": key,
         "project": key.rpartition("-")[0],
     }
-    if "{issue}" in template and not values["issue"]:
+    if "issue" in _template_fields(template) and not values["issue"]:
         return key
     try:
         return template.format(**values)
-    except (KeyError, IndexError, ValueError):
+    except (KeyError, IndexError, TypeError, ValueError):
         return key
+
+
+def _template_fields(template: str) -> set[str]:
+    """The names a template uses, such as `issue` for both `{issue}` and `{issue:04d}`."""
+    try:
+        parsed = list(string.Formatter().parse(template))
+    except ValueError:
+        return set()
+    return {re.split(r"[.\[]", name, maxsplit=1)[0] for _, name, _, _ in parsed if name}
 
 
 def validate_branch_template(template: str) -> None:

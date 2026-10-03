@@ -1375,6 +1375,8 @@ def test_branch_names_follow_the_template() -> None:
     assert branch_name("issue-{issue}", {"key": "VP-12", "taskNumber": 12}) == "vp-12"
     assert branch_name("feature/{project}-{number}", task) == "feature/vp-12"
     assert branch_name("{key}", task) == "vp-12"
+    assert branch_name("issue-{issue:04d}", task) == "issue-0201"
+    assert branch_name("issue-{issue:04d}", {"key": "VP-12", "taskNumber": 12}) == "vp-12"
 
 
 def test_the_prompt_says_so_when_details_are_missing() -> None:
