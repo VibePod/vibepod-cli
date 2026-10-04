@@ -30,7 +30,7 @@ DEFAULT_BINARY = "msb"
 INSTALL_HINT = (
     "Install it with `curl -fsSL https://install.microsandbox.dev | sh` "
     "(or `brew install superradcompany/tap/microsandbox`, `npm i -g microsandbox`), "
-    "or set microsandbox.binary to the msb path."
+    "or set sandbox.microsandbox.binary to the msb path."
 )
 
 # msb sizes: a number with an optional K/M/G/T suffix (512M, 2G); bare
@@ -71,7 +71,7 @@ def resolve_runtime(config: dict[str, Any], override: str | None = None) -> str:
     return value
 
 
-def normalize_memory(value: Any, *, source: str = "microsandbox.memory") -> str | None:
+def normalize_memory(value: Any, *, source: str = "sandbox.microsandbox.memory") -> str | None:
     """Validate a memory size; bare integers mean MiB."""
     if value is None or value == "":
         return None
@@ -89,7 +89,7 @@ def normalize_memory(value: Any, *, source: str = "microsandbox.memory") -> str 
     return text
 
 
-def normalize_cpus(value: Any, *, source: str = "microsandbox.cpus") -> int | None:
+def normalize_cpus(value: Any, *, source: str = "sandbox.microsandbox.cpus") -> int | None:
     """Validate a vCPU count."""
     if value is None or value == "":
         return None
@@ -126,13 +126,15 @@ def load_settings(config: dict[str, Any]) -> MicrosandboxSettings:
 
     binary = section.get("binary") or DEFAULT_BINARY
     if not isinstance(binary, str) or not binary.strip():
-        raise ValueError("Invalid microsandbox.binary value: expected a command name or path.")
+        raise ValueError(
+            "Invalid sandbox.microsandbox.binary value: expected a command name or path.",
+        )
 
     raw_args = section.get("args") or []
     if isinstance(raw_args, str):
         raw_args = [raw_args]
     if not isinstance(raw_args, list) or not all(isinstance(arg, str) for arg in raw_args):
-        raise ValueError("Invalid microsandbox.args value: expected a list of strings.")
+        raise ValueError("Invalid sandbox.microsandbox.args value: expected a list of strings.")
 
     return MicrosandboxSettings(
         binary=binary.strip(),
