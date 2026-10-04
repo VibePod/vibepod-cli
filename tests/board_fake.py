@@ -453,6 +453,10 @@ class FakeBoard:
             for card in self.cards.values():
                 if card.get("claimedAt") and card.get("assignee") == worker.get("name"):
                     card.update(column="planned", assignee=None, claimedAt=None)
+            # And its open reviews end.
+            for review in self.reviews:
+                if review["open"] and review["reviewer"] == worker.get("name"):
+                    self._end_review(review, f"Worker {worker.get('name')} signed off")
         worker["status"] = "offline"
         return 200, {"item": worker}
 
