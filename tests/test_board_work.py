@@ -3,6 +3,7 @@ HTTP. No agent subscription and no container runtime are involved."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
@@ -2112,3 +2113,38 @@ def test_worktree_helpers_prepare_and_clean_up(repo: Path, tmp_path: Path) -> No
     worktrees.remove_worktree(repo, tmp_path / "trees", fresh.path)
     assert not fresh.path.exists()
     assert worktrees.branch_exists(repo, "vp-9")
+
+
+def test_git_on_the_host_does_not_look_into_nested_repositories(repo: Path) -> None:
+    # A nested repository the agent made, with a filter in its own configuration that git
+    # would run on the host if it looked at the nested repository's files.
+    nested = repo / "nested"
+    nested.mkdir()
+    git(nested, "init", "--quiet")
+    git(nested, "config", "user.name", "Agent")
+    git(nested, "config", "user.email", "agent@example.com")
+    (nested / ".gitattributes").write_text("data.txt filter=run\n")
+    (nested / "data.txt").write_text("one\n")
+    git(nested, "add", ".")
+    git(nested, "commit", "--quiet", "-m", "Nested")
+    git(nested, "config", "filter.run.clean", "echo ran > ../filter-ran.txt; cat")
+    git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"160000,{git(nested, 'rev-parse', 'HEAD')},nested",
+    )
+    git(repo, "commit", "--quiet", "-m", "Add a nested repository")
+    # Same size, other time: git would have to read the file, through the filter, to compare.
+    (nested / "data.txt").write_text("two\n")
+    os.utime(nested / "data.txt", (1_000_000_000, 1_000_000_000))
+    (repo / "notes.txt").write_text("left by the agent\n")
+
+    assert worktrees.has_changes(repo)
+    sha = worktrees.commit_all(repo, "Leave changes")
+
+    assert not (repo / "filter-ran.txt").exists()
+    assert sha == git(repo, "rev-parse", "HEAD")
+    assert git(repo, "show", "HEAD:notes.txt") == "left by the agent"
+    assert worktrees.commit_all(repo, "Nothing") is None

@@ -5,9 +5,10 @@ or worktree left by an earlier run of the same task is continued, or refused on 
 worktrees in the worker's own folder are ever reused or removed.
 
 Git runs here on the host, in repositories an agent has worked in, so it never runs code from
-the repository: hooks and fsmonitors are off for every call, the agent container mounts the
-parts of the git directory that make git run programs read-only, and the worktree's pointers
-into the git directory are checked before git touches the worktree after a run.
+the repository: hooks and fsmonitors are off for every call, nested repositories are never
+looked into, the agent container mounts the parts of the git directory that make git run
+programs read-only, and the worktree's pointers into the git directory are checked before git
+touches the worktree after a run.
 """
 
 from __future__ import annotations
@@ -389,14 +390,28 @@ def commits_since(path: Path, start: str) -> list[dict[str, str]]:
 
 
 def has_changes(path: Path) -> bool:
-    return bool(git(path, "status", "--porcelain"))
+    # Not into nested repositories: git would run `git status` in them, with a configuration
+    # the agent wrote, which can name a filter for git to run on the host.
+    return bool(git(path, "status", "--porcelain", "--ignore-submodules=dirty"))
+
+
+def _gitlinks(path: Path) -> list[str]:
+    """The paths of the nested repositories (submodules) the index holds, read from the index
+    without looking into them."""
+    output = _run(path, "ls-files", "--stage", "-z").stdout
+    return [entry.partition("\t")[2] for entry in output.split("\0") if entry.startswith("160000 ")]
 
 
 def commit_all(path: Path, message: str) -> str | None:
-    """Commits everything the agent left uncommitted; None when there was nothing."""
+    """Commits everything the agent left uncommitted; None when there was nothing. Nested
+    repositories are left out, since git would run `git status` in them to add them: the
+    agent commits a submodule change itself."""
     if not has_changes(path):
         return None
-    git(path, "add", "-A")
+    git(path, "add", "-A", "--", ".", *(f":(exclude,literal){link}" for link in _gitlinks(path)))
+    if _run(path, "diff", "--cached", "--quiet").returncode == 0:
+        # Only a nested repository changed.
+        return None
     identity: list[str] = []
     if not _has_identity(path):
         name, email = FALLBACK_IDENTITY

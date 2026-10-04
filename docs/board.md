@@ -107,8 +107,11 @@ vp board work VP --agent codex --repo ~/src/app --poll 2m
 
 The agent runs in its container; the worker keeps it there:
 
-- Git on your machine never runs hooks or an fsmonitor while the worker uses it. The agent
-  container can commit to the repository, but its git configuration, hooks, the
+- Git on your machine never runs hooks or an fsmonitor while the worker uses it, and
+  never looks into nested repositories (submodules) of a worktree, whose configuration
+  the agent could have written; a submodule change is committed only if the agent
+  commits it. The agent container can commit to the repository, but its git
+  configuration, hooks, the
   worktree's pointers into the repository, and the HEAD and index of your own checkout
   are read-only there. A run that changed them anyway, moved other branches or tags
   (they are put back), or left its own branch blocks the task for a look instead of
