@@ -66,4 +66,5 @@ nav:
   - Configuration: configuration.md
   - LLM Integration: llm.md
   - Badge: badge.md
+  - External tools: integrations.md
   - CLI Reference: cli-reference.md
