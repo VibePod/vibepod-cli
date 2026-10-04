@@ -280,13 +280,15 @@ def _retire_worktree(repo: Path, path: Path) -> None:
     changes, and so does this."""
     if path not in worktree_paths(repo):
         return
-    result = _run(repo, "worktree", "remove", str(path))
-    if result.returncode != 0:
+    # Checked here rather than by `git worktree remove`, which looks into nested
+    # repositories for changes, with a configuration the agent may have written.
+    if has_changes(path):
         raise GitError(
             f"{path} is a worktree an earlier version of vp board work left, and it holds "
-            f"changes ({(result.stderr or result.stdout).strip()}); keep what you need, then "
-            f"remove it with `git worktree remove --force {path}`",
+            f"changes; keep what you need, then remove it with "
+            f"`git worktree remove --force {path}`",
         )
+    git(repo, "worktree", "remove", "--force", str(path))
 
 
 def _reusable(
