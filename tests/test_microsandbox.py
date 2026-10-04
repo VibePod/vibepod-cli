@@ -666,13 +666,6 @@ def test_named_doctor_ignores_disabled_selection(fake_msb, project):
     assert [call["argv"] for call in fake_msb["calls"]()] == [["--version"], ["doctor"]]
 
 
-def test_attach_refuses_microsandbox_before_engine_access(fake_msb, project):
-    _write_project_config(project, {"sandbox": "microsandbox"})
-    result = runner.invoke(app, ["attach"])
-    assert result.exit_code == 1
-    assert "does not support attach" in result.output
-
-
 def test_config_init_canonical_options(fake_msb, project):
     result = runner.invoke(
         app,

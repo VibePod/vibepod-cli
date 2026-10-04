@@ -896,7 +896,6 @@ def run(
             env=merged_env,
             ports=agent_ports,
             custom_volumes=custom_volumes,
-            init_commands=init_commands,
             command_extra=llm_command_extra,
             passthrough_args=passthrough_args,
             provider_names=provider_names or [],
@@ -904,7 +903,6 @@ def run(
             name=name,
             detach=detach,
             pull=pull,
-            no_overlay=no_overlay,
             ikwid=ikwid,
         )
         return
@@ -1428,7 +1426,6 @@ def _run_microsandbox(
     env: dict[str, str],
     ports: dict[str, Any] | None,
     custom_volumes: list[tuple[str, str, str]],
-    init_commands: list[str],
     command_extra: list[str],
     passthrough_args: list[str],
     provider_names: list[str],
@@ -1436,7 +1433,6 @@ def _run_microsandbox(
     name: str | None,
     detach: bool,
     pull: bool,
-    no_overlay: bool,
     ikwid: bool,
 ) -> None:
     """Launch the agent image as a microsandbox microVM through `msb run`."""
@@ -1446,23 +1442,6 @@ def _run_microsandbox(
     except msb.MicrosandboxError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
-    if init_commands:
-        error(
-            f"agents.{agent}.init is not supported with the microsandbox runtime yet. "
-            "Bake the setup into the image, or use `--sandbox none`.",
-        )
-        raise typer.Exit(1)
-    if (
-        not no_overlay
-        and _overlay_enabled(workspace_path, agent, agent_cfg)
-        and find_overlay_dockerfile(workspace_path, agent) is not None
-    ):
-        error(
-            "Project overlays are built with Docker and are not supported with the "
-            "microsandbox runtime. Pass --no-overlay, set "
-            f"agents.{agent}.overlay: false, or use `--sandbox none`.",
-        )
-        raise typer.Exit(1)
     if detach and agent == "claude" and "setup-token" in passthrough_args:
         error(
             "Cannot use --detach with `claude setup-token`: "

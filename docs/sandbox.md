@@ -31,7 +31,13 @@ precedence level.
 Check the selected type with `vp doctor sandbox`, or name one explicitly:
 `vp doctor sandbox gvisor` or `vp doctor sandbox microsandbox`. The old
 `vp doctor microsandbox` command is a deprecated alias. `vp version` (including
-`--json`) reports the selected sandbox.
+`--json`) reports the selected sandbox. Invalid selections produce a clean error.
+An invalid legacy `runtime:` value warns without preventing container listing;
+sandbox commands reject it before launch.
+
+`vp attach` targets existing Docker/Podman containers regardless of the configured
+sandbox for new runs. Microsandbox microVMs are not Docker/Podman containers and
+cannot be attached with this command.
 
 ## none
 

@@ -58,6 +58,8 @@ def resolve_runtime(config: dict[str, Any], override: str | None = None) -> str:
     sandbox = config.get("sandbox")
     selected = sandbox.get("type", sandbox.get("mode")) if isinstance(sandbox, dict) else sandbox
     raw = override if override is not None else config.get("runtime", selected or DEFAULT_RUNTIME)
+    if override is None:
+        raw = os.environ.get("VP_SANDBOX", os.environ.get("VP_RUNTIME", raw))
     if raw in {"none", "gvisor"}:
         raw = "docker"
     if raw is None:

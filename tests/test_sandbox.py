@@ -107,9 +107,11 @@ def test_env_overrides_project_and_cli_overrides_env(monkeypatch, tmp_path) -> N
     assert resolve_sandbox({}, tmp_path, "none").mode == "none"
 
 
-def test_env_var_maps_to_config_key(monkeypatch) -> None:
+def test_env_selection_is_resolved_separately(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("VP_SANDBOX", "gvisor")
-    assert _apply_env(_default_config())["sandbox"]["type"] == "gvisor"
+    config = _apply_env(_default_config())
+    assert config["sandbox"]["type"] == "none"
+    assert resolve_sandbox(config, tmp_path).type == "gvisor"
 
 
 @pytest.mark.parametrize("value", ["firecracker", "runsc", "yes"])
@@ -299,3 +301,54 @@ def test_version_json_keeps_legacy_warning_on_stderr(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["sandbox"] == "microsandbox"
     assert result.stderr.count("runtime is deprecated") == 1
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("source", ["config", "VP_SANDBOX", "VP_RUNTIME"])
+def test_version_invalid_sandbox_is_clean_error(monkeypatch, tmp_path, as_json, source):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("VP_SANDBOX", raising=False)
+    monkeypatch.delenv("VP_RUNTIME", raising=False)
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "global"))
+    if source == "config":
+        _write_project(tmp_path, "sandbox: foo\n")
+    if source != "config":
+        monkeypatch.setenv(source, "foo")
+    result = CliRunner().invoke(app, ["version", *(["--json"] if as_json else [])])
+    assert result.exit_code == 1
+    assert "foo" in result.output
+    assert source in result.output
+    assert "Traceback" not in result.output
+
+
+def test_invalid_legacy_runtime_config_warns_without_crashing(monkeypatch, tmp_path):
+    from vibepod.core.config import get_config
+
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "global"))
+    monkeypatch.chdir(tmp_path)
+    _write_project(tmp_path, "runtime: foo\n")
+    result = CliRunner().invoke(app, ["version"])
+    assert result.exit_code == 1
+    assert "Invalid config runtime 'foo'" in result.output
+    assert "Traceback" not in result.output
+    assert get_config()["sandbox"]["type"] == "none"
+
+
+def test_list_invalid_global_legacy_runtime_warns_and_continues(monkeypatch, tmp_path):
+    from vibepod.commands import list_cmd
+
+    root = tmp_path / "global"
+    root.mkdir()
+    (root / "config.yaml").write_text("runtime: foo\n")
+    monkeypatch.setenv("VP_CONFIG_DIR", str(root))
+    monkeypatch.chdir(tmp_path)
+
+    class Manager:
+        def list_managed(self, **kwargs):
+            return []
+
+    monkeypatch.setattr(list_cmd, "DockerManager", Manager)
+    result = CliRunner().invoke(app, ["list"])
+    assert result.exit_code == 0
+    assert "Invalid runtime 'foo'" in result.output
+    assert "Traceback" not in result.output

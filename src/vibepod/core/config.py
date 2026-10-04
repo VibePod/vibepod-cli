@@ -285,7 +285,6 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
     mappings: dict[str, tuple[str, Any]] = {
         "VP_DEFAULT_AGENT": ("default_agent", str),
-        "VP_RUNTIME": ("sandbox.type", lambda x: "none" if x.strip().lower() == "docker" else x),
         "VP_AUTO_PULL": ("auto_pull", lambda x: x.lower() == "true"),
         "VP_AUTO_CLEAN": ("auto_clean", lambda x: x.lower() == "true"),
         "VP_LOG_LEVEL": ("log_level", str),
@@ -293,7 +292,6 @@ def _apply_env(config: dict[str, Any]) -> dict[str, Any]:
         "VP_DATASETTE_PORT": ("logging.ui_port", int),
         "VP_PROXY_ENABLED": ("proxy.enabled", lambda x: x.lower() == "true"),
         "VP_PROXY_FILTER_MODE": ("proxy.filter.mode", str),
-        "VP_SANDBOX": ("sandbox.type", str),
         "VP_LLM_ENABLED": ("llm.enabled", lambda x: x.lower() == "true"),
         "VP_LLM_BASE_URL": ("llm.base_url", str),
         "VP_LLM_API_KEY": ("llm.api_key", str),
@@ -351,8 +349,14 @@ def _sandbox_config(config: dict[str, Any]) -> dict[str, Any]:
         raw_runtime = config.pop("runtime")
         runtime = "docker" if raw_runtime is None else str(raw_runtime).strip().lower()
         if runtime not in {"docker", "microsandbox"}:
-            raise ValueError(f"Invalid runtime '{runtime}'; expected docker or microsandbox")
-        if sandbox is None:
+            from vibepod.utils.console import warning
+
+            warning(
+                f"Invalid runtime '{runtime}'; expected docker or microsandbox; "
+                "ignored outside sandbox commands.",
+            )
+            config["runtime"] = raw_runtime
+        elif sandbox is None:
             config["sandbox"] = {"type": "none" if runtime == "docker" else runtime}
         elif isinstance(sandbox, dict):
             sandbox.setdefault("type", "none" if runtime == "docker" else runtime)

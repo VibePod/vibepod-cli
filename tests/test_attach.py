@@ -339,3 +339,25 @@ def test_attach_prints_resume_hint_after_exit(
     attach_cmd.attach(container="vibepod-claude-hint")
 
     assert "vp run claude -- --resume abc-123" in capsys.readouterr().out
+
+
+def test_attach_normal_container_with_global_microsandbox_config(monkeypatch, tmp_path):
+    config_root = tmp_path / "global"
+    config_root.mkdir()
+    (config_root / "config.yaml").write_text("sandbox: microsandbox\n")
+    monkeypatch.setenv("VP_CONFIG_DIR", str(config_root))
+    monkeypatch.chdir(tmp_path)
+    target = _managed_container()
+    attached = []
+
+    class Manager:
+        def get_container(self, name):
+            return target
+
+        def attach_interactive(self, container):
+            attached.append(container)
+            return ""
+
+    monkeypatch.setattr(attach_cmd, "DockerManager", Manager)
+    attach_cmd.attach(container=target.name)
+    assert attached == [target]

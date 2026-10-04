@@ -16,7 +16,8 @@ from vibepod.core.docker import (
     DockerManager,
     _version_is_podman,
 )
-from vibepod.core.sandbox import resolve_sandbox
+from vibepod.core.sandbox import SandboxError, resolve_sandbox
+from vibepod.utils.console import error
 
 
 def _runtime_info() -> tuple[str | None, str]:
@@ -35,10 +36,15 @@ def version(
     as_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Show version and runtime information."""
+    try:
+        sandbox = resolve_sandbox(get_config(), Path.cwd()).type
+    except SandboxError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
     runtime_name, runtime_version = _runtime_info()
     info = {
         "vibepod": __version__,
-        "sandbox": resolve_sandbox(get_config(), Path.cwd()).type,
+        "sandbox": sandbox,
         "python": platform.python_version(),
         "runtime": runtime_name,
         # Kept for backward compatibility: the engine version regardless of runtime.

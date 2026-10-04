@@ -10,7 +10,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from vibepod.core.config import deep_merge, load_project_config
 from vibepod.utils.console import deprecation_warning
@@ -326,10 +326,13 @@ class OCIRuntimeSandbox(Protocol):
     def prepare(self, manager: Any, settings: SandboxSettings) -> SandboxPlan: ...
 
 
-class SeparateBackendSandbox(Protocol):
+BackendSettings = TypeVar("BackendSettings", covariant=True)
+
+
+class SeparateBackendSandbox(Protocol[BackendSettings]):
     """Check and launch through a backend independent of Docker/Podman."""
 
-    def prepare(self, config: dict[str, Any]) -> tuple[MicrosandboxSettings, str]: ...
+    def prepare(self, config: dict[str, Any]) -> tuple[BackendSettings, str]: ...
 
     def launch(self, argv: list[str]) -> int: ...
 
@@ -375,7 +378,7 @@ CAPABILITIES = {
     ),
 }
 OCI_SANDBOXES: dict[str, OCIRuntimeSandbox] = {"gvisor": GVisorSandbox()}
-SEPARATE_BACKENDS: dict[str, SeparateBackendSandbox] = {"microsandbox": MicrosandboxBackend()}
+SEPARATE_BACKENDS: dict[str, SeparateBackendSandbox[Any]] = {"microsandbox": MicrosandboxBackend()}
 PROCESS_SANDBOXES: dict[str, ProcessSandbox] = {}
 
 
