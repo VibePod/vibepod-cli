@@ -2259,6 +2259,31 @@ def test_a_stop_gives_the_review_up_and_ends_the_worker(
     assert worker.summary.ended_because == "Stopped from the board"
 
 
+def test_a_review_whose_agent_cannot_be_stopped_stays_held(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+
+    class Unstoppable(FakeRunner):
+        def start(self, prompt: str, workspace: Path, **kwargs: Any) -> FakeRun:
+            run = super().start(prompt, workspace, **kwargs)
+
+            def stop() -> None:
+                raise AgentStopError("Task abc could not be stopped and may still be running")
+
+            run.poll = lambda: None  # type: ignore[method-assign]
+            run.stop = stop  # type: ignore[method-assign]
+            return run
+
+    worker, _ = review(server, Unstoppable(polls=None), repo, timeout_seconds=60, poll_seconds=30)
+
+    assert worker.summary.ended_because.startswith("The agent could not be stopped")
+    assert board.requests("POST", "/api/board/card-1/review") == []
+    assert [r["reviewer"] for r in board.reviews if r["open"]] == [REVIEWER]
+
+
 def test_a_review_cancelled_while_preparing_never_starts_the_agent(
     board: FakeBoard,
     server: FakeBoardServer,
