@@ -20,7 +20,7 @@ from vibepod.core.docker import (
     DockerManager,
     NotFound,
     _discover_podman_socket,
-    _parse_image_name,
+    parse_image_name,
 )
 
 requires_af_unix = pytest.mark.skipif(
@@ -427,20 +427,20 @@ def _bind_unix_socket(path: Path) -> socket.socket:
 
 
 def test_parse_image_name() -> None:
-    assert _parse_image_name("vibepod/datasette:latest") == ("vibepod/datasette", "latest")
-    assert _parse_image_name("vibepod/datasette@sha256:abcd") == (
+    assert parse_image_name("vibepod/datasette:latest") == ("vibepod/datasette", "latest")
+    assert parse_image_name("vibepod/datasette@sha256:abcd") == (
         "vibepod/datasette",
         "sha256:abcd",
     )
-    assert _parse_image_name("localhost:5000/vibepod/datasette:latest") == (
+    assert parse_image_name("localhost:5000/vibepod/datasette:latest") == (
         "localhost:5000/vibepod/datasette",
         "latest",
     )
-    assert _parse_image_name("localhost:5000/vibepod/datasette") == (
+    assert parse_image_name("localhost:5000/vibepod/datasette") == (
         "localhost:5000/vibepod/datasette",
         None,
     )
-    assert _parse_image_name("ubuntu") == ("ubuntu", None)
+    assert parse_image_name("ubuntu") == ("ubuntu", None)
 
 
 @patch("vibepod.core.docker.docker")
