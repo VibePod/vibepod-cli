@@ -437,9 +437,18 @@ class BoardWorker:
             self._loop()
         finally:
             self._redeliver()
-            with contextlib.suppress(BoardApiError):
-                self.client.sign_off(self.worker_id)
-            self.say("info", f"Signed off: {self.summary.ended_because or 'stopped'}")
+            if self.stop_failed is not None:
+                # Signing off gives the claims back, and the agent may still be working: the
+                # worker goes offline instead, and the claim lapses with its lease.
+                self.say(
+                    "warning",
+                    "Not signing off while the agent may still run; the board frees the task "
+                    f"once its claim runs out: {self.summary.ended_because or 'stopped'}",
+                )
+            else:
+                with contextlib.suppress(BoardApiError):
+                    self.client.sign_off(self.worker_id)
+                self.say("info", f"Signed off: {self.summary.ended_because or 'stopped'}")
         return self.summary
 
     def _loop(self) -> None:

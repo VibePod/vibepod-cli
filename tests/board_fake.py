@@ -103,8 +103,7 @@ class FakeBoard:
                 if parts[3] == "heartbeat":
                     return self._heartbeat(parts[2], body)
                 if parts[3] == "sign-off":
-                    self.workers[parts[2]]["status"] = "offline"
-                    return 200, {"item": self.workers[parts[2]]}
+                    return self._sign_off(parts[2])
             if parts[:2] == ["api", "ideas"] and parts[3:] == ["runs"]:
                 self.runs.append({"task": parts[2], **body})
                 return 201, {"item": {"id": f"run-{len(self.runs)}", **body}}
@@ -181,6 +180,16 @@ class FakeBoard:
             "instructions": self._instructions(worker_id, {}),
             "heartbeatSeconds": 15,
         }
+
+    def _sign_off(self, worker_id: str) -> tuple[int, Any]:
+        worker = self.workers[worker_id]
+        if worker["status"] != "offline":
+            # As the board does: claims the worker still holds go back to Planned.
+            for card in self.cards.values():
+                if card.get("claimedAt") and card.get("assignee") == worker.get("name"):
+                    card.update(column="planned", assignee=None, claimedAt=None)
+        worker["status"] = "offline"
+        return 200, {"item": worker}
 
     def _heartbeat(self, worker_id: str, body: dict[str, Any]) -> tuple[int, Any]:
         worker = self.workers.get(worker_id)

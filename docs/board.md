@@ -160,4 +160,7 @@ carries the board's instructions:
 
 `Ctrl+C` stops the worker the same way. If the worker itself fails with an
 unexpected error, it gives the task back to Planned before it exits, so the task
-does not stay claimed until its lease runs out.
+does not stay claimed until its lease runs out. The exception is an agent that
+cannot be stopped: the worker exits without signing off, and the task stays
+claimed until its lease runs out, so no other worker starts on it while the
+agent may still be working.
