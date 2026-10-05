@@ -437,3 +437,15 @@ def test_installed_skills_admits_only_engine_shaped_linked_installs(
     assert skills_engine.installed_skills(workspace) == {}
     linked = skills_engine.installed_skills(workspace, include_linked=True)
     assert {sid: skill.path for sid, skill in linked.items()} == {"linked": source.resolve()}
+
+
+def test_installed_skills_ignores_lockfile_that_is_not_utf8(
+    skill_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local_root, user_root = skill_roots
+    _install(user_root, "alpha", "user alpha")
+    (local_root / "skills-lock.json").write_bytes(b'{"skills": {"\xff": {}}}')
+
+    skills = skills_engine.installed_skills(tmp_path)
+
+    assert {sid: skill.scope for sid, skill in skills.items()} == {"alpha": "user"}

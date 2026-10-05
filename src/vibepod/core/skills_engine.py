@@ -128,7 +128,7 @@ def _string_keyed_dict(value: object) -> dict[str, object] | None:
 def _read_lock(path: Path) -> dict[str, object]:
     try:
         raw: object = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeError, OSError):
         return {"skills": {}}
     return _string_keyed_dict(raw) or {"skills": {}}
 
