@@ -20,10 +20,32 @@ class TauExtensionAPI(Protocol):
     ) -> object: ...
 
 
+def _append_event(events_file: str, params: dict[str, Any]) -> None:
+    """Append one JSON line for the host-side ``vp run`` relay.
+
+    A single small write on an O_APPEND fd, so concurrent reporters never
+    interleave their lines.
+    """
+    line = (json.dumps(params) + "\n").encode()
+    if len(line) >= 4096:
+        return
+    try:
+        fd = os.open(events_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+    except OSError:
+        return
+    try:
+        os.write(fd, line)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 async def _report(state: str, context: object) -> None:
     sock_path = os.environ.get("HERDR_SOCKET_PATH")
+    events_file = os.environ.get("HERDR_EVENTS_FILE")
     pane = os.environ.get("HERDR_PANE_ID")
-    if not sock_path or not pane:
+    if not pane or not (sock_path or events_file):
         return
 
     params: dict[str, Any] = {
@@ -36,6 +58,11 @@ async def _report(state: str, context: object) -> None:
     session_id = getattr(context, "session_id", None)
     if isinstance(session_id, str) and session_id:
         params["agent_session_id"] = session_id
+
+    if not sock_path:
+        if events_file:
+            _append_event(events_file, params)
+        return
 
     request = {
         "id": f"vibepod:{os.getpid()}:{time.time_ns()}",

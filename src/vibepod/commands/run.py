@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
@@ -39,6 +40,9 @@ from vibepod.core.herdr import (
 )
 from vibepod.core.herdr import (
     clear_pane_metadata as _clear_herdr_metadata,
+)
+from vibepod.core.herdr import (
+    create_event_relay as _create_herdr_event_relay,
 )
 from vibepod.core.herdr import (
     pane_reporting_enabled as _herdr_pane_reporting_enabled,
@@ -1023,12 +1027,29 @@ def run(
     if acp_workspace_alias is not None:
         extra_volumes.append((str(workspace_path), acp_workspace_alias, "rw"))
 
+    # Off Linux the socket cannot be mounted; an attached run relays agent
+    # state from an events file instead (detached runs have nobody to relay).
+    herdr_relay = None
+    if not herdr_socket_mounts and not detach:
+        herdr_relay = _create_herdr_event_relay(
+            selected_agent,
+            config,
+            no_herdr=no_herdr or acp,
+        )
+    if herdr_relay is not None:
+        try:
+            herdr_relay.prepare()
+            atexit.register(herdr_relay.close)
+        except OSError as exc:
+            warning(f"herdr: could not create the events file relay: {exc}")
+            herdr_relay = None
     herdr_volumes, herdr_env = _apply_herdr_if_enabled(
         selected_agent,
         config_dir,
         config,
         no_herdr=no_herdr or acp,
         mount_socket=herdr_socket_mounts,
+        event_relay=herdr_relay,
     )
     # Host-side reporting works even when the socket cannot be mounted, so it
     # is gated on the pane, not on the container wiring.
@@ -1158,6 +1179,8 @@ def run(
     except Exception:
         if proxy_policy_id is not None:
             remove_container_policy(config, proxy_policy_id)
+        if herdr_relay is not None:
+            herdr_relay.close()
         if herdr_pane:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
@@ -1174,6 +1197,8 @@ def run(
                 sys.stderr.flush()
             else:
                 print(recent)
+        if herdr_relay is not None:
+            herdr_relay.close()
         if herdr_pane:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)
@@ -1281,6 +1306,8 @@ def run(
     exit_reason = "normal"
     output_tail = b""
     exit_code = 0
+    if herdr_relay is not None:
+        herdr_relay.start()
     if not acp:
         warning("Attached to container. Use Ctrl+C to stop.")
     try:
@@ -1313,6 +1340,8 @@ def run(
         raise
     finally:
         logger.close_session(exit_reason)
+        if herdr_relay is not None:
+            herdr_relay.close()
         if herdr_pane:
             _release_herdr_agent(selected_agent)
             _clear_herdr_metadata(selected_agent)

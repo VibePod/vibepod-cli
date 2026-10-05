@@ -1,7 +1,7 @@
 #!/bin/sh
 # Managed by VibePod — reports Copilot CLI hook events to herdr.
 # Event vocabulary tolerates naming drift. Transport: node + socket API
-# (primary), herdr binary (fallback). Traced to
+# or events file (primary), herdr binary (fallback). Traced to
 # $HOME/.copilot/herdr-hook.log (host-visible via the config mount).
 set -u
 
@@ -26,10 +26,11 @@ fi
 
 send_state() {
     if command -v node >/dev/null 2>&1 && [ -f "$reporter" ] \
-        && [ -n "${HERDR_SOCKET_PATH:-}" ]; then
+        && [ -n "${HERDR_SOCKET_PATH:-}${HERDR_EVENTS_FILE:-}" ]; then
         out=$(node "$reporter" pane.report_agent copilot "$1" 2>&1)
         rc=$?
-        via=socket
+        via=${HERDR_SOCKET_PATH:+socket}
+        via=${via:-file}
     elif [ -n "${HERDR_BIN_PATH:-}" ] && [ -x "$HERDR_BIN_PATH" ]; then
         out=$("$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
             --source vibepod --agent copilot --state "$1" 2>&1)
