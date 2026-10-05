@@ -1755,7 +1755,7 @@ class BoardWorker:
         repo: Path,
         path: Path,
         result: ReviewResult,
-        pointers: dict[str, str],
+        pointers: dict[str, str | None],
         refs: dict[str, str],
         checked_out: dict[str, Path],
         who: str = "The agent",
@@ -1819,7 +1819,8 @@ class BoardWorker:
         if left:
             raise ReviewProblem(
                 f"{', '.join(left)} moved during the review, in a checkout with changes "
-                "staged; left as they are: check whether the review moved them",
+                "staged or made during the review; left as they are: check whether the "
+                "review moved them",
             )
 
     def _review_ended_early(self, ended: str, result: ReviewResult) -> bool:
