@@ -176,6 +176,7 @@ vp skills export researcher sql --scope user --path ./skills
 
 Each skill lands in `<path>/<id>/` (default: the current directory) exactly as
 installed; no lockfile or registry is written. Symlinks inside a skill are copied as symlinks, never followed.
+A skill installed with `--link` is exported as a plain copy of its linked source folder.
 An existing `<path>/<id>` is left alone unless you pass `--force`, and nothing is
 written when any requested ID is missing or would conflict. Even with `--force`,
 export refuses a `<path>/<id>` that is, contains or sits inside an installed

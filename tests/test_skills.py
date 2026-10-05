@@ -373,3 +373,67 @@ def test_skills_export_force_refuses_target_containing_a_source(
     assert result.exit_code == 1
     assert "overlaps installed skill" in result.output
     assert (local_root / "installed" / "alpha" / "SKILL.md").read_text() == "local alpha"
+
+
+def _link_install(root: Path, skill_id: str, source: Path, **extra: object) -> None:
+    installed = root / "installed"
+    installed.mkdir(parents=True, exist_ok=True)
+    (installed / skill_id).symlink_to(source, target_is_directory=True)
+    lock_path = root / "skills-lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8")) if lock_path.exists() else {}
+    entry = {"path": f"installed/{skill_id}", "linked": True, **extra}
+    lock.setdefault("skills", {})[skill_id] = entry
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+
+def test_skills_export_includes_linked_installs(
+    skill_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local_root, _ = skill_roots
+    source = tmp_path / "src" / "researcher"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("linked", encoding="utf-8")
+    _link_install(local_root, "researcher", source)
+    dest = tmp_path / "out"
+
+    result = runner.invoke(app, ["skills", "export", "researcher", "--path", str(dest)])
+
+    assert result.exit_code == 0, result.output
+    assert not (dest / "researcher").is_symlink()
+    assert (dest / "researcher" / "SKILL.md").read_text(encoding="utf-8") == "linked"
+
+
+def test_skills_export_force_refuses_to_overwrite_a_linked_source(
+    skill_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local_root, _ = skill_roots
+    source = tmp_path / "src" / "researcher"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("linked", encoding="utf-8")
+    _link_install(local_root, "researcher", source)
+
+    for path in (source.parent, local_root / "installed"):
+        result = runner.invoke(
+            app, ["skills", "export", "researcher", "--path", str(path), "--force"]
+        )
+        assert result.exit_code == 1
+        assert "overlaps installed skill" in result.output
+    assert (local_root / "installed" / "researcher").is_symlink()
+    assert (source / "SKILL.md").read_text(encoding="utf-8") == "linked"
+
+
+def test_installed_skills_admits_only_engine_shaped_linked_installs(
+    skill_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local_root, _ = skill_roots
+    source = tmp_path / "src" / "linked"
+    source.mkdir(parents=True)
+    _link_install(local_root, "linked", source)
+    _link_install(local_root, "unmarked", source, linked=False)
+    _link_install(local_root, "elsewhere", source, path="other/elsewhere")
+    workspace = tmp_path / "work"
+
+    # Agent mounts keep requiring skills to live inside the scope root.
+    assert skills_engine.installed_skills(workspace) == {}
+    linked = skills_engine.installed_skills(workspace, include_linked=True)
+    assert {sid: skill.path for sid, skill in linked.items()} == {"linked": source.resolve()}

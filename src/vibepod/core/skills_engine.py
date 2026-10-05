@@ -144,11 +144,37 @@ def _safe_skill_path(scope_root: Path, skill_id: str, path_value: object) -> Pat
     return abs_path
 
 
-def installed_skills(workspace: Path, scope: Scope | None = None) -> dict[str, InstalledSkill]:
+def _linked_skill_path(scope_root: Path, skill_id: str, entry: dict[str, object]) -> Path | None:
+    """Source folder of a ``--link`` install, which lives outside the scope root.
+
+    Only the engine's own layout qualifies: the lockfile marks the entry as
+    linked and records it at ``installed/<id>``, and that exact path (inside a
+    real ``installed/`` directory) is a symlink to a directory.
+    """
+    if entry.get("linked") is not True or entry.get("path") != f"installed/{skill_id}":
+        return None
+    installed = scope_root / "installed"
+    if installed.is_symlink() or not installed.is_dir():
+        return None
+    link = installed / skill_id
+    if not link.is_symlink():
+        return None
+    target = link.resolve(strict=False)
+    return target if target.is_dir() else None
+
+
+def installed_skills(
+    workspace: Path,
+    scope: Scope | None = None,
+    *,
+    include_linked: bool = False,
+) -> dict[str, InstalledSkill]:
     """Installed skills from the local + user lockfiles (local wins), or one scope.
 
     Reads the lockfiles directly so this stays cheap during `vp run` (no engine
-    container call).
+    container call). Skills must resolve inside their scope root unless
+    *include_linked* also admits ``--link`` installs, whose source lives
+    elsewhere on the host; agent mounts keep the stricter default.
     """
     roots: list[tuple[Scope, Path]] = [
         ("user", user_skills_dir().resolve()),
@@ -168,6 +194,8 @@ def installed_skills(workspace: Path, scope: Scope | None = None) -> dict[str, I
             if entry is None:
                 continue
             abs_path = _safe_skill_path(scope_root, sid, entry.get("path"))
+            if abs_path is None and include_linked:
+                abs_path = _linked_skill_path(scope_root, sid, entry)
             if abs_path is not None:
                 merged[sid] = InstalledSkill(scope=root_scope, path=abs_path)
     return merged
@@ -185,7 +213,7 @@ def _installed_source_paths(workspace: Path) -> set[Path]:
         ("local", local_skills_dir(workspace).resolve()),
     ]
     for root_scope, scope_root in roots:
-        for sid, skill in installed_skills(workspace, root_scope).items():
+        for sid, skill in installed_skills(workspace, root_scope, include_linked=True).items():
             paths.add(skill.path)
             paths.add(scope_root / "installed" / sid)
     return paths
@@ -207,7 +235,7 @@ def export(
     export. Nothing is written until every requested skill is known to fit.
     """
     workspace = Path(cwd or Path.cwd()).resolve()
-    skills = installed_skills(workspace, scope)
+    skills = installed_skills(workspace, scope, include_linked=True)
     if skill_ids:
         missing = [sid for sid in skill_ids if sid not in skills]
         if missing:
