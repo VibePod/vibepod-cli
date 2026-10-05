@@ -101,6 +101,96 @@ actual port when the daemon assigned one).
 `~/.config/vibepod/agents/dsh/.dsh/cordis.patch.yml` on the host — changes
 hot-reload into the running server.
 
+## Per-project state and the shared `/workspace` path
+
+Every project is mounted at `/workspace`, and an agent's config dir is shared
+by all projects (per agent and [profile](../profiles.md), not per project).
+Agents that key per-project state by the working directory path therefore
+see every project as the same project.
+
+### Claude: memory and sessions
+
+Claude Code stores [auto memory](https://code.claude.com/docs/en/memory#storage-location)
+and session transcripts under `<config dir>/projects/<project>/`, where
+`<project>` is derived from the repository path. In a VibePod container that is
+always `projects/-workspace` (on the host:
+`~/.config/vibepod/agents/claude/projects/-workspace/`). So, by default:
+
+- memories saved in one project are loaded in every other project, and
+- `claude --continue` / `--resume` list sessions from all projects.
+
+`vp run claude --acp` is not affected: the editor's session cwd is the host
+path, so the key differs per project.
+
+There are two independent fixes. Use either one, or both.
+
+**Keep memory in the repository** with Claude Code's `autoMemoryDirectory`
+setting, in the project's `.claude/settings.json` (or
+`.claude/settings.local.json` to keep it out of the shared file):
+
+```json
+{
+  "autoMemoryDirectory": "/workspace/.claude/memory"
+}
+```
+
+The value must be an absolute path or start with `~/`. Use the container path
+`/workspace/...`, not the host path. Claude Code applies the project-scope
+value under the same workspace-trust rule as hooks, and ignores a
+repository-supplied value while `permissions.blockReadsOutsideWorkingDirectories`
+is on. The memory then lives
+with the code and survives a reset of the agent config dir. Session transcripts
+stay in the config dir.
+
+!!! warning "Memory in the workspace gets committed"
+    `.claude/memory/` is an ordinary directory in your repo. Unless you add
+    `.claude/memory/` to `.gitignore`, `git add -A` commits whatever Claude
+    remembered, including notes about you and your preferences. Commit it on
+    purpose (shared team memory) or ignore it.
+
+**Give each project its own key** with
+[`CLAUDE_CODE_PROJECT_DIR_NAME`](https://code.claude.com/docs/en/sessions#name-the-project-directory-yourself)
+(Claude Code ≥ 2.1.234). It moves both memory and transcripts to
+`projects/<name>/` in the config dir, so nothing is written to the repo. Set it
+in the project's `.vibepod/config.yaml`:
+
+```yaml
+# .vibepod/config.yaml
+agents:
+  claude:
+    env:
+      CLAUDE_CODE_PROJECT_DIR_NAME: my-project   # 1-64 letters, digits, - or _
+```
+
+Pick a name per project. Memory already saved under `projects/-workspace/memory/`
+is not moved, so copy the files you want to keep into the new directory
+(`~/.config/vibepod/agents/claude/projects/my-project/memory/`).
+
+VibePod sets neither option for you. `autoMemoryDirectory` would mean writing
+to your repository's `.claude/settings.json`, and whether to commit memory is
+your call. A per-project key set by default would leave existing memory and
+sessions behind under `-workspace`.
+
+### Other agents
+
+Most other agents also key per-project state by the working directory, so in
+VibePod it is shared across projects:
+
+| Agent | Shared across projects at `/workspace` | Per-project workaround |
+|-------|----------------------------------------|------------------------|
+| `codex` | `codex resume --last` / the resume picker (sessions are filtered by cwd); folder trust in `config.toml` `[projects."/workspace"]` | `CODEX_HOME` (moves auth too) |
+| `gemini` | `--resume` chats, checkpoints, shell history, project memory (`~/.gemini/tmp/workspace/`); trusted folders | `GEMINI_CLI_HOME` (moves auth too) |
+| `qwen` | `--resume` / `--continue` sessions (`~/.qwen/projects/-workspace/`), checkpoints, history; trusted folders | `QWEN_RUNTIME_DIR` (keeps auth in place) |
+| `copilot` | trusted folders and saved tool approvals; `--continue` likely (unverified) | `COPILOT_HOME` (moves auth too) |
+| `auggie` | `--continue` / `--resume` / `session list` | `--augment-cache-dir` flag |
+| `opencode` | only non-git projects (sessions are keyed by the repo's root commit) | `git init`, or `XDG_DATA_HOME` |
+
+Set the env var in the project's `.vibepod/config.yaml` under
+`agents.<agent>.env`, as in the Claude example above. Point it at a
+per-project path inside the agent's config dir, for example
+`QWEN_RUNTIME_DIR: /qwen/runtime/my-project` (qwen's config dir is mounted at `/qwen`). Variables that move the
+whole home also move credentials, so you have to log in again for that project.
+
 ## First run & authentication
 
 Start any agent for the first time with `vp run <agent>`. The container will prompt you to authenticate (browser OAuth, API key entry, or device flow depending on the provider). Once authenticated, credentials are written to the persisted config directory and reused on subsequent runs.
