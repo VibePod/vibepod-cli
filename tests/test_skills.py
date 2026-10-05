@@ -325,3 +325,51 @@ def test_skills_export_rejects_destination_inside_a_skill(
 
     assert result.exit_code == 1
     assert "inside skill" in result.output
+
+
+@pytest.mark.parametrize("source_scope", ["local", "user"])
+def test_skills_export_force_refuses_to_overwrite_an_installed_source(
+    skill_roots: tuple[Path, Path], source_scope: str
+) -> None:
+    local_root, user_root = skill_roots
+    _install(user_root, "alpha", "user alpha")
+    _install(local_root, "alpha", "local alpha")
+    root = local_root if source_scope == "local" else user_root
+
+    # Exporting the user copy into the local installed/ dir (and vice versa)
+    # must not delete the other scope's installation either.
+    for scope in ("local", "user"):
+        result = runner.invoke(
+            app,
+            [
+                "skills",
+                "export",
+                "alpha",
+                "--scope",
+                scope,
+                "--path",
+                str(root / "installed"),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "overlaps installed skill" in result.output
+    assert (local_root / "installed" / "alpha" / "SKILL.md").read_text() == "local alpha"
+    assert (user_root / "installed" / "alpha" / "SKILL.md").read_text() == "user alpha"
+
+
+def test_skills_export_force_refuses_target_containing_a_source(
+    skill_roots: tuple[Path, Path],
+) -> None:
+    local_root, _ = skill_roots
+    _install(local_root, "alpha", "local alpha")
+    _install(local_root, "installed", "named like the folder")
+
+    result = runner.invoke(
+        app, ["skills", "export", "installed", "--path", str(local_root), "--force"]
+    )
+
+    assert result.exit_code == 1
+    assert "overlaps installed skill" in result.output
+    assert (local_root / "installed" / "alpha" / "SKILL.md").read_text() == "local alpha"

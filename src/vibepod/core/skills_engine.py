@@ -173,6 +173,24 @@ def installed_skills(workspace: Path, scope: Scope | None = None) -> dict[str, I
     return merged
 
 
+def _installed_source_paths(workspace: Path) -> set[Path]:
+    """Every installed skill folder in either scope, as resolved and as installed.
+
+    The installed path (``<scope>/installed/<id>``) matters on its own for
+    linked installs, where it is a symlink to the real source elsewhere.
+    """
+    paths: set[Path] = set()
+    roots: list[tuple[Scope, Path]] = [
+        ("user", user_skills_dir().resolve()),
+        ("local", local_skills_dir(workspace).resolve()),
+    ]
+    for root_scope, scope_root in roots:
+        for sid, skill in installed_skills(workspace, root_scope).items():
+            paths.add(skill.path)
+            paths.add(scope_root / "installed" / sid)
+    return paths
+
+
 def export(
     dest: Path,
     *,
@@ -211,6 +229,15 @@ def export(
         raise SkillsEngineError(
             f"Already present in {dest}: {', '.join(existing)} (use --force to overwrite)",
         )
+
+    protected = _installed_source_paths(workspace)
+    for sid in skills:
+        target = dest / sid
+        for source in protected:
+            if target == source or target.is_relative_to(source) or source.is_relative_to(target):
+                raise SkillsEngineError(
+                    f"Export target {target} overlaps installed skill {source}",
+                )
 
     dest.mkdir(parents=True, exist_ok=True)
     for sid, skill in skills.items():
