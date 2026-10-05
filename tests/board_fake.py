@@ -216,6 +216,10 @@ class _Handler(BaseHTTPRequestHandler):
     board: FakeBoard
 
     def _respond(self) -> None:
+        # Read the whole request first: answering before the body is read makes Windows
+        # reset the connection, and the client then sees a network error instead.
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
         if self.headers.get("Authorization") != f"Bearer {TOKEN}":
             self._send(401, {"error": "Authentication required"})
             return
@@ -225,8 +229,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        length = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(length)) if length else None
+        body = json.loads(raw) if raw else None
         status, payload = self.board.handle(self.command, urlparse(self.path).path, body)
         self._send(status, payload)
 
