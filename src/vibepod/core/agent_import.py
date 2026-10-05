@@ -1,0 +1,650 @@
+"""Import an existing agent configuration into a VibePod profile.
+
+Most agents persist a container ``HOME`` (``HOME=/config``; agy uses
+``/home/agy``), so the mapping from a host home is the identity on the path
+relative to ``HOME``: ``~/.tau/providers.json`` becomes
+``<agent dir>/.tau/providers.json``. Four agents mount their own config
+directory instead of a home -- claude (``CLAUDE_CONFIG_DIR=/claude``), qwen
+(``QWEN_CONFIG_DIR=/qwen``), freebuff (``FREEBUFF_CONFIG_DIR=/freebuff``) and
+hermes (``HERMES_HOME=/opt/data``, baked into the image) -- so their host
+directory maps onto the destination root.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import os
+import re
+import secrets
+import shutil
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal, get_args
+
+Category = Literal[
+    "settings",
+    "models",
+    "mcp",
+    "hooks",
+    "skills",
+    "memory",
+    "sessions",
+    "credentials",
+    "other",
+]
+
+ALL_CATEGORIES: frozenset[Category] = frozenset(get_args(Category))
+#: Copied unless the user narrows the selection.
+DEFAULT_CATEGORIES: frozenset[Category] = frozenset(
+    {"settings", "models", "mcp", "hooks", "skills", "memory"},
+)
+#: Never copied without an explicit flag.
+OPT_IN_CATEGORIES: frozenset[Category] = frozenset({"sessions", "credentials", "other"})
+
+#: Flag that opts each opt-in category in.
+CATEGORY_FLAGS: dict[Category, str] = {
+    "credentials": "--with-credentials",
+    "sessions": "--with-sessions",
+    "other": "--with-other",
+}
+
+
+@dataclass(frozen=True)
+class ImportEntry:
+    """One source path mapped onto the destination agent directory.
+
+    ``source`` is relative to the source home (host import) and ``dest`` is
+    relative to the destination agent config directory; ``""`` means the
+    destination root. ``exclude`` holds glob patterns, matched against the
+    path relative to ``source``, that are never copied.
+    """
+
+    source: str
+    dest: str
+    category: Category
+    exclude: tuple[str, ...] = ()
+    note: str | None = None
+
+
+#: The cross-agent skills directory. Agents whose persisted mount holds it
+#: (see ``_agent_skill_paths`` in ``vibepod.commands.run``) list this entry;
+#: freebuff reads it from ``/config``, which its ``/freebuff`` mount is not.
+SHARED_SKILLS = ImportEntry(
+    ".agents/skills",
+    ".agents/skills",
+    "skills",
+    note="Shared skills directory, read by several agents.",
+)
+
+IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
+    "claude": (
+        ImportEntry(".claude/settings.json", "settings.json", "settings"),
+        ImportEntry(".claude/CLAUDE.md", "CLAUDE.md", "memory"),
+        ImportEntry(".claude/agents", "agents", "skills"),
+        ImportEntry(".claude/commands", "commands", "skills"),
+        ImportEntry(".claude/skills", "skills", "skills"),
+        ImportEntry(".claude/plugins", "plugins", "skills"),
+        ImportEntry(".claude/projects", "projects", "sessions"),
+        ImportEntry(".claude/todos", "todos", "sessions"),
+        ImportEntry(".claude/shell-snapshots", "shell-snapshots", "sessions"),
+        ImportEntry(".claude/statsig", "statsig", "sessions"),
+        ImportEntry(".claude/history.jsonl", "history.jsonl", "sessions"),
+        ImportEntry(
+            ".claude/.credentials.json",
+            ".credentials.json",
+            "credentials",
+            note=(
+                "On macOS Claude Code keeps its OAuth token in the Keychain, "
+                "so this file usually does not exist; log in inside the pod."
+            ),
+        ),
+    ),
+    "opencode": (
+        ImportEntry(
+            ".config/opencode/opencode.json",
+            ".config/opencode/opencode.json",
+            "settings",
+        ),
+        ImportEntry(
+            ".config/opencode/opencode.jsonc",
+            ".config/opencode/opencode.jsonc",
+            "settings",
+        ),
+        ImportEntry(".config/opencode/AGENTS.md", ".config/opencode/AGENTS.md", "memory"),
+        ImportEntry(".config/opencode/command", ".config/opencode/command", "skills"),
+        ImportEntry(".config/opencode/agent", ".config/opencode/agent", "skills"),
+        ImportEntry(".config/opencode/plugin", ".config/opencode/plugin", "hooks"),
+        SHARED_SKILLS,
+        ImportEntry(
+            ".local/share/opencode/auth.json",
+            ".local/share/opencode/auth.json",
+            "credentials",
+        ),
+    ),
+    "codex": (
+        ImportEntry(".codex/config.toml", ".codex/config.toml", "settings"),
+        ImportEntry(".codex/AGENTS.md", ".codex/AGENTS.md", "memory"),
+        ImportEntry(".codex/prompts", ".codex/prompts", "skills"),
+        SHARED_SKILLS,
+        ImportEntry(".codex/auth.json", ".codex/auth.json", "credentials"),
+    ),
+    # Known token files are listed as credentials; anything else matching
+    # CREDENTIAL_NAME_PATTERNS under a directory entry is reclassified too.
+    "gemini": (
+        ImportEntry(".gemini/oauth_creds.json", ".gemini/oauth_creds.json", "credentials"),
+        ImportEntry(
+            ".gemini/mcp-oauth-tokens.json",
+            ".gemini/mcp-oauth-tokens.json",
+            "credentials",
+        ),
+        ImportEntry(".gemini/.env", ".gemini/.env", "credentials"),
+        ImportEntry(".gemini", ".gemini", "settings"),
+    ),
+    # Mistral Vibe keeps everything under ~/.vibe ($VIBE_HOME); MCP servers are
+    # [[mcp_servers]] tables in config.toml. The image does not set VIBE_HOME,
+    # so with HOME=/config it reads /config/.vibe.
+    "devstral": (
+        ImportEntry(
+            ".vibe/config.toml",
+            ".vibe/config.toml",
+            "settings",
+            note="Also holds the MCP servers ([[mcp_servers]]).",
+        ),
+        ImportEntry(".vibe/AGENTS.md", ".vibe/AGENTS.md", "memory"),
+        ImportEntry(".vibe/hooks.toml", ".vibe/hooks.toml", "hooks"),
+        ImportEntry(".vibe/agents", ".vibe/agents", "skills"),
+        ImportEntry(".vibe/prompts", ".vibe/prompts", "skills"),
+        ImportEntry(".vibe/skills", ".vibe/skills", "skills"),
+        ImportEntry(".vibe/tools", ".vibe/tools", "skills"),
+        ImportEntry(".vibe/logs", ".vibe/logs", "sessions"),
+        ImportEntry(".vibe/plans", ".vibe/plans", "sessions"),
+        ImportEntry(".vibe/shell-tool", ".vibe/shell-tool", "sessions"),
+        ImportEntry(".vibe/vibehistory", ".vibe/vibehistory", "sessions"),
+        ImportEntry(
+            ".vibe/.env",
+            ".vibe/.env",
+            "credentials",
+            note="API keys; MCP OAuth tokens live in the OS keyring and are not copied.",
+        ),
+    ),
+    "auggie": (
+        ImportEntry(".augment/session.json", ".augment/session.json", "credentials"),
+        ImportEntry(".augment", ".augment", "settings"),
+        SHARED_SKILLS,
+    ),
+    "copilot": (
+        ImportEntry(
+            ".copilot/config.json",
+            ".copilot/config.json",
+            "credentials",
+            note=(
+                "Without a system keychain Copilot CLI stores its token in this file, "
+                "so it is treated as a credential."
+            ),
+        ),
+        ImportEntry(".copilot", ".copilot", "settings"),
+    ),
+    "pi": (
+        ImportEntry(".pi/agent/models.json", ".pi/agent/models.json", "models"),
+        ImportEntry(".pi/agent/auth.json", ".pi/agent/auth.json", "credentials"),
+        ImportEntry(
+            ".pi",
+            ".pi",
+            "settings",
+            exclude=("agent/models.json", "agent/auth.json"),
+        ),
+    ),
+    "agy": (ImportEntry(".agy", ".agy", "settings"),),
+    "tau": (
+        ImportEntry(".tau/providers.json", ".tau/providers.json", "models"),
+        ImportEntry(".tau/catalog.toml", ".tau/catalog.toml", "models"),
+        ImportEntry(".tau/credentials.json", ".tau/credentials.json", "credentials"),
+        ImportEntry(
+            ".tau",
+            ".tau",
+            "settings",
+            exclude=("providers.json", "catalog.toml", "credentials.json"),
+        ),
+        SHARED_SKILLS,
+    ),
+    "jcode": (
+        ImportEntry(".jcode/auth.json", ".jcode/auth.json", "credentials"),
+        ImportEntry(".jcode/openai-auth.json", ".jcode/openai-auth.json", "credentials"),
+        ImportEntry(".jcode/mcp.json", ".jcode/mcp.json", "mcp"),
+        ImportEntry(".jcode/sessions", ".jcode/sessions", "sessions"),
+        ImportEntry(".jcode", ".jcode", "settings"),
+        SHARED_SKILLS,
+        ImportEntry(
+            ".config/jcode",
+            ".config/jcode",
+            "credentials",
+            note="Provider env files for custom endpoints; they hold API keys.",
+        ),
+    ),
+    "freebuff": (
+        ImportEntry(".config/manicode/credentials.json", "credentials.json", "credentials"),
+        ImportEntry(".config/manicode", "", "settings"),
+    ),
+    "qwen": (
+        ImportEntry(".qwen/oauth_creds.json", "oauth_creds.json", "credentials"),
+        ImportEntry(".qwen/.env", ".env", "credentials"),
+        ImportEntry(".qwen", "", "settings"),
+    ),
+    "dsh": (
+        ImportEntry(".dsh/.credentials.yaml", ".dsh/.credentials.yaml", "credentials"),
+        ImportEntry(".dsh", ".dsh", "settings"),
+        SHARED_SKILLS,
+    ),
+    # ~/.hermes also holds the installer's hermes-agent checkout, so only the
+    # state HERMES_HOME documents is listed; the rest is reported as other.
+    "hermes": (
+        ImportEntry(".hermes/config.yaml", "config.yaml", "settings"),
+        ImportEntry(".hermes/SOUL.md", "SOUL.md", "memory"),
+        ImportEntry(".hermes/memories", "memories", "memory"),
+        ImportEntry(".hermes/skills", "skills", "skills"),
+        SHARED_SKILLS,
+        ImportEntry(".hermes/sessions", "sessions", "sessions"),
+        ImportEntry(".hermes/.env", ".env", "credentials"),
+        ImportEntry(".hermes/auth.json", "auth.json", "credentials"),
+    ),
+}
+
+
+@dataclass(frozen=True)
+class AgentRoot:
+    """A directory the agent owns on the host, and where it lands in the destination.
+
+    Used to detect an installation, to find files no entry claims, and to map
+    those files onto the destination. ``exclude`` holds glob patterns, relative
+    to ``source``, that are neither reported nor copied.
+    """
+
+    source: str
+    dest: str
+    exclude: tuple[str, ...] = ()
+    #: Host environment variable that relocates this directory (an absolute path).
+    env: str | None = None
+
+
+#: The agent-specific directories under the source home. Generic parents such
+#: as ``~/.config`` are never listed: they hold every other tool's config too.
+AGENT_ROOTS: dict[str, tuple[AgentRoot, ...]] = {
+    "claude": (AgentRoot(".claude", ""),),
+    "opencode": (
+        AgentRoot(".config/opencode", ".config/opencode"),
+        AgentRoot(".local/share/opencode", ".local/share/opencode"),
+    ),
+    "codex": (AgentRoot(".codex", ".codex"),),
+    "gemini": (AgentRoot(".gemini", ".gemini"),),
+    # Vibe's git worktrees live in ~/.vibe/worktrees; they are checkouts, not config.
+    "devstral": (
+        AgentRoot(".vibe", ".vibe", exclude=("worktrees", "worktrees/*"), env="VIBE_HOME"),
+    ),
+    "auggie": (AgentRoot(".augment", ".augment"),),
+    "copilot": (AgentRoot(".copilot", ".copilot"),),
+    "pi": (AgentRoot(".pi", ".pi"),),
+    "agy": (AgentRoot(".agy", ".agy"),),
+    "tau": (AgentRoot(".tau", ".tau"),),
+    "jcode": (AgentRoot(".jcode", ".jcode"), AgentRoot(".config/jcode", ".config/jcode")),
+    "freebuff": (AgentRoot(".config/manicode", ""),),
+    "qwen": (AgentRoot(".qwen", ""),),
+    "dsh": (AgentRoot(".dsh", ".dsh"),),
+    # The installer clones its hermes-agent checkout into ~/.hermes.
+    "hermes": (AgentRoot(".hermes", "", exclude=("hermes-agent", "hermes-agent/*")),),
+}
+
+
+def agent_roots(agent: str) -> tuple[AgentRoot, ...]:
+    """Return the agent-specific source roots for *agent*."""
+    if agent not in AGENT_ROOTS:
+        raise ValueError(f"Unsupported agent: {agent}")
+    return AGENT_ROOTS[agent]
+
+
+def env_root_overrides(agent: str, environ: Mapping[str, str]) -> dict[str, Path]:
+    """Host directories that *environ* moves *agent*'s roots to, keyed by root source.
+
+    Only meaningful for an import from the user's own home: ``--home`` and
+    profile sources keep the default layout.
+    """
+    overrides: dict[str, Path] = {}
+    for root in agent_roots(agent):
+        value = environ.get(root.env) if root.env else None
+        if value:
+            # Resolved the way the agent resolves it (Vibe: expanduser().resolve()).
+            overrides[root.source] = Path(value).expanduser().resolve()
+    return overrides
+
+
+def agent_import_entries(agent: str) -> tuple[ImportEntry, ...]:
+    """Return the import entries for *agent*."""
+    if agent not in IMPORT_SPECS:
+        raise ValueError(f"Unsupported agent: {agent}")
+    return IMPORT_SPECS[agent]
+
+
+@dataclass(frozen=True)
+class PlannedFile:
+    source: Path
+    dest: Path
+    category: Category
+
+
+@dataclass(frozen=True)
+class SkippedPath:
+    source: Path
+    reason: str
+
+
+@dataclass
+class ImportPlan:
+    agent: str
+    source_root: Path
+    dest_root: Path
+    files: list[PlannedFile]
+    skipped: list[SkippedPath]
+    conflicts: list[PlannedFile]
+    unclassified: list[Path]
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.files
+
+
+def _iter_files(root: Path) -> list[Path]:
+    """Every regular file under *root*, or *root* itself when it is a file."""
+    if root.is_symlink():
+        return [root]
+    if root.is_file():
+        return [root]
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.rglob("*") if p.is_symlink() or p.is_file())
+
+
+#: File names treated as credentials wherever a directory entry finds them, so
+#: an agent's unlisted token file is never copied by a default-on category.
+CREDENTIAL_NAME_PATTERNS: tuple[str, ...] = (
+    "*oauth*",
+    "*credential*",
+    "*token*",
+    "*secret*",
+    "auth.json",
+    "*-auth.json",
+    "*_auth.json",
+    ".env",
+    ".env.*",
+    "*.key",
+    "*.pem",
+)
+
+
+def _looks_like_credential(name: str) -> bool:
+    lowered = name.lower()
+    return any(fnmatch.fnmatchcase(lowered, pattern) for pattern in CREDENTIAL_NAME_PATTERNS)
+
+
+def _is_excluded(relative: str, patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
+
+
+def _has_symlink_component(path: Path, root: Path) -> bool:
+    current = root
+    for part in path.relative_to(root).parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
+#: The agent directory is mounted read-write into containers, so a symlink in
+#: it may have been planted to redirect a host-side write.
+_DEST_SYMLINK_REASON = "destination path contains a symlink, not written"
+
+
+def _anchor(relative: str, roots: tuple[AgentRoot, ...]) -> str:
+    """The agent root holding *relative*, or *relative* itself when no root does."""
+    for root in roots:
+        if not root.source or relative == root.source or relative.startswith(f"{root.source}/"):
+            return root.source
+    return relative
+
+
+def _source_dir(source_root: Path, relative: str) -> Path:
+    """*relative* under *source_root*, followed through symlinks on the way there.
+
+    Dotfile managers (stow, chezmoi, ...) commonly make an agent directory, or a
+    parent such as ``~/.config``, a symlink. That one hop is resolved here; the
+    per-file symlink rules then apply relative to the resolved directory, so
+    nothing inside it can point back out.
+    """
+    path = source_root / relative
+    if _has_symlink_component(path, source_root):
+        return path.resolve()
+    return path
+
+
+def plan_import(
+    agent: str,
+    source_root: Path,
+    dest_root: Path,
+    categories: frozenset[Category] | set[Category],
+    entries: tuple[ImportEntry, ...] | None = None,
+    unclassified_roots: tuple[AgentRoot, ...] | None = None,
+    root_overrides: Mapping[str, Path] | None = None,
+) -> ImportPlan:
+    """Resolve *agent*'s entries under *source_root* into a concrete plan.
+
+    Pure: reads the filesystem, writes nothing. *entries* overrides the table,
+    which is how a profile-to-profile copy reuses the same classification;
+    *unclassified_roots* overrides where unmapped files are looked for, which a
+    profile copy needs because its entries no longer name the host dotdirs.
+    *root_overrides* maps a root's source to the directory it really lives in
+    (see ``env_root_overrides``).
+    """
+    resolved_entries = entries if entries is not None else agent_import_entries(agent)
+    files: list[PlannedFile] = []
+    skipped: list[SkippedPath] = []
+    conflicts: list[PlannedFile] = []
+    claimed: set[Path] = set()
+
+    def add(path: Path, dest: Path, category: Category) -> None:
+        if category not in categories:
+            flag = CATEGORY_FLAGS.get(category)
+            reason = f"category '{category}' not selected"
+            skipped.append(SkippedPath(path, f"{reason} ({flag})" if flag else reason))
+            return
+        if _has_symlink_component(dest, dest_root):
+            skipped.append(SkippedPath(path, _DEST_SYMLINK_REASON))
+            return
+        planned = PlannedFile(path, dest, category)
+        files.append(planned)
+        if dest.exists():
+            conflicts.append(planned)
+
+    roots = agent_roots(agent) if unclassified_roots is None else unclassified_roots
+    # Each agent root is resolved once; entries outside every root (the shared
+    # skills directory) are their own anchor.
+    anchor_dirs: dict[str, Path] = {}
+
+    def locate(relative: str) -> tuple[Path, Path]:
+        anchor = _anchor(relative, roots)
+        if anchor not in anchor_dirs:
+            override = (root_overrides or {}).get(anchor)
+            anchor_dirs[anchor] = override or _source_dir(source_root, anchor)
+        rest = relative[len(anchor) :].lstrip("/") if anchor else relative
+        return anchor_dirs[anchor] / rest, anchor_dirs[anchor]
+
+    for entry in resolved_entries:
+        entry_root, anchor_dir = locate(entry.source)
+        entry_root_is_dir = entry_root.is_dir() and not entry_root.is_symlink()
+        for path in _iter_files(entry_root):
+            relative = path.relative_to(entry_root).as_posix() if entry_root_is_dir else path.name
+            if _is_excluded(relative, entry.exclude):
+                continue
+            if path in claimed:
+                continue
+            claimed.add(path)
+            if path.is_symlink() or _has_symlink_component(path, anchor_dir):
+                skipped.append(SkippedPath(path, "symlink, not followed"))
+                continue
+            category = entry.category
+            if entry_root_is_dir and _looks_like_credential(path.name):
+                category = "credentials"
+            dest = (
+                dest_root / entry.dest / relative if entry_root_is_dir else dest_root / entry.dest
+            )
+            add(path, dest, category)
+
+    unclassified: list[Path] = []
+    located = [(root, locate(root.source)[0]) for root in roots]
+    for path, root, base in _unclassified(located, claimed):
+        if "other" not in categories:
+            unclassified.append(path)
+            continue
+        # A file no entry claims is still a credential when its name says so.
+        category = "credentials" if _looks_like_credential(path.name) else "other"
+        add(path, dest_root / root.dest / path.relative_to(base), category)
+    return ImportPlan(agent, source_root, dest_root, files, skipped, conflicts, unclassified)
+
+
+CREDENTIAL_FILE_MODE = 0o600
+CREDENTIAL_DIR_MODE = 0o700
+_EXECUTE_BITS = 0o111
+
+
+class ImportConflictError(RuntimeError):
+    """Raised when a plan would overwrite existing files and force is off."""
+
+    def __init__(self, conflicts: list[PlannedFile]) -> None:
+        self.conflicts = conflicts
+        super().__init__(f"{len(conflicts)} destination file(s) already exist")
+
+
+@dataclass
+class ImportResult:
+    copied: int
+    failed: list[tuple[Path, str]]
+
+
+def apply_import(plan: ImportPlan, *, force: bool) -> ImportResult:
+    """Copy every file in *plan*. Raises ImportConflictError unless *force*.
+
+    Each file is written to a temporary sibling created with its final mode
+    (``0600`` for credentials) and renamed into place, so a destination is
+    either the old file or the complete new one and never a symlink target.
+    Host mtimes are not kept; of the host mode only the execute bits are.
+    """
+    if plan.conflicts and not force:
+        raise ImportConflictError(plan.conflicts)
+
+    copied = 0
+    failed: list[tuple[Path, str]] = []
+    for planned in plan.files:
+        try:
+            _copy_file(planned, plan.dest_root)
+            copied += 1
+        except OSError as exc:
+            failed.append((planned.source, str(exc)))
+    return ImportResult(copied, failed)
+
+
+def _copy_file(planned: PlannedFile, dest_root: Path) -> None:
+    if _has_symlink_component(planned.dest, dest_root):
+        raise OSError(f"{planned.dest}: {_DEST_SYMLINK_REASON}")
+    credential = planned.category == "credentials"
+    parent = planned.dest.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    if _has_symlink_component(parent, dest_root):
+        raise OSError(f"{planned.dest}: {_DEST_SYMLINK_REASON}")
+    if credential:
+        parent.chmod(CREDENTIAL_DIR_MODE)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_BINARY", 0)
+    temp = parent / f".{planned.dest.name}.vp-import-{secrets.token_hex(4)}"
+    with planned.source.open("rb") as src:
+        # Hooks and skill helpers are run directly, so their execute bits are
+        # kept; everything else gets the umask's default file mode.
+        mode = (
+            CREDENTIAL_FILE_MODE
+            if credential
+            else 0o666 | (os.fstat(src.fileno()).st_mode & _EXECUTE_BITS)
+        )
+        fd = os.open(temp, flags, mode)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                shutil.copyfileobj(src, out)
+            if credential:
+                temp.chmod(CREDENTIAL_FILE_MODE)
+            os.replace(temp, planned.dest)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
+
+
+def _unclassified(
+    roots: list[tuple[AgentRoot, Path]],
+    claimed: set[Path],
+) -> list[tuple[Path, AgentRoot, Path]]:
+    """Files under *roots* that no entry claimed, with the root and directory they are in."""
+    found: dict[Path, tuple[AgentRoot, Path]] = {}
+    for root, base in roots:
+        for path in _iter_files(base):
+            if path in claimed or path in found or path.is_symlink():
+                continue
+            if _has_symlink_component(path, base):
+                continue
+            if _is_excluded(path.relative_to(base).as_posix(), root.exclude):
+                continue
+            found[path] = (root, base)
+    return [(path, root, base) for path, (root, base) in sorted(found.items())]
+
+
+#: Config files worth linting for host paths that will not resolve in a pod.
+_LINTED_SUFFIXES = {".json", ".jsonc", ".toml", ".yaml", ".yml", ".md"}
+_HOST_PATH_RE = re.compile(
+    r"(/Users/[^\"'\s,:]+|/home/[^\"'\s,:]+"
+    # Windows drive paths: C:\dir, C:/dir and JSON-escaped C:\\dir.
+    r"|(?<![A-Za-z0-9])[A-Za-z]:(?:\\{1,2}|/)[^\"'\s,]+)",
+)
+
+
+def scan_host(home: Path, environ: Mapping[str, str] | None = None) -> dict[str, list[Path]]:
+    """Map each agent to the source roots that exist and hold files under *home*.
+
+    With *environ*, a root an agent's environment variable relocates is looked
+    for there instead.
+    """
+    found: dict[str, list[Path]] = {}
+    for agent in IMPORT_SPECS:
+        overrides = env_root_overrides(agent, environ) if environ is not None else {}
+        roots: list[Path] = []
+        for root in agent_roots(agent):
+            candidate = overrides.get(root.source, home / root.source)
+            if _iter_files(overrides.get(root.source) or _source_dir(home, root.source)):
+                roots.append(candidate)
+        if roots:
+            found[agent] = roots
+    return found
+
+
+def host_path_warnings(paths: list[Path]) -> list[tuple[Path, str]]:
+    """Flag copied config files that embed absolute host paths.
+
+    The pod mounts the project at /workspace and has its own home, so a host
+    path baked into a hook command or an MCP server entry will not resolve.
+    Reported, never rewritten.
+    """
+    warnings: list[tuple[Path, str]] = []
+    for path in paths:
+        if path.suffix.lower() not in _LINTED_SUFFIXES:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        matches = sorted(set(_HOST_PATH_RE.findall(text)))
+        if matches:
+            warnings.append((path, ", ".join(matches[:3])))
+    return warnings
