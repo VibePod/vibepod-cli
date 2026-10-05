@@ -909,7 +909,7 @@ class BoardWorker:
         self,
         repo: Path,
         worktree: worktrees.Worktree,
-        pointers: dict[str, str],
+        pointers: dict[str, str | None],
         refs: dict[str, str],
         checked_out: dict[str, Path],
     ) -> None:
@@ -930,7 +930,8 @@ class BoardWorker:
             )
         if left:
             raise TaskProblem(
-                f"{', '.join(left)} moved during the run, in a checkout with changes staged; "
+                f"{', '.join(left)} moved during the run, in a checkout with changes staged or "
+                f"made during the run; "
                 f"left as they are: check whether the agent moved them, and the work on "
                 f"{worktree.branch}",
             )

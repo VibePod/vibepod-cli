@@ -7,8 +7,9 @@ worktrees in the worker's own folder are ever reused or removed.
 Git runs here on the host, in repositories an agent has worked in, so it never runs code from
 the repository: hooks and fsmonitors are off for every call, nested repositories are never
 looked into, the agent container mounts the parts of the git directory that make git run
-programs read-only, and the worktree's pointers into the git directory are checked before git
-touches the worktree after a run.
+programs read-only, and the worktrees' pointers into the git directory are checked before git
+touches the worktree after a run. `git worktree prune` is never run: the agent can make any
+worktree's pointer lead nowhere.
 """
 
 from __future__ import annotations
@@ -24,6 +25,9 @@ FALLBACK_IDENTITY = ("VibePod", "vibepod@users.noreply.github.com")
 # The agent container's `.git` file on a Windows host, kept in the worktree's own directory
 # inside the git directory.
 CONTAINER_POINTER = "vibepod-container-gitdir"
+# The files in another worktree's directory inside the git directory that say where that
+# worktree is and whether `git worktree prune` may drop it.
+OTHER_POINTERS = ("gitdir", "commondir", "locked")
 # No hooks and no fsmonitor: git on the host must not run programs the repository names.
 SAFE_CONFIG = ("-c", f"core.hooksPath={os.devnull}", "-c", "core.fsmonitor=false")
 
@@ -169,7 +173,7 @@ def prepare_worktree(
     checkout, is never taken over, even when the worktree folder holds that checkout."""
     if not is_valid_branch_name(repo, branch):
         raise GitError(f"Invalid branch name: {branch}")
-    git(repo, "worktree", "prune")
+    _forget_if_missing(repo, _task_path(worktrees_dir, branch))
     base_commit = resolve_commit(repo, base)
     checked_out = worktree_of_branch(repo, branch)
     if checked_out is not None or branch_exists(repo, branch):
@@ -198,6 +202,18 @@ def prepare_worktree(
 def _task_path(worktrees_dir: Path, branch: str) -> Path:
     """Where the worker checks the branch out."""
     return (worktrees_dir / worktree_folder(branch)).resolve()
+
+
+def _forget_if_missing(repo: Path, path: Path) -> None:
+    """Unregisters the worker's worktree at `path` when its folder was removed. Only that
+    one: `git worktree prune` would also drop every other worktree whose pointer leads
+    nowhere and that is not locked, which an agent that rewrote the pointer arranged."""
+    if path.exists():
+        return
+    for line in git(repo, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree ") and Path(line[len("worktree ") :]).resolve() == path:
+            git(repo, "worktree", "remove", "--force", str(path))
+            return
 
 
 def _add(repo: Path, worktrees_dir: Path, branch: str, start: str | None = None) -> Path:
@@ -247,9 +263,11 @@ def agent_mounts(
     worktree points into, at the same path so git works in the container. It stays writable
     for commits, but what makes git run programs (config, hooks, info) and the worktree's
     pointers into it are read-only, since git on the host reads them after the run. So are
-    the per-worktree configurations where the repository uses them, and the HEAD and index
-    of the other checkouts, such as the user's own, which the agent has no business
-    switching or staging in."""
+    the per-worktree configurations where the repository uses them, the HEAD and index of
+    the other checkouts, such as the user's own, which the agent has no business switching
+    or staging in, and the other worktrees' pointers and locks, which git on the host goes
+    by to find them and to keep them. Of these, a file that does not exist, such as most
+    `locked`, cannot be mounted: `pointers` tells after the run whether one was made."""
     common = common_git_dir(repo)
     mounts = [(str(common), container_path(common), "rw")]
     for name in ("hooks", "info"):
@@ -265,6 +283,7 @@ def agent_mounts(
         )
     files = [common / "config", admin / "commondir", admin / "gitdir"]
     files += [other / name for other in others for name in ("HEAD", "index")]
+    files += [other / name for other in others[1:] for name in OTHER_POINTERS]
     if _worktree_config(common):
         # Git reads each checkout's `config.worktree` too: made where missing, so that the
         # agent cannot write one, such as with a filter that `git add` on the host would run.
@@ -299,25 +318,33 @@ def _worktree_config(common: Path) -> bool:
     return result.stdout.strip() == "true"
 
 
-def pointers(worktree: Path) -> dict[str, str]:
-    """The files that tell git where the worktree's repository is."""
+def pointers(worktree: Path) -> dict[str, str | None]:
+    """The files that tell git where the worktree's repository is, and those of the other
+    worktrees, which also say whether a worktree is locked against pruning; None for a file
+    that does not exist."""
     admin = admin_dir(worktree)
     files = {"worktree .git": worktree / ".git"}
     files.update(commondir=admin / "commondir", gitdir=admin / "gitdir")
+    for other in sorted(admin.parent.iterdir()):
+        if other.is_dir() and other.resolve() != admin:
+            files.update({f"{other.name}/{name}": other / name for name in OTHER_POINTERS})
     return {
-        name: path.read_text(encoding="utf-8") if path.is_file() else ""
+        name: path.read_text(encoding="utf-8") if path.is_file() else None
         for name, path in files.items()
     }
 
 
-def verify_pointers(worktree: Path, before: dict[str, str]) -> None:
+def verify_pointers(worktree: Path, before: dict[str, str | None]) -> None:
     """Refuses a worktree whose git pointers changed: git would then read a configuration
-    the agent wrote, and could run programs from it on the host."""
+    the agent wrote, and could run programs from it on the host. So do changed pointers or
+    locks of other worktrees: git on the host would take another checkout for theirs, or
+    look for it in the wrong place. Another worktree that is gone altogether was removed,
+    such as by another worker once its task was done."""
     try:
         after = pointers(worktree)
     except (GitError, OSError) as exc:
         raise GitError(f"The agent changed the worktree's git metadata: {exc}") from exc
-    changed = [name for name, value in before.items() if after.get(name) != value]
+    changed = [name for name, value in before.items() if name in after and after[name] != value]
     if changed:
         raise GitError(f"The agent changed the worktree's git metadata ({', '.join(changed)})")
 
@@ -356,9 +383,15 @@ def restore_refs(
     Others may move refs meanwhile too: a checked-out branch, such as another task's in the
     worktree folder or the user's in their checkout, moved with its checkout's index when
     it was committed to there, and is not touched. Each ref is put back only if it did not
-    move again since it was read."""
+    move again since it was read.
+
+    Where a branch was checked out before the run counts over where it is after: the agent
+    can write the git directory, and so make the worktree list name another checkout, such
+    as its own, whose index it staged the moved branch in. A branch that only got checked
+    out during the run is left, since its checkout may be made up, and git is not run in
+    it: the agent may have pointed it at a configuration of its own."""
     after = branch_refs(repo)
-    checked_out = {**checked_out_before, **checkouts(repo)}
+    checked_out = {**checkouts(repo), **checked_out_before}
     restored: list[str] = []
     left: list[str] = []
     for ref, sha in before.items():
@@ -367,6 +400,9 @@ def restore_refs(
             continue
         name = ref.removeprefix("refs/heads/")
         checkout = checked_out.get(ref)
+        if checkout is not None and ref not in checked_out_before:
+            left.append(name)
+            continue
         if checkout is not None and checkout.is_dir():
             if now and _index_matches(checkout, now):
                 continue

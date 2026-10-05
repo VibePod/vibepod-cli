@@ -112,11 +112,12 @@ The agent runs in its container; the worker keeps it there:
   the agent could have written; a submodule change is committed only if the agent
   commits it. The agent container can commit to the repository, but its git
   configuration, hooks, the
-  worktree's pointers into the repository, and the HEAD and index of your own checkout
-  are read-only there. A run that changed them anyway, moved other branches or tags
-  (they are put back), or left its own branch blocks the task for a look instead of
-  being handed over. Branches others move meanwhile are left alone: those of other
-  tasks, and a branch you commit to in your own checkout.
+  worktree's pointers into the repository, and the HEAD, index, pointers and lock of your
+  own checkouts are read-only there. A run that changed them anyway, moved other branches
+  or tags (they are put back), or left its own branch blocks the task for a look instead
+  of being handed over. Branches others move meanwhile are left alone: those of other
+  tasks, and a branch you commit to in your own checkout. The worker never prunes
+  worktrees other than its own.
 - Only the worktree the worker made for a task, in the worktree folder, is reused or
   removed. A branch checked out anywhere else, such as in your own checkout, is never
   taken over, even when the worktree folder holds it.

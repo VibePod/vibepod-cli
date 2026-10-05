@@ -4,6 +4,7 @@ HTTP. No agent subscription and no container runtime are involved."""
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -2041,6 +2042,110 @@ def test_the_agent_cannot_write_per_worktree_configuration(repo: Path, tmp_path:
     configs = [git_dir, git_dir / "worktrees" / "mine", own]
     assert {str(path / "config.worktree") for path in configs} <= readonly
     assert all((path / "config.worktree").read_text() == "" for path in configs)
+
+
+def test_the_agent_cannot_move_or_unlock_other_worktrees(repo: Path, tmp_path: Path) -> None:
+    git(repo, "worktree", "add", "--quiet", "-b", "mine", str(tmp_path / "mine"))
+    git(repo, "worktree", "add", "--quiet", "-b", "kept", str(tmp_path / "kept"))
+    git(repo, "worktree", "lock", str(tmp_path / "kept"))
+    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
+    others = (repo / ".git" / "worktrees").resolve()
+
+    readonly = {host for host, _, mode in worktrees.agent_mounts(repo, task.path) if mode == "ro"}
+
+    for name in ("mine", "kept"):
+        assert {str(others / name / file) for file in ("gitdir", "commondir")} <= readonly
+    assert str(others / "kept" / "locked") in readonly
+
+
+def test_changed_pointers_or_locks_of_other_worktrees_are_refused(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    for name in ("mine", "kept", "done"):
+        git(repo, "worktree", "add", "--quiet", "-b", name, str(tmp_path / name))
+    git(repo, "worktree", "lock", str(tmp_path / "kept"))
+    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
+    others = repo / ".git" / "worktrees"
+    before = worktrees.pointers(task.path)
+    # Another worker removes its worktree meanwhile: not the agent's doing.
+    git(repo, "worktree", "remove", str(tmp_path / "done"))
+    worktrees.verify_pointers(task.path, before)
+
+    (others / "mine" / "gitdir").write_text(f"{task.path / '.git'}\n")
+    (others / "mine" / "locked").write_text("")
+    (others / "kept" / "locked").unlink()
+
+    with pytest.raises(worktrees.GitError) as raised:
+        worktrees.verify_pointers(task.path, before)
+    assert "(kept/locked, mine/gitdir, mine/locked)" in str(raised.value)
+
+
+def test_where_a_branch_was_checked_out_before_the_run_counts(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    other = tmp_path / "vp-9"
+    git(repo, "worktree", "add", "--quiet", "-b", "vp-9", str(other))
+    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "vp-1", "main")
+    refs = worktrees.branch_refs(repo)
+    checked_out = worktrees.checkouts(repo)
+    commits_a_feature(task.path, "")
+    # The agent moves vp-9 to its own commit, and has the worktree list name its own
+    # worktree, whose index holds that commit, as where vp-9 is checked out.
+    git(task.path, "update-ref", "refs/heads/vp-9", "HEAD")
+    (repo / ".git" / "worktrees" / "vp-9" / "gitdir").write_text(f"{task.path / '.git'}\n")
+
+    restored, left = worktrees.restore_refs(repo, refs, "vp-1", checked_out)
+
+    assert (restored, left) == (["vp-9"], [])
+    assert git(repo, "rev-parse", "vp-9") == refs["refs/heads/vp-9"]
+
+
+def test_a_branch_checked_out_only_after_the_run_started_is_left_and_blocks(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Makes up a checkout")
+    git(repo, "branch", "release")
+    release_before = git(repo, "rev-parse", "release")
+
+    def moves_release_behind_a_made_up_checkout(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        git(path, "update-ref", "refs/heads/release", "HEAD")
+        made_up = repo / ".git" / "worktrees" / "made-up"
+        made_up.mkdir()
+        (made_up / "HEAD").write_text("ref: refs/heads/release\n")
+        (made_up / "commondir").write_text("../..\n")
+        (made_up / "gitdir").write_text(f"{path / '.git'}\n")
+        return 0, "Done."
+
+    work(server, FakeRunner(moves_release_behind_a_made_up_checkout), repo, once=True)
+
+    assert git(repo, "rev-parse", "release") != release_before
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith("release moved during the run, in a checkout")
+
+
+def test_other_worktrees_whose_pointer_leads_nowhere_are_not_pruned(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    git(repo, "worktree", "add", "--quiet", "-b", "mine", str(tmp_path / "mine"))
+    mine = repo / ".git" / "worktrees" / "mine"
+    (mine / "gitdir").write_text(f"{tmp_path / 'nowhere' / '.git'}\n")
+    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "vp-1", "main")
+    # The worker's own worktree, whose folder was removed, is still made again.
+    shutil.rmtree(task.path)
+
+    again = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "vp-1", "main")
+
+    assert again.path == task.path
+    assert worktrees.current_branch(again.path) == "vp-1"
+    assert (mine / "HEAD").is_file()
 
 
 def test_windows_git_paths_are_translated_for_the_linux_container(
