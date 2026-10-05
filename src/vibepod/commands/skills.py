@@ -256,7 +256,7 @@ def export_cmd(
             for sid, skill in exported.items()
         ]
         typer.echo(
-            json.dumps([{"command": "export", "dest": str(target), "skills": records}], indent=2)
+            json.dumps([{"command": "export", "dest": str(target), "skills": records}], indent=2),
         )
         return
     success(f"Exported {len(exported)} skill(s) to {target}")

@@ -222,7 +222,9 @@ def skill_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, 
 
 
 def test_skills_export_defaults_to_current_directory(
-    skill_roots: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     local_root, user_root = skill_roots
     _install(user_root, "shared", "user version")
@@ -251,7 +253,8 @@ def test_skills_export_scope_and_path(skill_roots: tuple[Path, Path], tmp_path: 
     dest = tmp_path / "out"
 
     result = runner.invoke(
-        app, ["skills", "export", "shared", "--scope", "user", "--path", str(dest), "--json"]
+        app,
+        ["skills", "export", "shared", "--scope", "user", "--path", str(dest), "--json"],
     )
 
     assert result.exit_code == 0, result.output
@@ -267,7 +270,8 @@ def test_skills_export_requires_skill_ids(skill_roots: tuple[Path, Path]) -> Non
 
 
 def test_skills_export_unknown_id_fails_without_writing(
-    skill_roots: tuple[Path, Path], tmp_path: Path
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     _install(skill_roots[0], "known", "x")
     dest = tmp_path / "out"
@@ -280,7 +284,8 @@ def test_skills_export_unknown_id_fails_without_writing(
 
 
 def test_skills_export_refuses_overwrite_unless_forced(
-    skill_roots: tuple[Path, Path], tmp_path: Path
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     _install(skill_roots[0], "alpha", "new alpha")
     _install(skill_roots[0], "beta", "new beta")
@@ -302,7 +307,8 @@ def test_skills_export_refuses_overwrite_unless_forced(
 
 
 def test_skills_export_keeps_symlinks_as_links(
-    skill_roots: tuple[Path, Path], tmp_path: Path
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     secret = tmp_path / "secret.txt"
     secret.write_text("host secret", encoding="utf-8")
@@ -317,7 +323,8 @@ def test_skills_export_keeps_symlinks_as_links(
 
 
 def test_skills_export_rejects_destination_inside_a_skill(
-    skill_roots: tuple[Path, Path], tmp_path: Path
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     skill = _install(skill_roots[0], "alpha", "x")
 
@@ -329,7 +336,8 @@ def test_skills_export_rejects_destination_inside_a_skill(
 
 @pytest.mark.parametrize("source_scope", ["local", "user"])
 def test_skills_export_force_refuses_to_overwrite_an_installed_source(
-    skill_roots: tuple[Path, Path], source_scope: str
+    skill_roots: tuple[Path, Path],
+    source_scope: str,
 ) -> None:
     local_root, user_root = skill_roots
     _install(user_root, "alpha", "user alpha")
@@ -367,7 +375,8 @@ def test_skills_export_force_refuses_target_containing_a_source(
     _install(local_root, "installed", "named like the folder")
 
     result = runner.invoke(
-        app, ["skills", "export", "installed", "--path", str(local_root), "--force"]
+        app,
+        ["skills", "export", "installed", "--path", str(local_root), "--force"],
     )
 
     assert result.exit_code == 1
@@ -387,7 +396,8 @@ def _link_install(root: Path, skill_id: str, source: Path, **extra: object) -> N
 
 
 def test_skills_export_includes_linked_installs(
-    skill_roots: tuple[Path, Path], tmp_path: Path
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     local_root, _ = skill_roots
     source = tmp_path / "src" / "researcher"
@@ -404,7 +414,8 @@ def test_skills_export_includes_linked_installs(
 
 
 def test_skills_export_force_refuses_to_overwrite_a_linked_source(
-    skill_roots: tuple[Path, Path], tmp_path: Path
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     local_root, _ = skill_roots
     source = tmp_path / "src" / "researcher"
@@ -414,7 +425,8 @@ def test_skills_export_force_refuses_to_overwrite_a_linked_source(
 
     for path in (source.parent, local_root / "installed"):
         result = runner.invoke(
-            app, ["skills", "export", "researcher", "--path", str(path), "--force"]
+            app,
+            ["skills", "export", "researcher", "--path", str(path), "--force"],
         )
         assert result.exit_code == 1
         assert "overlaps installed skill" in result.output
@@ -423,7 +435,8 @@ def test_skills_export_force_refuses_to_overwrite_a_linked_source(
 
 
 def test_installed_skills_admits_only_engine_shaped_linked_installs(
-    skill_roots: tuple[Path, Path], tmp_path: Path
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     local_root, _ = skill_roots
     source = tmp_path / "src" / "linked"
@@ -440,7 +453,8 @@ def test_installed_skills_admits_only_engine_shaped_linked_installs(
 
 
 def test_installed_skills_ignores_lockfile_that_is_not_utf8(
-    skill_roots: tuple[Path, Path], tmp_path: Path
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
 ) -> None:
     local_root, user_root = skill_roots
     _install(user_root, "alpha", "user alpha")
