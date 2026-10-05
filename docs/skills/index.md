@@ -148,16 +148,40 @@ SKILL.md folders into an auto-discovery location for them.
 | `vp skills delete <id> [--scope]`        | Uninstall a skill                                           |
 | `vp skills sync [--scope]`               | Reconcile `installed/` with the lockfile (no re-resolve)    |
 | `vp skills update [<id>] [--scope]`      | Re-resolve locators and rewrite the lockfile                |
+| `vp skills export <id>... [--path] [--scope] [--force]` | Copy installed skills as plain folders to `<path>/<id>/` |
 | `vp skills cache clear`                  | Remove cached git clones and npm packages                   |
 
-All commands accept `--json` for machine-readable output. The host CLI is a thin
-wrapper around the engine container — see
+All commands accept `--json` for machine-readable output. Apart from `export`,
+which only copies files on the host, the CLI is a thin wrapper around the engine
+container — see
 [`vibepod-skills-engine`](https://github.com/VibePod/vibepod-skills-engine) for
 what runs inside.
 
 Use `sync` when you want to restore the exact installed contents from the
 lockfile. Use `update` when you want to re-resolve moving refs such as branches
 or package ranges and rewrite the lockfile.
+
+## Exporting skills
+
+`vp skills export` copies installed skills out as plain `SKILL.md` folders, so
+you can commit them to a repository or hand them to someone else:
+
+```bash
+# into the current directory; local shadows user, as agents see it
+vp skills export researcher sql
+
+# take the user-scope copies and write them somewhere else
+vp skills export researcher sql --scope user --path ./skills
+```
+
+Each skill lands in `<path>/<id>/` (default: the current directory) exactly as
+installed; no lockfile or registry is written. Symlinks inside a skill are copied as symlinks, never followed.
+An existing `<path>/<id>` is left alone unless you pass `--force`, and nothing is
+written when any requested ID is missing or would conflict.
+
+The result is a skill bundle in its own right, so
+`vp skills add ./skills/<id>` (or the whole `--path` directory) installs it
+again.
 
 Remote sources are fetched into `skills-cache/` under the VibePod config
 directory. The engine re-fetches on every `add`, `sync` and `update`, so the

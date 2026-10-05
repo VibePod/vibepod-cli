@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -28,6 +29,8 @@ _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]+:")
 # scp-style git remote: user@host:path. A bare "git@something" with no remote
 # separator is a directory name, not a locator.
 _SCP_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:")
+
+_SAFE_SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 _skills_engine_checked = False
 _manager: DockerManager | None = None
@@ -103,6 +106,121 @@ def _ensure_dirs(
     for d in (local, user, cache):
         d.mkdir(parents=True, exist_ok=True)
     return local, user, cache
+
+
+def is_safe_skill_id(skill_id: str) -> bool:
+    """Return True for skill IDs safe to use as one path segment."""
+    return bool(_SAFE_SKILL_ID_RE.fullmatch(skill_id))
+
+
+@dataclass(frozen=True)
+class InstalledSkill:
+    scope: Scope
+    path: Path  # absolute host path to the skill folder
+
+
+def _string_keyed_dict(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _read_lock(path: Path) -> dict[str, object]:
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"skills": {}}
+    return _string_keyed_dict(raw) or {"skills": {}}
+
+
+def _safe_skill_path(scope_root: Path, skill_id: str, path_value: object) -> Path | None:
+    rel = path_value if isinstance(path_value, str) and path_value else f"installed/{skill_id}"
+    rel_path = Path(rel)
+    if rel_path.is_absolute() or ".." in rel_path.parts:
+        rel_path = Path("installed") / skill_id
+    abs_path = (scope_root / rel_path).resolve(strict=False)
+    if not abs_path.is_relative_to(scope_root) or not abs_path.is_dir():
+        return None
+    return abs_path
+
+
+def installed_skills(workspace: Path, scope: Scope | None = None) -> dict[str, InstalledSkill]:
+    """Installed skills from the local + user lockfiles (local wins), or one scope.
+
+    Reads the lockfiles directly so this stays cheap during `vp run` (no engine
+    container call).
+    """
+    roots: list[tuple[Scope, Path]] = [
+        ("user", user_skills_dir().resolve()),
+        ("local", local_skills_dir(workspace).resolve()),  # processed second → wins
+    ]
+    merged: dict[str, InstalledSkill] = {}
+    for root_scope, scope_root in roots:
+        if scope is not None and root_scope != scope:
+            continue
+        skills = _string_keyed_dict(_read_lock(scope_root / "skills-lock.json").get("skills"))
+        if skills is None:
+            continue
+        for sid, raw_entry in skills.items():
+            if not is_safe_skill_id(sid):
+                continue
+            entry = _string_keyed_dict(raw_entry)
+            if entry is None:
+                continue
+            abs_path = _safe_skill_path(scope_root, sid, entry.get("path"))
+            if abs_path is not None:
+                merged[sid] = InstalledSkill(scope=root_scope, path=abs_path)
+    return merged
+
+
+def export(
+    dest: Path,
+    *,
+    scope: Scope | None = None,
+    skill_ids: list[str] | None = None,
+    force: bool = False,
+    cwd: Path | None = None,
+) -> dict[str, InstalledSkill]:
+    """Copy installed skills as plain folders to ``dest/<id>/``.
+
+    Without *scope* this exports what an agent would see (local shadows user).
+    Files are copied as they are installed; symlinks inside a skill stay
+    symlinks so a link never pulls host files from outside the skill into the
+    export. Nothing is written until every requested skill is known to fit.
+    """
+    workspace = Path(cwd or Path.cwd()).resolve()
+    skills = installed_skills(workspace, scope)
+    if skill_ids:
+        missing = [sid for sid in skill_ids if sid not in skills]
+        if missing:
+            where = f"in scope {scope}" if scope else "in local or user scope"
+            raise SkillsEngineError(f"Skill(s) not installed {where}: {', '.join(missing)}")
+        skills = {sid: skills[sid] for sid in skill_ids}
+
+    if not skills:
+        return skills
+
+    dest = dest.expanduser().resolve()
+    for skill in skills.values():
+        if dest.is_relative_to(skill.path):
+            raise SkillsEngineError(f"Export destination {dest} is inside skill {skill.path}")
+    if dest.exists() and not dest.is_dir():
+        raise SkillsEngineError(f"Export destination is not a directory: {dest}")
+    existing = [sid for sid in skills if (dest / sid).exists() or (dest / sid).is_symlink()]
+    if existing and not force:
+        raise SkillsEngineError(
+            f"Already present in {dest}: {', '.join(existing)} (use --force to overwrite)",
+        )
+
+    dest.mkdir(parents=True, exist_ok=True)
+    for sid, skill in skills.items():
+        target = dest / sid
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(skill.path, target, symlinks=True)
+    return skills
 
 
 def _is_local_locator(locator: str) -> bool:

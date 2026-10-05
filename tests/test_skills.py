@@ -31,7 +31,7 @@ def _fake_result(
 def test_skills_help_lists_subcommands() -> None:
     result = runner.invoke(app, ["skills", "--help"])
     assert result.exit_code == 0
-    for sub in ("add", "delete", "list", "sync", "update", "cache"):
+    for sub in ("add", "delete", "list", "sync", "update", "export", "cache"):
         assert sub in result.stdout
 
 
@@ -197,3 +197,131 @@ def test_detect_scope_default_inside_project(tmp_path: Path) -> None:
     sub = tmp_path / "sub"
     sub.mkdir()
     assert skills_engine.detect_scope_default(sub) == "local"
+
+
+def _install(root: Path, skill_id: str, body: str) -> Path:
+    skill = root / "installed" / skill_id
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(body, encoding="utf-8")
+    lock_path = root / "skills-lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8")) if lock_path.exists() else {}
+    lock.setdefault("skills", {})[skill_id] = {"path": f"installed/{skill_id}"}
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    return skill
+
+
+@pytest.fixture
+def skill_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    local_root.mkdir()
+    user_root.mkdir()
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+    return local_root, user_root
+
+
+def test_skills_export_defaults_to_current_directory(
+    skill_roots: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_root, user_root = skill_roots
+    _install(user_root, "shared", "user version")
+    _install(user_root, "only-user", "user only")
+    local_skill = _install(local_root, "shared", "local version")
+    (local_skill / "scripts").mkdir()
+    (local_skill / "scripts" / "run.sh").write_text("echo hi", encoding="utf-8")
+    _install(local_root, "not-asked", "x")
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+
+    result = runner.invoke(app, ["skills", "export", "shared", "only-user"])
+
+    assert result.exit_code == 0, result.output
+    assert sorted(p.name for p in work.iterdir()) == ["only-user", "shared"]
+    assert (work / "shared" / "SKILL.md").read_text(encoding="utf-8") == "local version"
+    assert (work / "shared" / "scripts" / "run.sh").read_text(encoding="utf-8") == "echo hi"
+    assert (work / "only-user" / "SKILL.md").read_text(encoding="utf-8") == "user only"
+
+
+def test_skills_export_scope_and_path(skill_roots: tuple[Path, Path], tmp_path: Path) -> None:
+    local_root, user_root = skill_roots
+    _install(user_root, "shared", "user version")
+    _install(local_root, "shared", "local version")
+    dest = tmp_path / "out"
+
+    result = runner.invoke(
+        app, ["skills", "export", "shared", "--scope", "user", "--path", str(dest), "--json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert [(s["id"], s["scope"]) for s in payload[0]["skills"]] == [("shared", "user")]
+    assert [p.name for p in dest.iterdir()] == ["shared"]
+    assert (dest / "shared" / "SKILL.md").read_text(encoding="utf-8") == "user version"
+
+
+def test_skills_export_requires_skill_ids(skill_roots: tuple[Path, Path]) -> None:
+    result = runner.invoke(app, ["skills", "export"])
+    assert result.exit_code == 2
+
+
+def test_skills_export_unknown_id_fails_without_writing(
+    skill_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    _install(skill_roots[0], "known", "x")
+    dest = tmp_path / "out"
+
+    result = runner.invoke(app, ["skills", "export", "known", "nope", "--path", str(dest)])
+
+    assert result.exit_code == 1
+    assert "nope" in result.output
+    assert not dest.exists()
+
+
+def test_skills_export_refuses_overwrite_unless_forced(
+    skill_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    _install(skill_roots[0], "alpha", "new alpha")
+    _install(skill_roots[0], "beta", "new beta")
+    dest = tmp_path / "out"
+    (dest / "alpha").mkdir(parents=True)
+    (dest / "alpha" / "stale.md").write_text("old", encoding="utf-8")
+    args = ["skills", "export", "alpha", "beta", "--path", str(dest)]
+
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "--force" in result.output
+    assert not (dest / "beta").exists()
+
+    result = runner.invoke(app, [*args, "--force"])
+    assert result.exit_code == 0, result.output
+    assert not (dest / "alpha" / "stale.md").exists()
+    assert (dest / "alpha" / "SKILL.md").read_text(encoding="utf-8") == "new alpha"
+    assert (dest / "beta" / "SKILL.md").read_text(encoding="utf-8") == "new beta"
+
+
+def test_skills_export_keeps_symlinks_as_links(
+    skill_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    secret = tmp_path / "secret.txt"
+    secret.write_text("host secret", encoding="utf-8")
+    skill = _install(skill_roots[0], "linky", "x")
+    (skill / "leak").symlink_to(secret)
+    dest = tmp_path / "out"
+
+    result = runner.invoke(app, ["skills", "export", "linky", "--path", str(dest)])
+
+    assert result.exit_code == 0, result.output
+    assert (dest / "linky" / "leak").is_symlink()
+
+
+def test_skills_export_rejects_destination_inside_a_skill(
+    skill_roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    skill = _install(skill_roots[0], "alpha", "x")
+
+    result = runner.invoke(app, ["skills", "export", "alpha", "--path", str(skill / "out")])
+
+    assert result.exit_code == 1
+    assert "inside skill" in result.output
