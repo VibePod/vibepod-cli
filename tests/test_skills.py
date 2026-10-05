@@ -15,6 +15,11 @@ from vibepod.core import skills_engine
 runner = CliRunner()
 
 
+def _flat(output: str) -> str:
+    """Rich wraps long messages (such as temp paths on macOS and Windows) over lines."""
+    return " ".join(output.split())
+
+
 def _fake_result(
     exit_code: int = 0,
     data: Any | None = None,
@@ -279,7 +284,7 @@ def test_skills_export_unknown_id_fails_without_writing(
     result = runner.invoke(app, ["skills", "export", "known", "nope", "--path", str(dest)])
 
     assert result.exit_code == 1
-    assert "nope" in result.output
+    assert "nope" in _flat(result.output)
     assert not dest.exists()
 
 
@@ -296,7 +301,7 @@ def test_skills_export_refuses_overwrite_unless_forced(
 
     result = runner.invoke(app, args)
     assert result.exit_code == 1
-    assert "--force" in result.output
+    assert "--force" in _flat(result.output)
     assert not (dest / "beta").exists()
 
     result = runner.invoke(app, [*args, "--force"])
@@ -331,7 +336,7 @@ def test_skills_export_rejects_destination_inside_a_skill(
     result = runner.invoke(app, ["skills", "export", "alpha", "--path", str(skill / "out")])
 
     assert result.exit_code == 1
-    assert "inside skill" in result.output
+    assert "inside skill" in _flat(result.output)
 
 
 @pytest.mark.parametrize("source_scope", ["local", "user"])
@@ -362,7 +367,7 @@ def test_skills_export_force_refuses_to_overwrite_an_installed_source(
         )
 
         assert result.exit_code == 1
-        assert "overlaps installed skill" in result.output
+        assert "overlaps installed skill" in _flat(result.output)
     assert (local_root / "installed" / "alpha" / "SKILL.md").read_text() == "local alpha"
     assert (user_root / "installed" / "alpha" / "SKILL.md").read_text() == "user alpha"
 
@@ -380,7 +385,7 @@ def test_skills_export_force_refuses_target_containing_a_source(
     )
 
     assert result.exit_code == 1
-    assert "overlaps installed skill" in result.output
+    assert "overlaps installed skill" in _flat(result.output)
     assert (local_root / "installed" / "alpha" / "SKILL.md").read_text() == "local alpha"
 
 
@@ -429,7 +434,7 @@ def test_skills_export_force_refuses_to_overwrite_a_linked_source(
             ["skills", "export", "researcher", "--path", str(path), "--force"],
         )
         assert result.exit_code == 1
-        assert "overlaps installed skill" in result.output
+        assert "overlaps installed skill" in _flat(result.output)
     assert (local_root / "installed" / "researcher").is_symlink()
     assert (source / "SKILL.md").read_text(encoding="utf-8") == "linked"
 
