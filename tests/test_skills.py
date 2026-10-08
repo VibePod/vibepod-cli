@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,11 @@ from vibepod.cli import app
 from vibepod.core import skills_engine
 
 runner = CliRunner()
+
+
+def _flat(output: str) -> str:
+    """Rich wraps long messages (such as temp paths on macOS and Windows) over lines."""
+    return " ".join(output.split())
 
 
 def _fake_result(
@@ -31,7 +37,7 @@ def _fake_result(
 def test_skills_help_lists_subcommands() -> None:
     result = runner.invoke(app, ["skills", "--help"])
     assert result.exit_code == 0
-    for sub in ("add", "delete", "list", "sync", "update", "cache"):
+    for sub in ("add", "delete", "list", "sync", "update", "export", "cache"):
         assert sub in result.stdout
 
 
@@ -197,3 +203,317 @@ def test_detect_scope_default_inside_project(tmp_path: Path) -> None:
     sub = tmp_path / "sub"
     sub.mkdir()
     assert skills_engine.detect_scope_default(sub) == "local"
+
+
+def _install(root: Path, skill_id: str, body: str) -> Path:
+    skill = root / "installed" / skill_id
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(body, encoding="utf-8")
+    lock_path = root / "skills-lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8")) if lock_path.exists() else {}
+    lock.setdefault("skills", {})[skill_id] = {"path": f"installed/{skill_id}"}
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+    return skill
+
+
+@pytest.fixture
+def skill_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    local_root.mkdir()
+    user_root.mkdir()
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+    return local_root, user_root
+
+
+def test_skills_export_defaults_to_current_directory(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_root, user_root = skill_roots
+    _install(user_root, "shared", "user version")
+    _install(user_root, "only-user", "user only")
+    local_skill = _install(local_root, "shared", "local version")
+    (local_skill / "scripts").mkdir()
+    (local_skill / "scripts" / "run.sh").write_text("echo hi", encoding="utf-8")
+    _install(local_root, "not-asked", "x")
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+
+    result = runner.invoke(app, ["skills", "export", "shared", "only-user"])
+
+    assert result.exit_code == 0, result.output
+    assert sorted(p.name for p in work.iterdir()) == ["only-user", "shared"]
+    assert (work / "shared" / "SKILL.md").read_text(encoding="utf-8") == "local version"
+    assert (work / "shared" / "scripts" / "run.sh").read_text(encoding="utf-8") == "echo hi"
+    assert (work / "only-user" / "SKILL.md").read_text(encoding="utf-8") == "user only"
+
+
+def test_skills_export_scope_and_path(skill_roots: tuple[Path, Path], tmp_path: Path) -> None:
+    local_root, user_root = skill_roots
+    _install(user_root, "shared", "user version")
+    _install(local_root, "shared", "local version")
+    dest = tmp_path / "out"
+
+    result = runner.invoke(
+        app,
+        ["skills", "export", "shared", "--scope", "user", "--path", str(dest), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert [(s["id"], s["scope"]) for s in payload[0]["skills"]] == [("shared", "user")]
+    assert [p.name for p in dest.iterdir()] == ["shared"]
+    assert (dest / "shared" / "SKILL.md").read_text(encoding="utf-8") == "user version"
+
+
+def test_skills_export_requires_skill_ids(skill_roots: tuple[Path, Path]) -> None:
+    result = runner.invoke(app, ["skills", "export"])
+    assert result.exit_code == 2
+
+
+def test_skills_export_unknown_id_fails_without_writing(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    _install(skill_roots[0], "known", "x")
+    dest = tmp_path / "out"
+
+    result = runner.invoke(app, ["skills", "export", "known", "nope", "--path", str(dest)])
+
+    assert result.exit_code == 1
+    assert "nope" in _flat(result.output)
+    assert not dest.exists()
+
+
+def test_skills_export_refuses_overwrite_unless_forced(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    _install(skill_roots[0], "alpha", "new alpha")
+    _install(skill_roots[0], "beta", "new beta")
+    dest = tmp_path / "out"
+    (dest / "alpha").mkdir(parents=True)
+    (dest / "alpha" / "stale.md").write_text("old", encoding="utf-8")
+    args = ["skills", "export", "alpha", "beta", "--path", str(dest)]
+
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "--force" in _flat(result.output)
+    assert not (dest / "beta").exists()
+
+    result = runner.invoke(app, [*args, "--force"])
+    assert result.exit_code == 0, result.output
+    assert not (dest / "alpha" / "stale.md").exists()
+    assert (dest / "alpha" / "SKILL.md").read_text(encoding="utf-8") == "new alpha"
+    assert (dest / "beta" / "SKILL.md").read_text(encoding="utf-8") == "new beta"
+
+
+def test_skills_export_keeps_symlinks_as_links(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    secret = tmp_path / "secret.txt"
+    secret.write_text("host secret", encoding="utf-8")
+    skill = _install(skill_roots[0], "linky", "x")
+    (skill / "leak").symlink_to(secret)
+    dest = tmp_path / "out"
+
+    result = runner.invoke(app, ["skills", "export", "linky", "--path", str(dest)])
+
+    assert result.exit_code == 0, result.output
+    assert (dest / "linky" / "leak").is_symlink()
+
+
+def test_skills_export_rejects_destination_inside_a_skill(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    skill = _install(skill_roots[0], "alpha", "x")
+
+    result = runner.invoke(app, ["skills", "export", "alpha", "--path", str(skill / "out")])
+
+    assert result.exit_code == 1
+    assert "inside skill" in _flat(result.output)
+
+
+@pytest.mark.parametrize("source_scope", ["local", "user"])
+def test_skills_export_force_refuses_to_overwrite_an_installed_source(
+    skill_roots: tuple[Path, Path],
+    source_scope: str,
+) -> None:
+    local_root, user_root = skill_roots
+    _install(user_root, "alpha", "user alpha")
+    _install(local_root, "alpha", "local alpha")
+    root = local_root if source_scope == "local" else user_root
+
+    # Exporting the user copy into the local installed/ dir (and vice versa)
+    # must not delete the other scope's installation either.
+    for scope in ("local", "user"):
+        result = runner.invoke(
+            app,
+            [
+                "skills",
+                "export",
+                "alpha",
+                "--scope",
+                scope,
+                "--path",
+                str(root / "installed"),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == 1
+        assert "overlaps installed skill" in _flat(result.output)
+    assert (local_root / "installed" / "alpha" / "SKILL.md").read_text() == "local alpha"
+    assert (user_root / "installed" / "alpha" / "SKILL.md").read_text() == "user alpha"
+
+
+def test_skills_export_force_refuses_target_containing_a_source(
+    skill_roots: tuple[Path, Path],
+) -> None:
+    local_root, _ = skill_roots
+    _install(local_root, "alpha", "local alpha")
+    _install(local_root, "installed", "named like the folder")
+
+    result = runner.invoke(
+        app,
+        ["skills", "export", "installed", "--path", str(local_root), "--force"],
+    )
+
+    assert result.exit_code == 1
+    assert "overlaps installed skill" in _flat(result.output)
+    assert (local_root / "installed" / "alpha" / "SKILL.md").read_text() == "local alpha"
+
+
+def _link_install(root: Path, skill_id: str, source: Path, **extra: object) -> None:
+    installed = root / "installed"
+    installed.mkdir(parents=True, exist_ok=True)
+    (installed / skill_id).symlink_to(source, target_is_directory=True)
+    lock_path = root / "skills-lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8")) if lock_path.exists() else {}
+    entry = {"path": f"installed/{skill_id}", "linked": True, **extra}
+    lock.setdefault("skills", {})[skill_id] = entry
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+
+def test_skills_export_includes_linked_installs(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    local_root, _ = skill_roots
+    source = tmp_path / "src" / "researcher"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("linked", encoding="utf-8")
+    _link_install(local_root, "researcher", source)
+    dest = tmp_path / "out"
+
+    result = runner.invoke(app, ["skills", "export", "researcher", "--path", str(dest)])
+
+    assert result.exit_code == 0, result.output
+    assert not (dest / "researcher").is_symlink()
+    assert (dest / "researcher" / "SKILL.md").read_text(encoding="utf-8") == "linked"
+
+
+def test_skills_export_force_refuses_to_overwrite_a_linked_source(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    local_root, _ = skill_roots
+    source = tmp_path / "src" / "researcher"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("linked", encoding="utf-8")
+    _link_install(local_root, "researcher", source)
+
+    for path in (source.parent, local_root / "installed"):
+        result = runner.invoke(
+            app,
+            ["skills", "export", "researcher", "--path", str(path), "--force"],
+        )
+        assert result.exit_code == 1
+        assert "overlaps installed skill" in _flat(result.output)
+    assert (local_root / "installed" / "researcher").is_symlink()
+    assert (source / "SKILL.md").read_text(encoding="utf-8") == "linked"
+
+
+def test_skills_export_force_keeps_a_linked_install_whose_source_is_missing(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    local_root, user_root = skill_roots
+    source = tmp_path / "src" / "researcher"
+    source.mkdir(parents=True)
+    _link_install(local_root, "researcher", source)
+    source.rename(tmp_path / "src" / "moved")  # the link now dangles
+    _install(user_root, "researcher", "user copy")
+
+    result = runner.invoke(
+        app,
+        [
+            "skills",
+            "export",
+            "researcher",
+            "--scope",
+            "user",
+            "--path",
+            str(local_root / "installed"),
+            "--force",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "overlaps installed skill" in _flat(result.output)
+    assert (local_root / "installed" / "researcher").is_symlink()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_export_overlap_check_sees_aliases_of_existing_folders(tmp_path: Path) -> None:
+    # A second path to the same folder, like different casing on a case-insensitive
+    # filesystem: the paths differ as text but are the same folder.
+    scope_root = tmp_path / "scope"
+    installed = scope_root / "installed" / "alpha"
+    installed.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(scope_root)
+
+    target = alias / "installed" / "alpha"
+    assert target != installed and not target.is_relative_to(installed)
+    assert skills_engine._overlaps(target, installed)
+    assert skills_engine._overlaps(alias / "installed", installed)
+    assert skills_engine._overlaps(alias / "installed" / "alpha" / "sub", installed)
+    assert not skills_engine._overlaps(alias / "elsewhere", installed)
+
+
+def test_installed_skills_admits_only_engine_shaped_linked_installs(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    local_root, _ = skill_roots
+    source = tmp_path / "src" / "linked"
+    source.mkdir(parents=True)
+    _link_install(local_root, "linked", source)
+    _link_install(local_root, "unmarked", source, linked=False)
+    _link_install(local_root, "elsewhere", source, path="other/elsewhere")
+    workspace = tmp_path / "work"
+
+    # Agent mounts keep requiring skills to live inside the scope root.
+    assert skills_engine.installed_skills(workspace) == {}
+    linked = skills_engine.installed_skills(workspace, include_linked=True)
+    assert {sid: skill.path for sid, skill in linked.items()} == {"linked": source.resolve()}
+
+
+def test_installed_skills_ignores_lockfile_that_is_not_utf8(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    local_root, user_root = skill_roots
+    _install(user_root, "alpha", "user alpha")
+    (local_root / "skills-lock.json").write_bytes(b'{"skills": {"\xff": {}}}')
+
+    skills = skills_engine.installed_skills(tmp_path)
+
+    assert {sid: skill.scope for sid, skill in skills.items()} == {"alpha": "user"}

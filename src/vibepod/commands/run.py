@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import shlex
 import sys
 import time
@@ -16,6 +14,7 @@ from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
 from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.core import skills_engine
 from vibepod.core.acp import AcpClientChannel
 from vibepod.core.agents import (
     AGENT_SPECS,
@@ -138,8 +137,6 @@ from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, last_error, route_to_stderr, success, warning
 
-_SAFE_SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-
 # Container paths that must never be shadowed by the ACP path-parity mount of
 # the workspace onto its own host path.
 _ACP_RESERVED_CONTAINER_PATHS = (
@@ -242,11 +239,6 @@ def _extend_write_roots(env: dict[str, str], var: str, paths: list[str | None]) 
         env[var] = _WRITE_ROOTS_SEP.join(existing)
 
 
-def _is_safe_skill_id(skill_id: str) -> bool:
-    """Return True for skill IDs safe to use as one container path segment."""
-    return bool(_SAFE_SKILL_ID_RE.fullmatch(skill_id))
-
-
 # Codex's OAuth login server is hard-bound to 127.0.0.1:1455 (it can't be told
 # to bind elsewhere), and the browser callback goes to http://localhost:1455.
 # Docker publishes ports to the container's bridge interface, not its loopback,
@@ -315,70 +307,15 @@ def _agent_skill_paths(agent: str) -> list[str]:
     return []
 
 
-def _resolved_skill_paths(workspace: Path) -> dict[str, Path]:
-    """Merge installed skills from local + user scope (local wins).
-
-    Returns id → absolute host path to the skill folder. Reads the lockfiles
-    directly so this stays cheap during `vp run` (no engine container call).
-    """
-    from vibepod.core.skills_engine import local_skills_dir, user_skills_dir
-
-    def _string_keyed_dict(value: object) -> dict[str, object] | None:
-        if not isinstance(value, dict):
-            return None
-        result: dict[str, object] = {}
-        for key, item in value.items():
-            if isinstance(key, str):
-                result[key] = item
-        return result
-
-    def _read_lock(path: Path) -> dict[str, object]:
-        try:
-            raw: object = json.loads(path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {"skills": {}}
-        return _string_keyed_dict(raw) or {"skills": {}}
-
-    def _safe_skill_path(scope_root: Path, skill_id: str, path_value: object) -> Path | None:
-        rel = path_value if isinstance(path_value, str) and path_value else f"installed/{skill_id}"
-        rel_path = Path(rel)
-        if rel_path.is_absolute() or ".." in rel_path.parts:
-            rel_path = Path("installed") / skill_id
-        abs_path = (scope_root / rel_path).resolve(strict=False)
-        if not abs_path.is_relative_to(scope_root) or not abs_path.is_dir():
-            return None
-        return abs_path
-
-    local_root = local_skills_dir(workspace).resolve()
-    user_root = user_skills_dir().resolve()
-
-    merged: dict[str, Path] = {}
-    for scope_root in (user_root, local_root):  # local processed second → wins
-        lock = _read_lock(scope_root / "skills-lock.json")
-        skills = _string_keyed_dict(lock.get("skills"))
-        if skills is None:
-            continue
-        for sid, raw_entry in skills.items():
-            if not _is_safe_skill_id(sid):
-                continue
-            entry = _string_keyed_dict(raw_entry)
-            if entry is None:
-                continue
-            abs_path = _safe_skill_path(scope_root, sid, entry.get("path"))
-            if abs_path is not None:
-                merged[sid] = abs_path
-    return merged
-
-
 def _skills_mounts_for_agent(agent: str, workspace: Path) -> list[tuple[str, str, str]]:
     """One bind-mount per resolved skill into the agent's discovery path(s)."""
     targets = _agent_skill_paths(agent)
     if not targets:
         return []
     mounts: list[tuple[str, str, str]] = []
-    for skill_id, host_path in _resolved_skill_paths(workspace).items():
+    for skill_id, skill in skills_engine.installed_skills(workspace).items():
         for base in targets:
-            mounts.append((str(host_path), f"{base}/{skill_id}", "ro"))
+            mounts.append((str(skill.path), f"{base}/{skill_id}", "ro"))
     return mounts
 
 

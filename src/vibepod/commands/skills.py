@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
@@ -214,6 +215,53 @@ def update_cmd(
     if not json_out and result.exit_code == 0:
         success(f"Updated skills in {resolved_scope}")
     _emit_or_raise(result, json_out)
+
+
+@app.command("export")
+def export_cmd(
+    skill_ids: Annotated[list[str], typer.Argument(help="Skill IDs to export")],
+    path: Annotated[
+        Path | None,
+        typer.Option("--path", help="Directory to copy the skill folders into (default: .)"),
+    ] = None,
+    scope: Annotated[
+        str | None,
+        typer.Option("--scope", help="local|user (default: both, local shadows user)"),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Replace skill folders that already exist in the path"),
+    ] = False,
+    json_out: Annotated[bool, typer.Option("--json", help="Emit JSON to stdout")] = False,
+) -> None:
+    """Copy installed skills as plain folders to <path>/<id>/."""
+    if scope is not None and scope not in _VALID_SCOPES:
+        raise typer.BadParameter(f"--scope must be local|user, got {scope!r}")
+    dest = path if path is not None else Path.cwd()
+    try:
+        exported = skills_engine.export(
+            dest,
+            scope=scope,  # type: ignore[arg-type]
+            skill_ids=skill_ids,
+            force=force,
+        )
+    except (SkillsEngineError, OSError) as exc:
+        _emit_diagnostic(str(exc), json_out)
+        raise typer.Exit(1) from exc
+
+    target = dest.expanduser().resolve()
+    if json_out:
+        records = [
+            {"id": sid, "scope": skill.scope, "source": str(skill.path), "path": str(target / sid)}
+            for sid, skill in exported.items()
+        ]
+        typer.echo(
+            json.dumps([{"command": "export", "dest": str(target), "skills": records}], indent=2),
+        )
+        return
+    success(f"Exported {len(exported)} skill(s) to {target}")
+    for sid, skill in exported.items():
+        info(f"  + {sid} ({skill.scope})")
 
 
 @cache_app.command("clear")
