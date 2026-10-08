@@ -213,10 +213,41 @@ def _installed_source_paths(workspace: Path) -> set[Path]:
         ("local", local_skills_dir(workspace).resolve()),
     ]
     for root_scope, scope_root in roots:
-        for sid, skill in installed_skills(workspace, root_scope, include_linked=True).items():
+        for skill in installed_skills(workspace, root_scope, include_linked=True).values():
             paths.add(skill.path)
-            paths.add(scope_root / "installed" / sid)
+        # Every ID the lockfile lists keeps its installed path, even when it no longer
+        # resolves (a ``--link`` install whose source is missing for now).
+        listed = _string_keyed_dict(_read_lock(scope_root / "skills-lock.json").get("skills"))
+        for sid in listed or {}:
+            if is_safe_skill_id(sid):
+                paths.add(scope_root / "installed" / sid)
     return paths
+
+
+def _file_id(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _overlaps(target: Path, source: Path) -> bool:
+    """Whether *target* is, contains or lies inside *source*.
+
+    Paths are compared as written and by filesystem identity, so an alias of an
+    existing folder (different casing on a case-insensitive filesystem, a
+    symlinked parent) is caught as well.
+    """
+    if target == source or target.is_relative_to(source) or source.is_relative_to(target):
+        return True
+    source_id = _file_id(source)
+    if source_id is not None and any(_file_id(p) == source_id for p in (target, *target.parents)):
+        return True
+    target_id = _file_id(target)
+    return target_id is not None and any(
+        _file_id(p) == target_id for p in (source, *source.parents)
+    )
 
 
 def export(
@@ -262,7 +293,7 @@ def export(
     for sid in skills:
         target = dest / sid
         for source in protected:
-            if target == source or target.is_relative_to(source) or source.is_relative_to(target):
+            if _overlaps(target, source):
                 raise SkillsEngineError(
                     f"Export target {target} overlaps installed skill {source}",
                 )

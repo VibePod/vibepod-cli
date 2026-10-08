@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -437,6 +438,54 @@ def test_skills_export_force_refuses_to_overwrite_a_linked_source(
         assert "overlaps installed skill" in _flat(result.output)
     assert (local_root / "installed" / "researcher").is_symlink()
     assert (source / "SKILL.md").read_text(encoding="utf-8") == "linked"
+
+
+def test_skills_export_force_keeps_a_linked_install_whose_source_is_missing(
+    skill_roots: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    local_root, user_root = skill_roots
+    source = tmp_path / "src" / "researcher"
+    source.mkdir(parents=True)
+    _link_install(local_root, "researcher", source)
+    source.rename(tmp_path / "src" / "moved")  # the link now dangles
+    _install(user_root, "researcher", "user copy")
+
+    result = runner.invoke(
+        app,
+        [
+            "skills",
+            "export",
+            "researcher",
+            "--scope",
+            "user",
+            "--path",
+            str(local_root / "installed"),
+            "--force",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "overlaps installed skill" in _flat(result.output)
+    assert (local_root / "installed" / "researcher").is_symlink()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_export_overlap_check_sees_aliases_of_existing_folders(tmp_path: Path) -> None:
+    # A second path to the same folder, like different casing on a case-insensitive
+    # filesystem: the paths differ as text but are the same folder.
+    scope_root = tmp_path / "scope"
+    installed = scope_root / "installed" / "alpha"
+    installed.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(scope_root)
+
+    target = alias / "installed" / "alpha"
+    assert target != installed and not target.is_relative_to(installed)
+    assert skills_engine._overlaps(target, installed)
+    assert skills_engine._overlaps(alias / "installed", installed)
+    assert skills_engine._overlaps(alias / "installed" / "alpha" / "sub", installed)
+    assert not skills_engine._overlaps(alias / "elsewhere", installed)
 
 
 def test_installed_skills_admits_only_engine_shaped_linked_installs(
