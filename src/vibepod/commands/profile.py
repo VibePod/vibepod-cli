@@ -8,6 +8,7 @@ from typing import Annotated, Any
 import typer
 
 from vibepod.constants import SUPPORTED_AGENTS
+from vibepod.core.agents import get_agent_spec
 from vibepod.core.config import get_config
 from vibepod.core.docker import DockerClientError, DockerManager
 from vibepod.core.launch import managed_proxy_policy_ids
@@ -32,7 +33,8 @@ def _agents_with_data(profile: str) -> list[str]:
     root = profile_agents_root(profile)
     found: list[str] = []
     for agent in sorted(SUPPORTED_AGENTS):
-        agent_dir = root / agent
+        # Some agents keep data under a legacy directory name (vibe -> devstral).
+        agent_dir = root / get_agent_spec(agent).config_subdir
         if agent_dir.is_dir() and any(agent_dir.iterdir()):
             found.append(agent)
     return found

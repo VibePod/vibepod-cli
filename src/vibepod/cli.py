@@ -23,7 +23,7 @@ from vibepod.commands import (
     update,
 )
 from vibepod.compat import install_python314_http_client_flush_patch
-from vibepod.constants import AGENT_SHORTCUTS, SUPPORTED_AGENTS
+from vibepod.constants import AGENT_SHORTCUTS, LEGACY_AGENT_IDS, SUPPORTED_AGENTS
 
 install_python314_http_client_flush_patch()
 
@@ -293,6 +293,10 @@ for shortcut, agent in AGENT_SHORTCUTS.items():
 
 for agent in SUPPORTED_AGENTS:
     _register_run_alias(agent, agent)
+
+# Former agent ids keep their top-level command so existing scripts still work.
+for legacy, agent in LEGACY_AGENT_IDS.items():
+    _register_run_alias(legacy, agent)
 
 
 def main() -> None:

@@ -96,7 +96,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "claude",
         "gemini",
         "codex",
-        "devstral",
+        "vibe",
         "pi",
         "agy",
         "tau",
@@ -453,7 +453,7 @@ def test_run_agent_forwards_platform_and_user(tmp_path: Path) -> None:
     config_dir.mkdir(parents=True, exist_ok=True)
 
     manager.run_agent(
-        agent="devstral",
+        agent="vibe",
         image="vibepod/devstral:latest",
         workspace=workspace,
         config_dir=config_dir,
@@ -1722,19 +1722,19 @@ def test_hermes_rejects_rootless_podman_before_provisioning(
         assert output.out == ""
 
 
-def test_run_preserves_host_user_for_non_podman_devstral(
+def test_run_preserves_host_user_for_non_podman_vibe(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     stub = _StubDockerManager(rootless_podman=False)
     config = _make_config()
-    config["agents"]["devstral"] = {"env": {}, "init": []}
+    config["agents"]["vibe"] = {"env": {}, "init": []}
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
     monkeypatch.setattr(run_cmd.os, "getuid", lambda: 1234, raising=False)
     monkeypatch.setattr(run_cmd.os, "getgid", lambda: 5678, raising=False)
 
-    run_cmd.run(agent="devstral", workspace=tmp_path, detach=True)
+    run_cmd.run(agent="vibe", workspace=tmp_path, detach=True)
 
     assert stub.run_kwargs is not None
     env = stub.run_kwargs["env"]
@@ -2100,8 +2100,9 @@ def test_ikwid_appends_args_for_qwen(monkeypatch, tmp_path: Path) -> None:
     assert captured["command"] == ["qwen", "--approval-mode=yolo"]
 
 
-def test_ikwid_appends_args_for_devstral(monkeypatch, tmp_path: Path) -> None:
-    """--ikwid resolves devstral launch command and appends --auto-approve."""
+@pytest.mark.parametrize("agent", ["vibe", "devstral", "d"])
+def test_ikwid_appends_args_for_vibe(monkeypatch, tmp_path: Path, agent: str) -> None:
+    """--ikwid resolves vibe launch command and appends --auto-approve."""
     captured: dict = {}
 
     class _CapturingDockerManager:
@@ -2128,7 +2129,7 @@ def test_ikwid_appends_args_for_devstral(monkeypatch, tmp_path: Path) -> None:
                 "_Container",
                 (),
                 {
-                    "name": "vibepod-devstral-test",
+                    "name": "vibepod-vibe-test",
                     "id": "abc123",
                     "status": "running",
                     "attrs": {"NetworkSettings": {"Networks": {}}},
@@ -2140,11 +2141,11 @@ def test_ikwid_appends_args_for_devstral(monkeypatch, tmp_path: Path) -> None:
             return container
 
     cfg = _make_config()
-    cfg["agents"]["devstral"] = {"env": {}, "init": []}
+    cfg["agents"]["vibe"] = {"env": {}, "init": []}
     monkeypatch.setattr(run_cmd, "get_config", lambda: cfg)
     monkeypatch.setattr(run_cmd, "DockerManager", _CapturingDockerManager)
 
-    run_cmd.run(agent="devstral", workspace=tmp_path, detach=True, ikwid=True)
+    run_cmd.run(agent=agent, workspace=tmp_path, detach=True, ikwid=True)
 
     assert captured["command"] == ["vibe", "--auto-approve"]
 

@@ -30,8 +30,10 @@ def test_get_agent_spec_supported() -> None:
         assert isinstance(spec.extra_env, dict)
 
 
-def test_devstral_spec_matches_container_contract() -> None:
-    spec = get_agent_spec("devstral")
+def test_vibe_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("vibe")
+    assert spec.id == "vibe"
+    assert spec.config_subdir == "devstral"
     assert spec.command is None
     assert spec.extra_env["HOME"] == "/config"
     assert spec.extra_env["WORKSPACE_PATH"] == "/workspace"
@@ -184,8 +186,8 @@ def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
     for agent in SUPPORTED_AGENTS:
         assert resolve_agent_name(agent) == agent
         assert resolve_agent_name(f" {agent.upper()} ") == agent
-    assert resolve_agent_name("vibe") == "devstral"
-    assert resolve_agent_name("VIBE") == "devstral"
+    assert resolve_agent_name("devstral") == "vibe"
+    assert resolve_agent_name("DEVSTRAL") == "vibe"
     assert resolve_agent_name("qwen-cli") == "qwen"
     assert resolve_agent_name("QWEN-CLI") == "qwen"
     assert resolve_agent_name("deepseek") == "dsh"
@@ -213,8 +215,8 @@ def test_copilot_spec_has_ikwid_args() -> None:
     assert spec.ikwid_args == ["--yolo"]
 
 
-def test_devstral_spec_has_ikwid_args() -> None:
-    spec = get_agent_spec("devstral")
+def test_vibe_spec_has_ikwid_args() -> None:
+    spec = get_agent_spec("vibe")
     assert spec.ikwid_args == ["--auto-approve"]
 
 
@@ -272,7 +274,7 @@ def test_agents_without_llm_env_map() -> None:
     for agent in (
         "gemini",
         "opencode",
-        "devstral",
+        "vibe",
         "auggie",
         "copilot",
         "pi",
@@ -304,7 +306,7 @@ def test_acp_commands_match_contract() -> None:
         "copilot": ["copilot", "--acp", "--stdio"],
         "auggie": ["auggie", "--acp"],
         "jcode": ["jcode", "acp"],
-        "devstral": ["vibe-acp"],
+        "vibe": ["vibe-acp"],
         "hermes": ["hermes-acp"],
     }
     for agent in SUPPORTED_AGENTS:
@@ -321,10 +323,10 @@ def test_in_image_acp_commands_extend_the_launch_command() -> None:
     ``--acp`` replaces ``spec.command`` wholesale, so an ACP command that spells
     the binary differently silently drops launcher workarounds (gemini's
     ``env HOME=... node /usr/local/bin/gemini`` shebang bypass, for one).
-    Agents driven by an external adapter (npx packages, devstral's ``vibe-acp``
+    Agents driven by an external adapter (npx packages, vibe's ``vibe-acp``
     console script) are exempt.
     """
-    external_adapters = {"claude", "codex", "devstral", "pi", "hermes"}
+    external_adapters = {"claude", "codex", "vibe", "pi", "hermes"}
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)
         if spec.acp_command is None or agent in external_adapters:

@@ -132,7 +132,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
 def test_headless_prefix_none_for_unsupported_agents() -> None:
     assert AGENT_SPECS["gemini"].headless_prefix is None
     assert AGENT_SPECS["opencode"].headless_prefix is None
-    assert AGENT_SPECS["devstral"].headless_prefix is None
+    assert AGENT_SPECS["vibe"].headless_prefix is None
     assert AGENT_SPECS["copilot"].headless_prefix is None
 
 

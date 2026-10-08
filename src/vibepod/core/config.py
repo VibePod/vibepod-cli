@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from vibepod.constants import (
     CONFIG_DIR,
     DEFAULT_ALIASES,
     DEFAULT_IMAGES,
+    LEGACY_AGENT_IDS,
     PROJECT_CONFIG_FILE,
 )
 
@@ -63,9 +65,9 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
-            "devstral": {
+            "vibe": {
                 "enabled": True,
-                "image": DEFAULT_IMAGES["devstral"],
+                "image": DEFAULT_IMAGES["vibe"],
                 "auto_pull": None,
                 "env": {},
                 "volumes": [],
@@ -211,6 +213,33 @@ def ensure_config_dirs() -> None:
     (config_root / "agents").mkdir(parents=True, exist_ok=True)
 
 
+def _merge_agent_config(legacy: Any, current: Any) -> Any:
+    if isinstance(legacy, dict) and isinstance(current, dict):
+        return deep_merge(legacy, current)
+    return current
+
+
+def _merge_integration_entries(legacy: Any, current: Any) -> Any:
+    if isinstance(legacy, list) and isinstance(current, list):
+        return [*legacy, *(entry for entry in current if entry not in legacy)]
+    return current
+
+
+def _migrate_legacy_agent_keys(mapping: dict[str, Any], merge: Callable[[Any, Any], Any]) -> None:
+    """Move entries keyed by a legacy agent id onto the canonical id, in place.
+
+    The canonical entry wins on conflicts; a legacy entry alone is kept as is.
+    """
+    for legacy_id, canonical_id in LEGACY_AGENT_IDS.items():
+        if legacy_id not in mapping:
+            continue
+        legacy = mapping.pop(legacy_id)
+        if canonical_id in mapping:
+            mapping[canonical_id] = merge(legacy, mapping[canonical_id])
+        else:
+            mapping[canonical_id] = legacy
+
+
 def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -218,7 +247,17 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not content.strip():
         return {}
     loaded = yaml.safe_load(content)
-    return loaded if isinstance(loaded, dict) else {}
+    if not isinstance(loaded, dict):
+        return {}
+    # Normalize each layer before merging so project overrides retain precedence.
+    agents = loaded.get("agents")
+    if isinstance(agents, dict):
+        _migrate_legacy_agent_keys(agents, _merge_agent_config)
+    herdr = loaded.get("herdr")
+    integrations = herdr.get("integrations") if isinstance(herdr, dict) else None
+    if isinstance(integrations, dict):
+        _migrate_legacy_agent_keys(integrations, _merge_integration_entries)
+    return loaded
 
 
 def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

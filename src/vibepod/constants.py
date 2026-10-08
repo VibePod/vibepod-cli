@@ -22,7 +22,7 @@ SUPPORTED_AGENTS = (
     "claude",
     "gemini",
     "opencode",
-    "devstral",
+    "vibe",
     "auggie",
     "copilot",
     "codex",
@@ -40,7 +40,7 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "c": "claude",
     "g": "gemini",
     "o": "opencode",
-    "d": "devstral",
+    "d": "vibe",
     "a": "auggie",
     "p": "copilot",
     "x": "codex",
@@ -53,8 +53,15 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "h": "hermes",
 }
 
+#: Former canonical agent ids. Existing state (config keys, overlay dirs,
+#: container labels, task rows) may still carry them, so lookups by the
+#: canonical id must also match these.
+LEGACY_AGENT_IDS: dict[str, str] = {
+    "devstral": "vibe",
+}
+
 AGENT_ALIASES: dict[str, str] = {
-    "vibe": "devstral",
+    **LEGACY_AGENT_IDS,
     # The issue that added this agent calls it "qwen-cli"; the runtime
     # binary and image are `qwen` (Qwen Code, npm @qwen-code/qwen-code),
     # so `qwen` is the canonical id and `qwen-cli` is accepted as an alias.
@@ -63,11 +70,21 @@ AGENT_ALIASES: dict[str, str] = {
     "deepseek-harness": "dsh",
 }
 
+
+def agent_ids(agent: str) -> tuple[str, ...]:
+    """Canonical *agent* id followed by any legacy ids it was stored under."""
+    return (
+        agent,
+        *(legacy for legacy, canonical in LEGACY_AGENT_IDS.items() if canonical == agent),
+    )
+
+
 IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_NAMESPACE",
     "VP_IMAGE_CLAUDE",
     "VP_IMAGE_GEMINI",
     "VP_IMAGE_OPENCODE",
+    "VP_IMAGE_VIBE",
     "VP_IMAGE_DEVSTRAL",
     "VP_IMAGE_AUGGIE",
     "VP_IMAGE_COPILOT",
@@ -115,9 +132,12 @@ def get_default_images() -> dict[str, str]:
             "VP_IMAGE_OPENCODE",
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/opencode:latest",
         ),
-        "devstral": os.environ.get(
-            "VP_IMAGE_DEVSTRAL",
-            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/devstral:latest",
+        "vibe": os.environ.get(
+            "VP_IMAGE_VIBE",
+            os.environ.get(
+                "VP_IMAGE_DEVSTRAL",
+                f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/devstral:latest",
+            ),
         ),
         "auggie": os.environ.get(
             "VP_IMAGE_AUGGIE",

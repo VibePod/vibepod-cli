@@ -113,11 +113,11 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         },
         acp_command=["opencode", "acp"],
     ),
-    "devstral": AgentSpec(
-        "devstral",
+    "vibe": AgentSpec(
+        "vibe",
         "mistral",
-        DEFAULT_IMAGES["devstral"],
-        "devstral",
+        DEFAULT_IMAGES["vibe"],
+        "devstral",  # Preserve existing credentials and sessions on rename.
         None,
         "/config",
         {"HOME": "/config", "WORKSPACE_PATH": "/workspace"},
@@ -125,7 +125,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         run_as_host_user=True,
         ikwid_args=["--auto-approve"],
         # Separate console script shipped by the same mistral-vibe package,
-        # not a flag on `devstral`.
+        # not a flag on `vibe`.
         acp_command=["vibe-acp"],
     ),
     "auggie": AgentSpec(
@@ -302,7 +302,7 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # --yolo is never swallowed by it.
         headless_prefix=["-z"],
         # `hermes-acp` is a separate console script from the same wheel (like
-        # devstral's `vibe-acp`), not a flag on `hermes`, so it does not extend
+        # vibe's `vibe-acp`), not a flag on `hermes`, so it does not extend
         # spec.command. The image installs the package's [acp] extra, which
         # provides the `acp` module the adapter imports at startup.
         acp_command=["hermes-acp"],
