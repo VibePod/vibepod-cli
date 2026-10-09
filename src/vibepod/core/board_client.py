@@ -196,6 +196,32 @@ class BoardClient:
         result: dict[str, Any] = self.request("GET", f"/api/board/{_ref(card)}/reviews")
         return result
 
+    # --- push requests --------------------------------------------------------------
+
+    def claim_push_request(self, request: str, assignee: str) -> dict[str, Any]:
+        """Claims a request to push a task's branch, for a few minutes. Refused with 409 when
+        another worker holds it or it is finished."""
+        result = self.request(
+            "POST",
+            f"/api/board/push-requests/{_ref(request)}/claim",
+            {"assignee": assignee},
+        )
+        return _push_request(result)
+
+    def report_push_request(
+        self,
+        request: str,
+        assignee: str,
+        status: str,
+        pushed_sha: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """Says how the push of a claimed request went: `pushed` with the commit pushed, or
+        `failed` with why."""
+        body = _body(assignee=assignee, status=status, pushedSha=pushed_sha, error=error)
+        result = self.request("POST", f"/api/board/push-requests/{_ref(request)}/result", body)
+        return _push_request(result)
+
     # --- workers --------------------------------------------------------------------
 
     def register_worker(
@@ -253,6 +279,29 @@ class BoardClient:
             _body(**report),
         )
         return _item(result)
+
+
+def _push_request(result: Any) -> dict[str, Any]:
+    """A push request as the board answers with it: bare, or as the `item` of the reply."""
+    if isinstance(result, dict) and isinstance(result.get("item"), dict):
+        item: dict[str, Any] = result["item"]
+        return item
+    return result if isinstance(result, dict) else {}
+
+
+def push_requests(reply: Any) -> list[dict[str, Any]]:
+    """The requests to push a branch a heartbeat reply carries: none from a board that does
+    not know push requests."""
+    items = reply.get("pushRequests") if isinstance(reply, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict) and item.get("id")]
+
+
+def verdict_push_request(reply: Any) -> dict[str, Any] | None:
+    """The request to push the approved branch a review verdict's reply carries, if any."""
+    item = reply.get("pushRequest") if isinstance(reply, dict) else None
+    return item if isinstance(item, dict) and item.get("id") else None
 
 
 def _error_message(exc: urllib.error.HTTPError) -> str:
