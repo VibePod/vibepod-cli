@@ -638,3 +638,214 @@ def _has_identity(path: Path) -> bool:
         if result.returncode != 0 or not result.stdout.strip():
             return False
     return True
+
+
+# --- pushing a branch ------------------------------------------------------------------
+
+# How long a push may take before it is given up.
+PUSH_TIMEOUT_SECONDS = 120
+# Variables that would make git or ssh ask someone for a password: a background worker has
+# nobody to answer, so it fails instead of waiting for an answer.
+PROMPT_ENV = frozenset({"GIT_ASKPASS", "SSH_ASKPASS"})
+# The longest error a failed push reports.
+PUSH_ERROR_CHARS = 300
+_SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", re.IGNORECASE)
+# Credentials in a URL, such as https://user:token@host/…, kept out of what is reported.
+_URL_CREDENTIALS = re.compile(r"(?<=://)[^/@\s]+@")
+
+
+class PushError(GitError):
+    """A push that did not go through, with a short reason fit to report: non-fast-forward,
+    authentication, network, missing commit or another refusal."""
+
+
+def normalize_remote_url(url: str) -> str:
+    """A remote URL reduced to host and path, so that the https and ssh forms of one GitHub
+    repository compare equal: `https://github.com/Owner/Repo.git`,
+    `git@github.com:owner/repo` and `ssh://git@github.com/owner/repo` all become
+    `github.com/owner/repo`."""
+    text = url.strip().lower()
+    scheme, sep, rest = text.partition("://")
+    if sep:
+        authority, _, path = rest.partition("/")
+        host = authority.rpartition("@")[2]
+        # A port belongs to the transport, not to the repository.
+        if scheme in {"ssh", "git+ssh", "https", "http", "git"}:
+            host = host.split(":", 1)[0]
+    elif ":" in text and not re.match(r"[a-z]:[\\/]", text):
+        # scp-like syntax: [user@]host:path.
+        authority, _, path = text.partition(":")
+        host = authority.rpartition("@")[2]
+    else:
+        return text.rstrip("/\\").removesuffix(".git")
+    path = path.strip("/").removesuffix(".git").rstrip("/")
+    return f"{host}/{path}"
+
+
+def remotes(repo: Path) -> dict[str, str]:
+    """The repository's remotes and their URLs."""
+    result = _run(repo, "config", "-z", "--get-regexp", r"^remote\..*\.url$")
+    found: dict[str, str] = {}
+    for entry in result.stdout.split("\0"):
+        key, _, url = entry.partition("\n")
+        name = key[len("remote.") : -len(".url")] if key.startswith("remote.") else ""
+        if name and url:
+            found.setdefault(name, url)
+    return found
+
+
+def push_remote(repo: Path, remote_url: str | None) -> str:
+    """The remote to push to: the one whose URL is the given one, else `origin`."""
+    if remote_url:
+        wanted = normalize_remote_url(remote_url)
+        for name, url in remotes(repo).items():
+            if normalize_remote_url(url) == wanted:
+                return name
+    return "origin"
+
+
+def push_env(hidden: tuple[str, ...] = (), ssh_configured: bool = False) -> dict[str, str]:
+    """The environment for a push: no variable that points git elsewhere or would make it
+    prompt, no board setting, and no value in `hidden`, such as the board token. Terminal
+    prompts are off, and ssh fails rather than asking for a passphrase or host key, unless
+    the environment or the repository (`ssh_configured`) says how to run it."""
+    env = {
+        key: value
+        for key, value in git_env().items()
+        if key not in PROMPT_ENV
+        and not key.startswith("VP_BOARD_")
+        and not (value and value in hidden)
+    }
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"
+    env["SSH_ASKPASS_REQUIRE"] = "never"
+    if not ssh_configured and "GIT_SSH_COMMAND" not in env and "GIT_SSH" not in env:
+        env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    return env
+
+
+def push_branch(
+    repo: Path,
+    branch: str,
+    commit: str | None,
+    remote_url: str | None = None,
+    *,
+    timeout: float = PUSH_TIMEOUT_SECONDS,
+    hidden: tuple[str, ...] = (),
+) -> str:
+    """Pushes `commit`, or the branch's tip when None, to `refs/heads/<branch>` on the remote
+    whose URL is `remote_url`, else `origin`, and says the commit pushed. Never forced: a
+    remote branch the commit does not continue is left as it is, and the push fails as
+    non-fast-forward. Pushed from the repository itself, with its remotes and the user's git
+    credentials; hooks do not run, and nothing prompts. Raises `PushError` with a short
+    reason."""
+    if branch.startswith("-") or not is_valid_branch_name(repo, branch):
+        raise PushError(f"invalid branch name: {branch}")
+    if commit:
+        if not _SHA.fullmatch(commit) or not commit_exists(repo, commit):
+            raise PushError(f"missing commit: {commit[:12]} is not in the repository")
+        sha = git(repo, "rev-parse", "--verify", f"{commit}^{{commit}}")
+    else:
+        found = branch_commit(repo, branch)
+        if found is None:
+            raise PushError(f"missing commit: there is no branch {branch} in the repository")
+        sha = found
+    remote = push_remote(repo, remote_url)
+    ssh_configured = bool(_run(repo, "config", "core.sshCommand").stdout.strip())
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                *SAFE_CONFIG,
+                # No askpass program either: git then fails where it would ask.
+                "-c",
+                "core.askPass=",
+                "-c",
+                "push.recurseSubmodules=no",
+                "-c",
+                "push.followTags=false",
+                "push",
+                "--porcelain",
+                "--no-verify",
+                "--no-follow-tags",
+                "--recurse-submodules=no",
+                "--",
+                remote,
+                f"{sha}:refs/heads/{branch}",
+            ],
+            cwd=repo,
+            env=push_env(hidden, ssh_configured),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PushError(
+            f"network: the push to {remote} timed out after {int(timeout)}s",
+        ) from exc
+    except OSError as exc:
+        raise PushError(f"git could not run: {exc}") from exc
+    if result.returncode != 0:
+        raise PushError(push_failure(remote, branch, f"{result.stdout}\n{result.stderr}"))
+    return sha
+
+
+# What git and the transports say when a push fails, by the kind of failure.
+_NON_FAST_FORWARD = re.compile(r"non-fast-forward|\(fetch first\)|\[rejected\]", re.IGNORECASE)
+_AUTH = re.compile(
+    r"authentication failed|could not read (?:username|password)|terminal prompts disabled"
+    r"|permission denied|permission to .* denied|invalid username or password|\b403\b|\b401\b"
+    r"|host key verification failed|requested url returned error: 40[13]",
+    re.IGNORECASE,
+)
+_NETWORK = re.compile(
+    r"could not resolve host|could not resolve hostname|connection (?:refused|reset|timed out)"
+    r"|timed out|network is unreachable|failed to connect|unable to access|empty reply"
+    r"|could not read from remote repository|the remote end hung up",
+    re.IGNORECASE,
+)
+_NO_REMOTE = re.compile(r"does not appear to be a git repository|no such remote", re.IGNORECASE)
+_REMOTE_REFUSED = re.compile(r"\[remote rejected\]\s*\(([^)]*)\)", re.IGNORECASE)
+
+
+def push_failure(remote: str, branch: str, output: str) -> str:
+    """A short reason for a failed push from git's output, without credentials."""
+    text = _URL_CREDENTIALS.sub("***@", output)
+    if _NON_FAST_FORWARD.search(text) and "remote rejected" not in text.lower():
+        reason = (
+            f"non-fast-forward: {branch} on {remote} has commits the pushed commit does not "
+            "contain; not forcing it"
+        )
+    elif _AUTH.search(text):
+        reason = (
+            f"authentication: {remote} refused the credentials, or none are set up for git "
+            "on this host"
+        )
+    elif _NO_REMOTE.search(text):
+        reason = f"no remote: the repository has no remote {remote}"
+    elif _NETWORK.search(text):
+        reason = f"network: {remote} could not be reached"
+    elif match := _REMOTE_REFUSED.search(text):
+        reason = f"refused by {remote}: {match.group(1).strip()}"
+    else:
+        lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not line.startswith(("To ", "Done"))
+        ]
+        reason = f"push failed: {lines[-1] if lines else 'git gave no reason'}"
+    detail = "" if reason.startswith("non-fast-forward") else _first_error(text)
+    if detail and detail not in reason:
+        reason += f" ({detail})"
+    return reason[:PUSH_ERROR_CHARS]
+
+
+def _first_error(text: str) -> str:
+    """git's own first error line, such as `fatal: …`, if any."""
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(("fatal:", "error:", "remote:", "ERROR:")):
+            return line
+    return ""
