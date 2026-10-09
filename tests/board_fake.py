@@ -9,6 +9,11 @@ in Review with the commit its last hand-over named, several reviewers may hold o
 a verdict must name that commit. Distinct approvals of it, as many as the project requires,
 move the task to PR ready; a rework verdict sends it back to Planned with the feedback and
 ends the other open reviews, whose workers are told to cancel with their next heartbeat.
+
+Push requests follow the VP-137 contract: a request to push a card's branch, created by Open PR
+(`POST /api/board/{card}/push-request`) or by the approval that makes a task ready for a PR,
+which comes pre-assigned to its reviewer in the verdict's reply. Heartbeat replies list the
+pending requests a worker may serve; a worker claims one, pushes and reports the result.
 """
 
 from __future__ import annotations
@@ -17,11 +22,23 @@ import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 TOKEN = "vbp_test-token"
+PUSH_LEASE_SECONDS = 5 * 60
+# The most push requests a heartbeat reply lists.
+PUSH_REQUESTS_PER_HEARTBEAT = 5
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(value: datetime) -> str:
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 @dataclass
@@ -53,6 +70,13 @@ class FakeBoard:
     refused_verdict: str | None = None
     # Answers every request with a redirect to this URL.
     redirect: str | None = None
+    # Push requests, oldest first. False plays a board from before push requests: no
+    # `pushRequests` in heartbeat replies, no `pushRequest` in verdict replies, and no
+    # push-request endpoints.
+    push_requests: list[dict[str, Any]] = field(default_factory=list)
+    push_supported: bool = True
+    # The project setting that makes an approval ask its reviewer to push the branch.
+    push_approved_branches: bool = True
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     # --- setup ----------------------------------------------------------------------
@@ -96,6 +120,26 @@ class FakeBoard:
             entry["actor"] = actor
         self.history.setdefault(task_id, []).insert(0, entry)
 
+    def request_push(
+        self,
+        key: str,
+        open_pr: dict[str, Any] | None = None,
+        head_sha: str | None = None,
+    ) -> dict[str, Any]:
+        """A push request for the card's branch, as Open PR makes it."""
+        status, payload = self._create_push_request(self.card(key)["id"], {"openPr": open_pr})
+        assert status == 201, payload
+        if head_sha is not None:
+            self.push_request(payload["id"])["headSha"] = head_sha
+        return self._shown(self.push_request(payload["id"]))
+
+    def push_request(self, request_id: str) -> dict[str, Any]:
+        return next(r for r in self.push_requests if r["id"] == request_id)
+
+    def lapse_push_lease(self, request_id: str) -> None:
+        """Lets the request's lease run out."""
+        self.push_request(request_id)["leaseExpiresAt"] = _iso(_now() - timedelta(seconds=1))
+
     def card(self, key_or_id: str) -> dict[str, Any]:
         task = self.task(key_or_id)
         return self.cards[task["id"]]
@@ -124,6 +168,19 @@ class FakeBoard:
             body = body or {}
             if parts[:3] == ["api", "board", "claim"]:
                 return self._claim(body)
+            if self.push_supported and parts[:3] == ["api", "board", "push-requests"]:
+                if len(parts) == 5 and parts[4] == "claim" and method == "POST":
+                    return self._claim_push_request(parts[3], body)
+                if len(parts) == 5 and parts[4] == "result" and method == "POST":
+                    return self._push_result(parts[3], body)
+            if (
+                self.push_supported
+                and parts[:2] == ["api", "board"]
+                and parts[3:4] == ["push-request"]
+            ):
+                if method == "POST":
+                    return self._create_push_request(parts[2], body)
+                return self._latest_push_request(parts[2])
             if parts[:2] == ["api", "board"] and parts[3:] == ["reviews"] and method == "GET":
                 return 200, self._review_state(self.task(parts[2]))
             if parts[:2] == ["api", "board"] and parts[3:] == ["review", "renew"]:
@@ -376,12 +433,20 @@ class FakeBoard:
             review["feedback"] = note or None
             return 200, self._review_state(task)
         review.update(open=False, verdict=verdict, feedback=note or None)
+        push_request: dict[str, Any] | None = None
         if verdict == "approve":
             approved = self.approvers(task["id"])
             self.event(task["id"], "approved", f"Approved by {reviewer}", reviewer)
             if len(approved) >= self.required_approvals:
                 self._end_other_reviews(task["id"], review, "the task is ready for a PR")
                 card.update(column="pr_ready", reviewRounds=0)
+                if self.push_supported and self.push_approved_branches:
+                    push_request = self._new_push_request(
+                        task,
+                        "approved",
+                        head_sha=review["headSha"],
+                        assignee=reviewer,
+                    )
         elif verdict == "rework":
             self._end_other_reviews(task["id"], review, f"{reviewer} requested rework")
             card["reviewRounds"] += 1
@@ -395,7 +460,10 @@ class FakeBoard:
             self._end_other_reviews(task["id"], review, f"{reviewer} asked for input")
             card.update(blockedReason=f"Needs input: {note}", question=note)
             self.event(task["id"], "question", note, reviewer)
-        return 200, self._review_state(task)
+        state = self._review_state(task)
+        if self.push_supported:
+            state["pushRequest"] = dict(push_request) if push_request else None
+        return 200, state
 
     def _renew_review(self, ref: str, body: dict[str, Any]) -> tuple[int, Any]:
         review = self._held_review(ref, body.get("assignee"))
@@ -437,6 +505,126 @@ class FakeBoard:
         }
         return {key: value for key, value in state.items() if value is not None}
 
+    # --- push requests ------------------------------------------------------------------
+
+    def _new_push_request(
+        self,
+        task: dict[str, Any],
+        reason: str,
+        *,
+        head_sha: str | None = None,
+        assignee: str | None = None,
+        open_pr: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        card = self.cards[task["id"]]
+        now = _iso(_now())
+        request: dict[str, Any] = {
+            "id": f"push-{len(self.push_requests) + 1}",
+            "cardId": card["id"],
+            "taskKey": task["key"],
+            "branch": card.get("branchName"),
+            "headSha": head_sha,
+            "repositoryLocalPath": task.get("repositoryLocalPath"),
+            "repositoryRemoteUrl": task.get("repositoryRemoteUrl"),
+            "repository": task.get("repository"),
+            "reason": reason,
+            # A request made for a reviewer is theirs, claimed, until its lease runs out.
+            "status": "claimed" if assignee else "pending",
+            "assignee": assignee,
+            "leaseExpiresAt": (
+                _iso(_now() + timedelta(seconds=PUSH_LEASE_SECONDS)) if assignee else None
+            ),
+            "pushedSha": None,
+            "error": None,
+            "pullRequestUrl": None,
+            "createdAt": now,
+            "updatedAt": now,
+            "openPr": open_pr,
+        }
+        self.push_requests.append(request)
+        return request
+
+    def _sweep_push_leases(self) -> None:
+        """Requests whose lease ran out go back to pending, for any worker."""
+        now = _iso(_now())
+        for request in self.push_requests:
+            lapsed = request["leaseExpiresAt"] and request["leaseExpiresAt"] <= now
+            if request["status"] in {"pending", "claimed"} and lapsed:
+                request.update(status="pending", assignee=None, leaseExpiresAt=None)
+
+    def _shown(self, request: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in request.items() if key != "openPr"}
+
+    def _create_push_request(self, ref: str, body: dict[str, Any]) -> tuple[int, Any]:
+        task = self.task(ref)
+        card = self.cards[task["id"]]
+        if not card.get("branchName"):
+            return 409, {"error": f"Task {task['key']} has no branch to push"}
+        self._sweep_push_leases()
+        if any(
+            r["cardId"] == card["id"] and r["status"] in {"pending", "claimed"}
+            for r in self.push_requests
+        ):
+            return 409, {"error": f"A push of {card['branchName']} is already requested"}
+        request = self._new_push_request(task, "open_pr", open_pr=body.get("openPr"))
+        return 201, self._shown(request)
+
+    def _latest_push_request(self, ref: str) -> tuple[int, Any]:
+        card = self.card(ref)
+        self._sweep_push_leases()
+        found = [r for r in self.push_requests if r["cardId"] == card["id"]]
+        if not found:
+            return 404, {"error": "No push request for this card"}
+        return 200, self._shown(found[-1])
+
+    def _pending_push_requests(self, worker: str | None) -> list[dict[str, Any]]:
+        self._sweep_push_leases()
+        pending = [
+            self._shown(request)
+            for request in self.push_requests
+            if request["status"] == "pending" and request["assignee"] in {None, worker}
+        ]
+        return pending[:PUSH_REQUESTS_PER_HEARTBEAT]
+
+    def _claim_push_request(self, request_id: str, body: dict[str, Any]) -> tuple[int, Any]:
+        request = next((r for r in self.push_requests if r["id"] == request_id), None)
+        if request is None:
+            return 404, {"error": f"Push request not found: {request_id}"}
+        self._sweep_push_leases()
+        claimer = body.get("assignee")
+        if request["status"] in {"pushed", "failed"}:
+            return 409, {"error": f"The push request is {request['status']}"}
+        if request["assignee"] and request["assignee"] != claimer:
+            return 409, {"error": f"The push request is held by {request['assignee']}"}
+        request.update(
+            status="claimed",
+            assignee=claimer,
+            leaseExpiresAt=_iso(_now() + timedelta(seconds=PUSH_LEASE_SECONDS)),
+            updatedAt=_iso(_now()),
+        )
+        return 200, self._shown(request)
+
+    def _push_result(self, request_id: str, body: dict[str, Any]) -> tuple[int, Any]:
+        request = next((r for r in self.push_requests if r["id"] == request_id), None)
+        if request is None:
+            return 404, {"error": f"Push request not found: {request_id}"}
+        self._sweep_push_leases()
+        if request["status"] != "claimed" or request["assignee"] != body.get("assignee"):
+            return 409, {"error": f"The push request is not held by {body.get('assignee')}"}
+        status = body.get("status")
+        if status not in {"pushed", "failed"}:
+            return 400, {"error": "Invalid request body"}
+        request.update(status=status, leaseExpiresAt=None, updatedAt=_iso(_now()))
+        if status == "pushed":
+            request["pushedSha"] = body.get("pushedSha")
+            card = next(c for c in self.cards.values() if c["id"] == request["cardId"])
+            card.update(branchPushedSha=body.get("pushedSha"), branchPushedAt=_iso(_now()))
+            if request["reason"] == "open_pr" and request.get("openPr") is not None:
+                request["pullRequestUrl"] = "https://github.com/VibePod/app/pull/1"
+        else:
+            request["error"] = body.get("error")
+        return 200, self._shown(request)
+
     def _register(self, body: dict[str, Any]) -> tuple[int, Any]:
         worker_id = f"worker-{len(self.workers) + 1}"
         self.workers[worker_id] = {"id": worker_id, "status": "idle", "mode": "implement", **body}
@@ -466,11 +654,14 @@ class FakeBoard:
             return 409, {"error": "Worker is signed off; register again to reconnect"}
         worker.update(status=body.get("status"), task=body.get("task"), step=body.get("step"))
         self.heartbeats.append(dict(body))
-        return 200, {
+        reply = {
             "item": worker,
             "instructions": self._instructions(worker_id, body),
             "heartbeatSeconds": 15,
         }
+        if self.push_supported:
+            reply["pushRequests"] = self._pending_push_requests(worker.get("name"))
+        return 200, reply
 
     def _instructions(self, worker_id: str, body: dict[str, Any]) -> list[dict[str, Any]]:
         instructions: list[dict[str, Any]] = []
