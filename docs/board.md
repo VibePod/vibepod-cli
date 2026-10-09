@@ -105,6 +105,7 @@ vp board work VP --agent codex --repo ~/src/app --poll 2m
 | `--branch-template` | The branch name, from `{issue}` (GitHub issue number), `{number}` (task number), `{key}` (`vp-12`) and `{project}` (`vp`). Defaults to `issue-{issue}`; a task without a GitHub issue gets `{key}`, such as `vp-12`. |
 | `--existing continue\|refuse` | When the task's branch exists, such as from an earlier attempt: continue on it (default) or refuse, which blocks the task. |
 | `--keep-worktree` | Keep the task's clone after the hand-over or review; by default it is removed, and the branch stays in the repository. |
+| `--no-push` | Never push a branch for the board: neither an approved one nor on request (see [Pushing to GitHub](#pushing-to-github)). `board.push: false` in the config does the same. |
 | `--profile`, `--provider`, `--ikwid`, `-e/--env`, `--network`, `--no-overlay` | Passed to every agent run, as for `vp task create`. |
 | `--timeout 2h` | Time limit per task (`none` for no limit). |
 | `--verify` | A command that must pass in the task's clone before the task moves to Review. In review mode, a failing command sends the task back for rework. |
@@ -216,6 +217,51 @@ implementation workers, and a review the board cannot renew is given up before
 its lease runs out. `--branch-template`, `--existing`, `--on-fail` and
 `--max-attempts` have no meaning for a review and are refused with
 `--mode review`.
+
+## Pushing to GitHub
+
+Workers commit on local branches; a pull request needs the branch on GitHub.
+The board has no access to your repositories, so the workers push, once, when
+the task is ready for its pull request, and the board only coordinates:
+
+```text
+Review ──approve──▶ PR ready ──push──▶ on GitHub ──▶ Open PR
+```
+
+- **On approval.** When a reviewer's approval completes the approvals a task
+  needs, and the project's **push approved branches** setting is on (the
+  default), the board's reply to the verdict asks that reviewer to push. It
+  pushes the exact commit it approved to the task's branch and reports the
+  result; the card then shows the branch as on GitHub. If it does not report
+  within a few minutes, the request goes to the other workers.
+- **On request.** **Open PR** on a PR ready card whose branch is not on GitHub
+  offers **Push and open PR**. Any worker of the project, implementing or
+  reviewing, picks the request up from its next heartbeat when it has the
+  task's repository (the same `--repo`, or the task's local path on the
+  allowed directories list) and the commit to push. It claims the request,
+  pushes, reports, and the board opens the pull request. Workers serve one
+  request at a time, also while an agent runs; their heartbeats go on while
+  they push, and a request another worker claimed first is left to it.
+
+A push goes from the repository itself, not from a task's clone:
+`git push <remote> <commit>:refs/heads/<branch>`, to the remote whose URL is
+the card's repository URL (`https` and `ssh` forms of one repository match),
+else `origin`. It is never forced: when the branch on GitHub has commits the
+pushed one does not contain, the push fails as non-fast-forward and the
+branch is left as it is. Hooks do not run, git and ssh never prompt, and a
+push that takes over two minutes is given up. A failed push reports a short
+reason to the board: non-fast-forward, authentication, network, missing
+commit, or what GitHub refused. The board token never reaches git or the
+remote.
+
+The worker pushes with the git credentials of the user it runs as, so set
+them up on the worker's machine before relying on it: for `https` remotes, a
+credential helper, such as the one `gh auth setup-git` configures for the
+GitHub CLI; for `ssh` remotes, a key that loads without a passphrase prompt,
+such as from a running `ssh-agent`. Check with `git push --dry-run` in the
+repository. `--no-push`, or `board.push: false` in the config, keeps a worker
+from pushing anything; its requests wait for another worker. With no worker
+online, Open PR shows the `git push` command to run yourself.
 
 ## Safety
 

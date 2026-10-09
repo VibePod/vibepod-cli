@@ -184,6 +184,7 @@ llm:
 board:
   url: "" # Board URL, such as http://localhost:3000
   token: "" # Project-scoped board API token; never passed to agents
+  push: true # Push branches when the board asks; false is --no-push
 
 logging:
   enabled: true
