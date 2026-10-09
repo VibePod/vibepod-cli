@@ -15,6 +15,11 @@ The worker is registered with the board while it runs and reports what it does i
 Their replies carry the board's instructions: pause (take no new task), stop (end the run, give
 the task back and sign off) and cancel (end the run of a task the worker no longer holds).
 Heartbeats are sent from the worker's own wait loops, so it stays single-threaded.
+
+Workers also push branches to GitHub when the board asks: a reviewer pushes the commit it
+approved once its approval makes the task ready for a pull request, and any worker serves the
+push requests its heartbeats bring for a repository it has, one at a time. They push from the
+repository itself with the user's git credentials; the board coordinates only.
 """
 
 from __future__ import annotations
@@ -39,7 +44,12 @@ from pathlib import Path
 from typing import IO, Any, Protocol
 
 from vibepod.core import worktrees
-from vibepod.core.board_client import BoardApiError, BoardClient
+from vibepod.core.board_client import (
+    BoardApiError,
+    BoardClient,
+    push_requests,
+    verdict_push_request,
+)
 
 STEP_PREPARING = "preparing_workspace"
 STEP_AGENT = "agent_running"
@@ -227,6 +237,8 @@ class WorkOptions:
     max_attempts: int | None = None
     lease_seconds: int = 10 * 60
     usage_limit_wait_seconds: int = DEFAULT_USAGE_LIMIT_WAIT
+    # Push branches when the board asks: after an approval, and for its push requests.
+    push: bool = True
 
 
 @dataclass
@@ -237,6 +249,9 @@ class WorkSummary:
     # reviews that ended otherwise.
     approved: list[str] = field(default_factory=list)
     reworked: list[str] = field(default_factory=list)
+    # The branches pushed for the board, and those whose push failed.
+    pushed: list[str] = field(default_factory=list)
+    push_failed: list[str] = field(default_factory=list)
     ended_because: str = ""
 
 
@@ -662,6 +677,9 @@ class BoardWorker:
         self.stop_failed: str | None = None
         # When the claim on the current task was last claimed or renewed.
         self.renewed: float | None = None
+        # The push requests the last heartbeat reply brought, and whether one is being served.
+        self.push_queue: list[dict[str, Any]] = []
+        self._pushing = False
 
     @property
     def reviewing(self) -> bool:
@@ -704,6 +722,7 @@ class BoardWorker:
         processed = 0
         while True:
             self._redeliver()
+            self._serve_pushes()
             if self.stop_requested:
                 self.summary.ended_because = self.summary.ended_because or "Stopped from the board"
                 return
@@ -883,6 +902,9 @@ class BoardWorker:
         if working:
             self.renewed = sent
         self._apply(reply.get("instructions") or [])
+        # Served from the main loop's waits, never from here: a heartbeat may come from the
+        # keepalive thread.
+        self.push_queue = push_requests(reply)
 
     def _apply(self, instructions: Sequence[dict[str, Any]]) -> None:
         pause = next((item for item in instructions if item.get("type") == "pause"), None)
@@ -909,6 +931,7 @@ class BoardWorker:
         deadline = self.clock() + seconds
         while self.clock() < deadline and not self.stop_requested:
             self._heartbeat()
+            self._serve_pushes()
             self.sleep(min(self.poll_seconds, max(0.0, deadline - self.clock())))
 
     def _wait_for(
@@ -932,6 +955,9 @@ class BoardWorker:
                     self._stop(stop)
                     return None, ended
                 self._heartbeat()
+                # The agent or command works in its own clone meanwhile; the push is from the
+                # repository, with heartbeats going on.
+                self._serve_pushes()
                 # Quick commands finish without a full poll interval of waiting.
                 self.sleep(min(self.poll_seconds, 0.1 * 2 ** min(waited, 5)))
                 waited += 1
@@ -1833,19 +1859,28 @@ class BoardWorker:
             result.note = result.reason
         verdict, note, head_sha = result.verdict, result.note, result.head_sha
         delivered: bool | BoardApiError | None = None
+        # The board's reply to the verdict: where the task stands, and for the approval that
+        # makes it ready for a pull request, the request to push the approved commit.
+        replies: list[Any] = []
         if verdict is not None:
             stopped = "The worker was stopped from the board"
             sending = verdict
             judging = sending in {"approve", "rework", "needs_input"}
+
+            def send() -> None:
+                replies.append(
+                    self.client.submit_review(
+                        str(card["id"]),
+                        self.options.name,
+                        sending,
+                        head_sha,
+                        note,
+                    ),
+                )
+
             delivered = self._deliver(
                 f"Sending the review of {key}",
-                lambda: self.client.submit_review(
-                    str(card["id"]),
-                    self.options.name,
-                    sending,
-                    head_sha,
-                    note,
-                ),
+                send,
                 instead=(
                     (
                         f"Giving the review of {key} up",
@@ -1900,9 +1935,12 @@ class BoardWorker:
                         reason,
                     ),
                 )
+        approved_push: dict[str, Any] | None = None
         if verdict == "approve" and result.verdict is not None:
             self.summary.approved.append(key)
             self.say("success", f"Approved {key} at {(result.commit or '')[:12]}")
+            if delivered is True and replies:
+                approved_push = verdict_push_request(replies[-1])
         elif verdict == "rework" and result.verdict is not None:
             self.summary.reworked.append(key)
             self.say("success", f"Sent {key} back for rework")
@@ -1925,6 +1963,8 @@ class BoardWorker:
         self.task = None
         self.cancel_reason = None
         self._set("idle")
+        if approved_push is not None:
+            self._push_approved(approved_push)
 
     def _report_review(
         self,
@@ -1972,6 +2012,121 @@ class BoardWorker:
             f"Adding the review report to {key}",
             lambda: self.client.add_run_report(task_id, report),
         )
+
+    # --- pushing branches ------------------------------------------------------------
+
+    def _push_approved(self, request: dict[str, Any]) -> None:
+        """Pushes the commit this reviewer approved, as the board asked in its reply to the
+        approval. The request is this worker's for a few minutes; one it does not push goes
+        to the other workers of the project after that."""
+        if request.get("assignee") not in {None, self.options.name}:
+            return
+        branch = str(request.get("branch") or "")
+        if not self.options.push:
+            self.say("info", f"Not pushing {branch}: pushing is off; the board offers it to others")
+            return
+        if self._pushing:
+            return
+        self._pushing = True
+        try:
+            self._serve_push(request, held=request.get("status") == "claimed")
+        finally:
+            self._pushing = False
+
+    def _serve_pushes(self) -> None:
+        """Serves the push requests the last heartbeat brought, one at a time: those for a
+        repository this worker has and may work in, with the commit to push."""
+        if not self.options.push or self._pushing:
+            return
+        self._pushing = True
+        try:
+            while self.push_queue and not self.stop_requested:
+                request = self.push_queue.pop(0)
+                if request.get("status") in {None, "pending"}:
+                    self._serve_push(request)
+        finally:
+            self._pushing = False
+
+    def _serve_push(self, request: dict[str, Any], held: bool = False) -> None:
+        """Claims the request unless this worker `held` it already, pushes and reports how it
+        went. A request this worker cannot serve is passed over without a word, unless it holds
+        it: then it fails with why."""
+        request_id = str(request["id"])
+        assignee = request.get("assignee")
+        if assignee and assignee != self.options.name:
+            return
+        repo, problem = self._push_repository(request)
+        if repo is None and not held:
+            return
+        if not held:
+            try:
+                self.client.claim_push_request(request_id, self.options.name)
+            except BoardApiError as exc:
+                # Taken by another worker, or finished meanwhile: nothing to do.
+                if not (exc.is_conflict or exc.is_not_found):
+                    self.say("warning", f"Could not claim the push request: {exc.message}")
+                return
+        branch = str(request.get("branch") or "")
+        key = str(request.get("taskKey") or branch)
+        pushed: str | None = None
+        error: str | None = problem
+        if repo is not None:
+            self.say("info", f"Pushing {branch} of {key} to GitHub")
+            previous = (self.status, self.status_reason, self.step)
+            self._set(self.status, f"Pushing {branch} of {key}", self.step)
+            try:
+                with self._keepalive():
+                    pushed = worktrees.push_branch(
+                        repo,
+                        branch,
+                        str(request.get("headSha") or "") or None,
+                        str(request.get("repositoryRemoteUrl") or "") or None,
+                        hidden=self._hidden_values(),
+                    )
+            except worktrees.GitError as exc:
+                error = str(exc)
+            finally:
+                self._set(*previous)
+        status = "pushed" if pushed else "failed"
+        self._deliver(
+            f"Reporting the push of {branch}",
+            lambda: self.client.report_push_request(
+                request_id,
+                self.options.name,
+                status,
+                pushed,
+                None if pushed else error,
+            ),
+        )
+        if pushed:
+            self.summary.pushed.append(branch)
+            self.say("success", f"Pushed {branch} of {key} at {pushed[:12]}")
+        else:
+            self.summary.push_failed.append(branch)
+            self.say("warning", f"Could not push {branch} of {key}: {error}")
+
+    def _push_repository(self, request: dict[str, Any]) -> tuple[Path | None, str | None]:
+        """The repository to push the request's branch from, found and allowed as a task's
+        is, holding the commit to push; else None, and why."""
+        branch = str(request.get("branch") or "")
+        if not branch:
+            return None, "The request names no branch"
+        try:
+            repo = self._repository(request)
+        except (TaskProblem, worktrees.GitError) as exc:
+            return None, str(exc)
+        head = str(request.get("headSha") or "")
+        if head:
+            if not worktrees.commit_exists(repo, head):
+                return None, f"missing commit: {head[:12]} is not in {repo}"
+        elif worktrees.branch_commit(repo, branch) is None:
+            return None, f"missing commit: there is no branch {branch} in {repo}"
+        return repo, None
+
+    def _hidden_values(self) -> tuple[str, ...]:
+        """What must never reach git or a remote: the board token."""
+        token = str(getattr(self.client, "token", "") or "")
+        return (token,) if token else ()
 
     def _task_id(self) -> str:
         assert self.task is not None

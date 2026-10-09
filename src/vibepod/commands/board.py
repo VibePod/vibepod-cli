@@ -229,6 +229,15 @@ def _raise_interrupt(_signum: int, _frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
+def _push_enabled(config: dict[str, Any]) -> bool:
+    """Whether `board.push` lets the worker push branches for the board; on unless set off."""
+    board = config.get("board")
+    value = board.get("push", True) if isinstance(board, dict) else True
+    if isinstance(value, str):
+        return value.strip().lower() not in {"false", "no", "off", "0"}
+    return value is not False and value != 0
+
+
 def _repo_allowed(path: Path) -> bool:
     """A repository an agent may work in: on the allow list and not home or root."""
     return not is_protected_dir(path) and is_dir_allowed(path)
@@ -327,6 +336,14 @@ def board_work(
         bool,
         typer.Option("--keep-worktree", help="Keep task clones after the hand-over or review"),
     ] = False,
+    no_push: Annotated[
+        bool,
+        typer.Option(
+            "--no-push",
+            help="Do not push branches for the board: neither an approved one nor on request "
+            "(also board.push: false)",
+        ),
+    ] = False,
     profile: Annotated[
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
@@ -396,6 +413,10 @@ def board_work(
     With --mode review the worker claims tasks in Review instead, and the agent judges the
     work on the branch, in a clone of its own, without changing it: approve, or send it
     back for rework with feedback. A failing --verify command always sends it back.
+
+    When the board asks, the worker pushes branches to GitHub from the repository with your
+    git credentials: the commit a reviewer approved, and the branches of push requests, such
+    as for Open PR. --no-push turns that off.
     """
     reviewing = mode == WorkMode.REVIEW
     if reviewing:
@@ -480,6 +501,7 @@ def board_work(
         on_fail=(on_fail or OnFail.PLANNED).value,
         max_attempts=max_attempts,
         usage_limit_wait_seconds=usage_wait,
+        push=not no_push and _push_enabled(config),
     )
     runner = DockerAgentRunner(
         selected,
@@ -536,6 +558,11 @@ def board_work(
     else:
         info(
             f"Handed over {len(summary.handed_over)} task(s), gave back {len(summary.returned)}.",
+        )
+    if summary.pushed or summary.push_failed:
+        info(
+            f"Pushed {len(summary.pushed)} branch(es) for the board"
+            + (f"; {len(summary.push_failed)} push(es) failed." if summary.push_failed else "."),
         )
     if summary.ended_because.startswith(
         ("The agent could not be started", "The agent could not be stopped"),

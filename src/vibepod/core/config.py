@@ -204,6 +204,8 @@ def _default_config() -> dict[str, Any]:
         "board": {
             "url": "",
             "token": "",
+            # Push branches when the board asks (`vp board work --no-push` turns it off).
+            "push": True,
         },
         "aliases": DEFAULT_ALIASES.copy(),
     }

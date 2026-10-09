@@ -28,6 +28,7 @@ from vibepod.core.board_worker import (
     RunnerError,
     WorkerError,
     WorkOptions,
+    WorkSummary,
     branch_name,
     build_prompt,
     build_review_prompt,
@@ -1943,6 +1944,7 @@ def review(
 ) -> tuple[BoardWorker, list[tuple[str, str]]]:
     messages: list[tuple[str, str]] = []
     clock = options.pop("clock", None) or Clock()
+    allow_repo = options.pop("allow_repo", None)
     worker = BoardWorker(
         BoardClient(server.url, TOKEN),
         runner,
@@ -1958,6 +1960,7 @@ def review(
         say=lambda level, message: messages.append((level, message)),
         clock=clock,
         sleep=clock.sleep,
+        allow_repo=allow_repo,
     )
     worker.run()
     return worker, messages
@@ -3471,3 +3474,510 @@ def test_review_clones_are_detached_and_replaced(repo: Path, tmp_path: Path) -> 
     mounts = worktrees.agent_mounts(path, read_only=True)
     assert (str(path / ".git"), "/workspace/.git", "ro") in mounts
     assert {mode for _, _, mode in mounts} == {"ro"}
+
+
+# --- pushing branches for the board ----------------------------------------------------
+
+
+@pytest.fixture
+def github(tmp_path: Path) -> Path:
+    """A bare repository that plays the GitHub remote."""
+    path = tmp_path / "github" / "app.git"
+    path.mkdir(parents=True)
+    git(path, "init", "--quiet", "--bare", "--initial-branch=main")
+    return path
+
+
+def remote_branch(github: Path, branch: str) -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=github,
+        env=worktrees.git_env(),
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() or None
+
+
+def stop_once(done: Callable[[], bool]) -> Callable[[dict[str, Any]], list[dict[str, Any]]]:
+    """Heartbeat replies that stop the worker once `done` says so."""
+
+    def on_heartbeat(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"type": "stop"}] if done() else []
+
+    return on_heartbeat
+
+
+def test_an_approval_pushes_the_reviewed_commit_to_the_matching_remote(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    fork = tmp_path / "fork.git"
+    git(tmp_path, "init", "--quiet", "--bare", str(fork))
+    git(repo, "remote", "add", "origin", str(fork))
+    git(repo, "remote", "add", "upstream", str(github))
+    sha = handed_over(board, repo, repositoryRemoteUrl=f"{github}/")
+    # The branch moved on in the repository since the review started: the approved commit
+    # is what goes to GitHub.
+    git(repo, "checkout", "--quiet", "issue-7")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Not reviewed")
+    git(repo, "checkout", "--quiet", "main")
+
+    worker, messages = review(server, FakeRunner(says("approve", summary="Good.")), repo)
+
+    [request] = board.push_requests
+    assert (request["reason"], request["status"], request["pushedSha"]) == (
+        "approved",
+        "pushed",
+        sha,
+    )
+    # Pre-assigned to the reviewer: pushed without a claim, and reported.
+    assert board.requests("POST", "/api/board/push-requests/push-1/claim") == []
+    assert board.requests("POST", "/api/board/push-requests/push-1/result") == [
+        {"assignee": REVIEWER, "status": "pushed", "pushedSha": sha},
+    ]
+    assert remote_branch(github, "issue-7") == sha
+    assert remote_branch(fork, "issue-7") is None
+    assert board.card("VP-1")["branchPushedSha"] == sha
+    assert worker.summary.pushed == ["issue-7"]
+    assert ("success", f"Pushed issue-7 of VP-1 at {sha[:12]}") in messages
+
+
+def test_a_push_that_is_not_a_fast_forward_is_refused_and_reported(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(github))
+    sha = handed_over(board, repo)
+    # Someone pushed other work to the branch on GitHub.
+    git(repo, "checkout", "--quiet", "-b", "elsewhere", "main")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Other work")
+    other = git(repo, "rev-parse", "HEAD")
+    git(repo, "push", "--quiet", "origin", "elsewhere:refs/heads/issue-7")
+    git(repo, "checkout", "--quiet", "main")
+
+    worker, _ = review(server, FakeRunner(says("approve", summary="Good.")), repo)
+
+    [request] = board.push_requests
+    assert request["status"] == "failed"
+    assert request["error"].startswith("non-fast-forward: issue-7 on origin")
+    assert remote_branch(github, "issue-7") == other
+    assert "branchPushedSha" not in board.card("VP-1")
+    assert worker.summary.push_failed == ["issue-7"]
+    assert worker.summary.approved == ["VP-1"]
+    assert sha != other
+
+
+def test_an_approval_push_that_cannot_be_made_is_reported_as_failed(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(github))
+    handed_over(board, repo)
+    allowed = [True]
+
+    def approves_then_disallowed(path: Path, prompt: str) -> tuple[int, str]:
+        allowed[0] = False
+        return 0, result_block("approve", summary="Good.")
+
+    review(
+        server,
+        FakeRunner(approves_then_disallowed),
+        repo,
+        allow_repo=lambda path: allowed[0],
+    )
+
+    [request] = board.push_requests
+    assert request["status"] == "failed"
+    assert "is not allowed for agents" in request["error"]
+    assert remote_branch(github, "issue-7") is None
+
+
+def test_heartbeats_bring_push_requests_that_the_worker_serves(
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    import contextlib
+
+    git(repo, "remote", "add", "origin", str(github))
+    sha = handed_over(board, repo, repositoryLocalPath=str(repo))
+    board.card("VP-1")["column"] = "pr_ready"
+    request = board.request_push("VP-1", open_pr={"title": "Add the feature"})
+    assert (request["status"], request["reason"]) == ("pending", "open_pr")
+    alive: list[bool] = []
+    outside: list[str] = []
+    keepalive = BoardWorker._keepalive
+    push_branch = worktrees.push_branch
+
+    @contextlib.contextmanager
+    def tracked(self: BoardWorker):
+        with keepalive(self):
+            alive.append(True)
+            try:
+                yield
+            finally:
+                alive.pop()
+
+    def pushing(*args: Any, **kwargs: Any) -> str:
+        if not alive:
+            outside.append("push_branch")
+        assert kwargs["hidden"] == (TOKEN,)
+        return push_branch(*args, **kwargs)
+
+    monkeypatch.setattr(BoardWorker, "_keepalive", tracked)
+    monkeypatch.setattr(worktrees, "push_branch", pushing)
+    board.on_heartbeat = stop_once(lambda: board.push_request("push-1")["status"] != "pending")
+
+    worker, _ = work(server, FakeRunner(), None, poll_seconds=30.0)
+
+    served = board.push_request("push-1")
+    assert (served["status"], served["pushedSha"], served["assignee"]) == (
+        "pushed",
+        sha,
+        "claude@laptop",
+    )
+    assert served["pullRequestUrl"] == "https://github.com/VibePod/app/pull/1"
+    assert board.requests("POST", "/api/board/push-requests/push-1/claim") == [
+        {"assignee": "claude@laptop"},
+    ]
+    assert remote_branch(github, "issue-7") == sha
+    assert outside == []
+    assert worker.summary.pushed == ["issue-7"]
+    # The pushing showed in the worker's status on the board.
+    assert any(
+        (beat.get("statusReason") or "").startswith("Pushing issue-7") for beat in board.heartbeats
+    )
+
+
+def test_a_push_request_is_served_while_the_agent_works(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(github))
+    sha = handed_over(board, repo, title="Earlier work")
+    board.card("VP-1")["column"] = "pr_ready"
+    board.add_task("New work")
+
+    def requested(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") == "agent_running" and not board.push_requests:
+            board.request_push("VP-1")
+        return []
+
+    board.on_heartbeat = requested
+
+    worker, _ = work(server, FakeRunner(polls=400), repo, once=True)
+
+    assert board.push_request("push-1")["status"] == "pushed"
+    assert remote_branch(github, "issue-7") == sha
+    assert worker.summary.handed_over == ["VP-2"]
+    # Pushed before the run ended, while heartbeats named the task.
+    pushed_at = next(
+        index for index, (_, path, _) in enumerate(board.calls) if path.endswith("/result")
+    )
+    handed_at = next(
+        index for index, (_, path, _) in enumerate(board.calls) if path.endswith("/handover")
+    )
+    assert pushed_at < handed_at
+
+
+def test_push_requests_the_worker_cannot_serve_are_passed_over(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(github))
+    other = tmp_path / "other"
+    git(tmp_path, "clone", "--quiet", str(repo), str(other))
+    handed_over(board, repo, repositoryLocalPath=str(repo))
+    handed_over(board, repo, title="Other", repositoryLocalPath=str(other))
+    handed_over(board, repo, title="Elsewhere", repositoryLocalPath=str(tmp_path / "gone"))
+    handed_over(board, repo, title="Unknown")
+    git(other, "fetch", "--quiet", "origin", "issue-8:issue-8")
+    # A commit the repository does not have, a repository that is not allowed, one that is
+    # not there, and one the request does not name.
+    board.request_push("VP-1", head_sha="0123456789abcdef0123456789abcdef01234567")
+    board.request_push("VP-2")
+    board.request_push("VP-3")
+    board.request_push("VP-4")
+    beats: list[int] = []
+
+    def counted(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        beats.append(1)
+        return [{"type": "stop"}] if len(beats) > 3 else []
+
+    board.on_heartbeat = counted
+
+    work(
+        server,
+        FakeRunner(),
+        None,
+        poll_seconds=30.0,
+        allow_repo=lambda path: path == repo.resolve(),
+    )
+
+    assert len(beats) > 3
+    assert board.requests("POST", "/api/board/push-requests") == []
+    assert {request["status"] for request in board.push_requests} == {"pending"}
+    assert remote_branch(github, "issue-7") is None
+
+
+def test_a_push_request_another_worker_claimed_first_is_skipped(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(github))
+    handed_over(board, repo, repositoryLocalPath=str(repo))
+    board.request_push("VP-1")
+    handle = board.handle
+
+    def raced(method: str, path: str, body: dict[str, Any] | None) -> tuple[int, Any]:
+        if path.endswith("/claim") and "push-requests" in path:
+            handle(method, path, {"assignee": "codex@desktop"})
+        return handle(method, path, body)
+
+    board.handle = raced  # type: ignore[method-assign]
+    board.on_heartbeat = stop_once(lambda: board.push_request("push-1")["status"] != "pending")
+
+    worker, messages = work(server, FakeRunner(), None, poll_seconds=30.0)
+
+    assert board.push_request("push-1")["assignee"] == "codex@desktop"
+    assert board.requests("POST", "/api/board/push-requests/push-1/result") == []
+    assert remote_branch(github, "issue-7") is None
+    assert worker.summary.pushed == worker.summary.push_failed == []
+    assert not [message for level, message in messages if "push" in message.lower()]
+
+
+def test_no_push_leaves_approvals_and_push_requests_alone(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(github))
+    handed_over(board, repo, repositoryLocalPath=str(repo))
+    handed_over(board, repo, title="Other", repositoryLocalPath=str(repo))
+    board.card("VP-2")["column"] = "pr_ready"
+    board.request_push("VP-2")
+    board.on_heartbeat = stop_once(lambda: board.card("VP-1")["column"] == "pr_ready")
+
+    worker, _ = review(
+        server,
+        FakeRunner(says("approve", summary="Good.")),
+        repo,
+        poll_seconds=30.0,
+        push=False,
+    )
+
+    assert worker.summary.approved == ["VP-1"]
+    assert board.requests("POST", "/api/board/push-requests") == []
+    assert [request["status"] for request in board.push_requests] == ["pending", "claimed"]
+    assert remote_branch(github, "issue-7") is None
+    assert remote_branch(github, "issue-8") is None
+
+
+def test_a_board_without_push_requests_still_reviews_and_works(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    board.push_supported = False
+    git(repo, "remote", "add", "origin", str(github))
+    handed_over(board, repo)
+
+    worker, _ = review(server, FakeRunner(says("approve", summary="Good.")), repo)
+
+    assert worker.summary.approved == ["VP-1"]
+    assert board.card("VP-1")["column"] == "pr_ready"
+    assert board.push_requests == []
+    assert remote_branch(github, "issue-7") is None
+    assert worker.summary.pushed == worker.summary.push_failed == []
+
+
+def test_an_approval_without_a_push_request_pushes_nothing(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    board.push_approved_branches = False
+    git(repo, "remote", "add", "origin", str(github))
+    handed_over(board, repo)
+
+    worker, _ = review(server, FakeRunner(says("approve", summary="Good.")), repo)
+
+    [verdict_reply_request] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict_reply_request is not None
+    assert board.push_requests == []
+    assert remote_branch(github, "issue-7") is None
+    assert worker.summary.approved == ["VP-1"]
+
+
+def test_the_board_token_never_reaches_git(monkeypatch) -> None:
+    monkeypatch.setenv("VP_BOARD_TOKEN", TOKEN)
+    monkeypatch.setenv("SOMETHING", TOKEN)
+    monkeypatch.setenv("GIT_ASKPASS", "/usr/bin/askpass")
+    monkeypatch.setenv("SSH_ASKPASS", "/usr/bin/askpass")
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    monkeypatch.delenv("GIT_SSH", raising=False)
+
+    env = worktrees.push_env((TOKEN,))
+
+    assert TOKEN not in env.values()
+    assert not {"VP_BOARD_TOKEN", "GIT_ASKPASS", "SSH_ASKPASS"} & env.keys()
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes"
+    # ssh as the user or the repository set it up runs as it is.
+    assert "GIT_SSH_COMMAND" not in worktrees.push_env(ssh_configured=True)
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i key")
+    assert worktrees.push_env()["GIT_SSH_COMMAND"] == "ssh -i key"
+
+
+def test_push_helpers_push_only_forward_and_say_why_not(
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(github))
+    first = git(repo, "rev-parse", "HEAD")
+    assert worktrees.push_branch(repo, "issue-1", first) == first
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Second")
+    second = git(repo, "rev-parse", "HEAD")
+    git(repo, "branch", "issue-1")
+    # Without a commit named, the branch's tip; pushing it again changes nothing.
+    assert worktrees.push_branch(repo, "issue-1", None) == second
+    assert worktrees.push_branch(repo, "issue-1", None) == second
+    assert remote_branch(github, "issue-1") == second
+    with pytest.raises(worktrees.PushError, match="^non-fast-forward: issue-1 on origin"):
+        worktrees.push_branch(repo, "issue-1", first)
+    assert remote_branch(github, "issue-1") == second
+    with pytest.raises(worktrees.PushError, match="^missing commit: 0123456789ab"):
+        worktrees.push_branch(repo, "issue-1", "0123456789abcdef0123456789abcdef01234567")
+    with pytest.raises(worktrees.PushError, match="^missing commit: there is no branch"):
+        worktrees.push_branch(repo, "issue-2", None)
+    with pytest.raises(worktrees.PushError, match="^invalid branch name"):
+        worktrees.push_branch(repo, "--force", second)
+    git(repo, "remote", "set-url", "origin", "https://user:secret@127.0.0.1:9/app.git")
+    with pytest.raises(worktrees.PushError, match="^network: origin") as failed:
+        worktrees.push_branch(repo, "issue-1", second)
+    assert "secret" not in str(failed.value)
+    git(repo, "remote", "remove", "origin")
+    with pytest.raises(worktrees.PushError, match="^no remote"):
+        worktrees.push_branch(repo, "issue-1", second, "https://github.com/a/b")
+
+
+def test_the_push_remote_is_the_one_with_the_cards_url(repo: Path) -> None:
+    git(repo, "remote", "add", "origin", "git@github.com:me/app.git")
+    git(repo, "remote", "add", "upstream", "git@github.com:VibePod/App.git")
+
+    assert worktrees.push_remote(repo, "https://github.com/vibepod/app") == "upstream"
+    assert worktrees.push_remote(repo, "ssh://git@github.com/VibePod/app.git/") == "upstream"
+    assert worktrees.push_remote(repo, "https://github.com/other/app") == "origin"
+    assert worktrees.push_remote(repo, None) == "origin"
+    assert worktrees.normalize_remote_url("https://token@GitHub.com:443/A/B.git") == (
+        "github.com/a/b"
+    )
+
+
+@pytest.mark.parametrize(
+    ("output", "reason"),
+    [
+        (
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+            "authentication",
+        ),
+        (
+            "remote: Permission to VibePod/app.git denied to someone.\n"
+            "fatal: unable to access 'https://github.com/VibePod/app.git/': "
+            "The requested URL returned error: 403",
+            "authentication",
+        ),
+        (
+            "git@github.com: Permission denied (publickey).\n"
+            "fatal: Could not read from remote repository.",
+            "authentication",
+        ),
+        (
+            "fatal: unable to access 'https://github.com/a/b/': Could not resolve host: github.com",
+            "network",
+        ),
+        (
+            "!\tabc:refs/heads/x\trefs/heads/x\t[rejected] (fetch first)\nDone",
+            "non-fast-forward",
+        ),
+        (
+            "!\tabc:refs/heads/x\trefs/heads/x\t[remote rejected] (protected branch hook "
+            "declined)\nDone",
+            "refused by origin: protected branch hook declined",
+        ),
+        ("something odd happened", "push failed: something odd happened"),
+    ],
+)
+def test_push_failures_are_told_apart(output: str, reason: str) -> None:
+    assert worktrees.push_failure("origin", "x", output).startswith(reason)
+
+
+def test_the_client_tolerates_boards_with_and_without_push_requests() -> None:
+    from vibepod.core.board_client import push_requests, verdict_push_request
+
+    assert push_requests({"instructions": []}) == []
+    assert push_requests({"pushRequests": None}) == []
+    assert push_requests({"pushRequests": [{"id": "p1"}, {"branch": "x"}, "junk"]}) == [
+        {"id": "p1"},
+    ]
+    assert verdict_push_request({"column": "pr_ready"}) is None
+    assert verdict_push_request({"pushRequest": None}) is None
+    assert verdict_push_request({"pushRequest": {"id": "p1"}}) == {"id": "p1"}
+
+
+def test_vp_board_work_no_push_and_board_push_off_turn_pushing_off(
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    created: list[BoardWorker] = []
+    original = BoardWorker.__init__
+
+    def init(self: BoardWorker, *args: Any, **kwargs: Any) -> None:
+        original(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(BoardWorker, "__init__", init)
+    monkeypatch.setattr(BoardWorker, "run", lambda self: WorkSummary())
+    monkeypatch.setenv("VP_BOARD_URL", server.url)
+    monkeypatch.setenv("VP_BOARD_TOKEN", TOKEN)
+    monkeypatch.setattr(board_cmd, "DockerAgentRunner", lambda agent, **kwargs: FakeRunner())
+    monkeypatch.setattr(board_cmd, "is_dir_allowed", lambda path: True)
+    command = ["board", "work", "VP", "--agent", "claude", "--repo", str(repo), "--parallel"]
+
+    def pushes(config: str, *extra: str) -> bool:
+        directory = tmp_path / f"config-{len(created)}"
+        directory.mkdir()
+        (directory / "config.yaml").write_text(config)
+        monkeypatch.setenv("VP_CONFIG_DIR", str(directory))
+        result = CliRunner().invoke(app, [*command, *extra])
+        assert result.exit_code == 0, result.output
+        return created[-1].options.push
+
+    assert pushes("") is True
+    assert pushes("", "--no-push") is False
+    assert pushes("board:\n  push: false\n") is False
+    assert pushes("board:\n  push: true\n") is True
