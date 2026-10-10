@@ -94,6 +94,8 @@ class Provider:
     default_model: str = ""
     credential_file: str = "credentials.json"
     model_settings: dict[str, ModelSettings] = field(default_factory=dict)
+    #: Explicit local opt-in to hand the key to agents over plain HTTP (LAN servers).
+    allow_http_key: bool = False
 
     def validate(self) -> None:
         validate_name(self.name)
@@ -114,6 +116,8 @@ class Provider:
             raise ValueError("An environment variable name is required")
         if self.auth != "env" and self.key_env:
             raise ValueError("Environment variable only applies to env authentication")
+        if not isinstance(self.allow_http_key, bool):
+            raise ValueError("allow_http_key must be true or false")
         if any(not valid_model_id(m) for m in self.models):
             raise ValueError("Model IDs must be nonempty strings")
         if self.default_model and self.default_model not in self.models:
@@ -286,6 +290,10 @@ def _render_metadata(provider: Provider, *, include_credential_file: bool = True
     settings = data.pop("model_settings")
     if not include_credential_file:
         data.pop("credential_file")
+    # A local trust decision: never shared, and omitted when off so older
+    # releases can still read the file.
+    if not include_credential_file or not provider.allow_http_key:
+        data.pop("allow_http_key")
     lines = [f"{name} = {json.dumps(value, ensure_ascii=False)}" for name, value in data.items()]
     for model, entry in settings.items():
         values = {k: v for k, v in entry.items() if v is not None and v != "" and v != ()}
@@ -383,6 +391,7 @@ def provider_from_toml(text: str, *, name: str | None = None) -> Provider:
     if name is not None:
         data["name"] = name
         data.pop("credential_file", None)
+        data.pop("allow_http_key", None)
     try:
         raw_models = data.get("models", [])
         if not isinstance(raw_models, list):
@@ -411,6 +420,18 @@ def load_provider(name: str) -> Provider:
         return p
     except ValueError as exc:
         raise ValueError(f"Invalid metadata for provider '{name}'") from exc
+
+
+HTTP_KEY_REFUSED = (
+    "Authenticated provider launches require an HTTPS endpoint; "
+    "run `vp provider edit {name}` to allow sending the key over plain HTTP"
+)
+
+
+def http_key_refused(provider: Provider, key: str) -> bool:
+    """Whether using ``key`` would send it over plain HTTP without the opt-in."""
+    insecure = urlsplit(provider.base_url).scheme != "https"
+    return bool(key) and insecure and not provider.allow_http_key
 
 
 def resolve_key(provider: Provider) -> str:

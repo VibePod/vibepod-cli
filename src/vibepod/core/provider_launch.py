@@ -9,11 +9,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
 
 from vibepod.core.agents import get_agent_spec
 from vibepod.core.provider_adapters import prepare_native_provider
-from vibepod.core.providers import load_provider, resolve_key
+from vibepod.core.providers import (
+    HTTP_KEY_REFUSED,
+    http_key_refused,
+    load_provider,
+    resolve_key,
+)
 
 NATIVE_AGENTS = frozenset({"pi", "codex", "opencode", "tau", "jcode"})
 
@@ -148,8 +152,8 @@ def _prepare_env_routed(
         )
     key = resolve_key(provider)
     url = provider.base_url
-    if key and urlsplit(url).scheme != "https":
-        raise ValueError("Authenticated provider launches require an HTTPS endpoint")
+    if http_key_refused(provider, key):
+        raise ValueError(HTTP_KEY_REFUSED.format(name=provider.name))
     values = {
         "base_url": url,
         # These clients require an API key even when a local server ignores it.

@@ -237,9 +237,11 @@ provider files are left on the host. Restarting a retained container rebuilds th
 view using that container's original launch environment.
 
 Environment credentials remain visible to container-runtime administrators and
-in retained containers until removal. Authenticated launches currently require
-an HTTPS endpoint. Unauthenticated local endpoints can use HTTP; Pi and Claude
-receive a placeholder key because their clients require one.
+in retained containers until removal. Authenticated launches require an HTTPS
+endpoint unless the provider opts in to plain HTTP (see
+[Authenticated LAN servers](#authenticated-lan-servers)). Unauthenticated local
+endpoints can use HTTP; Pi and Claude receive a placeholder key because their
+clients require one.
 
 The bootstrap script itself is copied once to `<config root>/runtime/`
 (`~/.config/vibepod/runtime/provider-bootstrap.cjs`, honoring `VP_CONFIG_DIR`)
@@ -396,3 +398,23 @@ The provider uses the Chat Completions protocol, so Claude (Anthropic only) and
 Codex (Responses only) reject it. Ollama also serves the Anthropic Messages API
 on recent versions: register a second provider with protocol `anthropic` and
 base URL `http://192.168.178.85:11434` (no `/v1`) to use it with Claude.
+
+### Authenticated LAN servers
+
+A local server that checks an API key (for example `llama-server --api-key`)
+but serves plain `http://` needs an explicit opt-in. When the endpoint is
+`http://` and authentication is `key` or `env`, `vp provider add` and
+`vp provider edit` ask:
+
+```text
+Allow agents to send the API key over unencrypted HTTP (launches are refused otherwise)? [y/N]: y
+```
+
+Answering yes stores `allow_http_key = true` in the provider metadata. Launches
+then pass the key to the agent over HTTP, and discovery no longer asks again.
+`vp provider list` shows `http-key=allowed` for these providers. Without the
+opt-in, launches stop with `Authenticated provider launches require an HTTPS
+endpoint`. The opt-in is a local decision: `vp provider export` leaves it out,
+`vp provider import` ignores it, and switching the URL to `https://` or the
+authentication to `none` clears it. Anyone on the network path can read the
+key, so use it only on trusted networks.

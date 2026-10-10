@@ -387,6 +387,24 @@ def test_plan_agents_authenticated_http_rejected(registry, agent):
         prepare_provider(agent, ["insecure"], {})
 
 
+@pytest.mark.parametrize("agent", NEW_PLAN_AGENTS)
+def test_plan_agents_authenticated_http_allowed_after_opt_in(registry, agent):
+    save_provider(
+        Provider(
+            "lan",
+            "openai-chat",
+            "http://192.168.1.10:8080/v1",
+            auth="key",
+            models=("m",),
+            default_model="m",
+            allow_http_key=True,
+        ),
+        key="secret",
+    )
+    env, _ = prepare_provider(agent, ["lan"], {})
+    assert "secret" in env.values()
+
+
 def _hosted(registry):
     save_provider(
         Provider(
