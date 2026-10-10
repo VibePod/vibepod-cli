@@ -38,7 +38,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import IO, Any, Protocol
@@ -279,6 +279,9 @@ class TaskResult:
     # The commit the branch ends at once the work is done: what the reviews judge.
     head: str | None = None
     verify: VerifyResult | None = None
+    # The pull request the agent suggests, sent with the hand-over.
+    pr_title: str | None = None
+    pr_body: str | None = None
 
 
 @dataclass
@@ -360,7 +363,11 @@ End your final message with a result block in this form, and nothing after it:
 {{"status": "<done | needs_input | failed>", "summary": "<what you did, in a sentence or two>"}}
 </{RESULT_TAG}>
 
-- `done`: the task is implemented and committed.
+- `done`: the task is implemented and committed. You may add `"prTitle"` and `"prBody"` to
+  suggest the pull request for the work: `prTitle` one short, imperative line about the
+  change, and `prBody` a few lines of markdown on what changed and why and any notable
+  decisions. Describe the change the branch makes, not the task's specification or the
+  steps of your run.
 - `needs_input`: the task is unclear and you cannot go on without an answer. Add
   `"question"` with one precise question, and do not guess instead.
 - `failed`: you cannot complete the task. Add `"reason"` with why."""
@@ -395,6 +402,34 @@ class AgentResult:
     reason: str = ""
     # A reviewer's points for the rework.
     feedback: str = ""
+    # The pull request the agent suggests for its work: one line, and markdown.
+    pr_title: str = ""
+    pr_body: str = ""
+    # What was wrong with the result and left out of it, such as an unusable suggestion.
+    notes: tuple[str, ...] = ()
+
+
+# GitHub's limits for a pull request's title and body; the body leaves room for the
+# `Closes #n` the board appends when it opens the pull request.
+PR_TITLE_LIMIT = 256
+PR_BODY_LIMIT = 65_000
+
+
+def _suggestion(data: dict[str, Any], key: str, limit: int, notes: list[str]) -> str:
+    """An optional pull request field of the result: a string, trimmed and cut to `limit`,
+    with a title on one line. Anything else is left out with a note, as the run's work
+    does not depend on it."""
+    value = data.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        notes.append(f"Ignored {key}: expected a string, got {type(value).__name__}")
+        return ""
+    text = " ".join(value.split()) if key == "prTitle" else value.strip()
+    if len(text) > limit:
+        notes.append(f"Cut {key} to {limit} characters from {len(text)}")
+        text = text[:limit].rstrip()
+    return text
 
 
 def _text(value: Any) -> str:
@@ -427,6 +462,14 @@ def parse_result(logs: str, statuses: Sequence[str] = RESULT_STATUSES) -> AgentR
             reason=_text(data.get("reason")),
             feedback=_text(data.get("feedback")),
         )
+        if result.status == "done":
+            notes: list[str] = []
+            result = replace(
+                result,
+                pr_title=_suggestion(data, "prTitle", PR_TITLE_LIMIT, notes),
+                pr_body=_suggestion(data, "prBody", PR_BODY_LIMIT, notes),
+                notes=tuple(notes),
+            )
         if result.status == "needs_input" and not result.question:
             continue
         if result.status == "rework" and not result.feedback:
@@ -542,7 +585,8 @@ def build_prompt(
         if rework:
             lines += [
                 "This task was reviewed and sent back. The branch already holds the earlier "
-                "work: continue it and address the review feedback.",
+                "work: continue it and address the review feedback. A pull request you "
+                "suggest replaces the earlier one, so describe all the work on the branch.",
                 "",
             ]
         labels = {"question": "Your question", "answer": "Answer", "feedback": "Review feedback"}
@@ -1190,6 +1234,9 @@ class BoardWorker:
             )
             return
         result.summary = said.summary or result.summary
+        for note in said.notes:
+            self.say("info", f"Result of {task.get('key')}: {note}")
+        result.pr_title, result.pr_body = said.pr_title or None, said.pr_body or None
         if said.status == "needs_input":
             # The work so far stays on the branch; the answered task continues there.
             with self._keepalive():
@@ -1394,7 +1441,15 @@ class BoardWorker:
             stopped = "The worker was stopped from the board"
             delivered = self._deliver(
                 f"Handing {key} over",
-                lambda: self.client.hand_over(card_ref, self.options.name, branch, note, head),
+                lambda: self.client.hand_over(
+                    card_ref,
+                    self.options.name,
+                    branch,
+                    note,
+                    head,
+                    pr_title=result.pr_title,
+                    pr_body=result.pr_body,
+                ),
                 instead=(
                     f"Giving {key} back",
                     lambda: self.client.release(card_ref, self.options.name, "released", stopped),

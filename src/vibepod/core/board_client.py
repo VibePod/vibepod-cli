@@ -154,10 +154,22 @@ class BoardClient:
         branch_name: str | None = None,
         note: str | None = None,
         head_sha: str | None = None,
+        *,
+        pr_title: str | None = None,
+        pr_body: str | None = None,
     ) -> dict[str, Any]:
         """Moves a claimed task to Review. `head_sha` names the commit handed over: the
-        board binds the reviews and approvals of the task to it."""
-        body = _body(assignee=assignee, branchName=branch_name, note=note, headSha=head_sha)
+        board binds the reviews and approvals of the task to it. `pr_title` and `pr_body`
+        suggest the pull request for the work; either replaces the card's earlier
+        suggestion as a whole. A board from before suggestions ignores them."""
+        body = _body(
+            assignee=assignee,
+            branchName=branch_name,
+            note=note,
+            headSha=head_sha,
+            prTitle=pr_title,
+            prBody=pr_body,
+        )
         result: dict[str, Any] = self.request("POST", f"/api/board/{_ref(card)}/handover", body)
         return _item(result)
 
