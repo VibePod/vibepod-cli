@@ -21,6 +21,8 @@ from vibepod.commands import board as board_cmd
 from vibepod.core import worktrees
 from vibepod.core.board_client import BoardApiError, BoardClient, resolve_board_settings
 from vibepod.core.board_worker import (
+    PR_BODY_LIMIT,
+    PR_TITLE_LIMIT,
     AgentResult,
     AgentStopError,
     BoardWorker,
@@ -1905,6 +1907,157 @@ def test_reads_the_last_well_formed_result() -> None:
     assert parse_result(mentioned) == AgentResult("done", summary="Real one")
 
 
+# --- the suggested pull request ------------------------------------------------------
+
+
+def suggests(**fields: Any) -> Behaviour:
+    """An agent that commits the feature and ends with a result carrying `fields`."""
+
+    def behaviour(path: Path, prompt: str) -> tuple[int, str]:
+        commits_a_feature(path, prompt)
+        return 0, result_block(summary="Added the feature.", **fields)
+
+    return behaviour
+
+
+def test_the_hand_over_carries_the_pull_request_the_agent_suggests(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add the feature")
+    body = "Adds `feature.txt`.\n\n- Written by the worker\n"
+    runner = FakeRunner(suggests(prTitle="  Add the feature file ", prBody=body))
+
+    work(server, runner, repo, once=True)
+
+    prompt = runner.starts[0]["prompt"]
+    assert '`"prTitle"` and `"prBody"`' in prompt
+    [handover] = board.requests("POST", "/api/board/card-1/handover")
+    assert handover is not None
+    assert (handover["prTitle"], handover["prBody"]) == ("Add the feature file", body.strip())
+    card = board.card("VP-1")
+    assert (card["column"], card["suggestedPrTitle"], card["suggestedPrBody"]) == (
+        "review",
+        "Add the feature file",
+        body.strip(),
+    )
+    assert card["suggestedPrBy"] == "claude@laptop"
+
+
+def test_a_hand_over_without_a_suggestion_leaves_the_fields_out(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add the feature")
+
+    work(server, FakeRunner(suggests(prTitle="   ", prBody=None)), repo, once=True)
+
+    [handover] = board.requests("POST", "/api/board/card-1/handover")
+    assert handover is not None
+    assert "prTitle" not in handover and "prBody" not in handover
+    assert "suggestedPrTitle" not in board.card("VP-1")
+
+
+def test_reads_the_suggested_pull_request_and_drops_what_it_cannot_use() -> None:
+    said = parse_result(
+        result_block(prTitle="Add\n  the   feature\n", prBody="\n Body **text**.\n\n"),
+    )
+    assert said == AgentResult(
+        "done",
+        pr_title="Add the feature",
+        pr_body="Body **text**.",
+    )
+    said = parse_result(result_block(prTitle=["Add", "it"], prBody={"text": "no"}))
+    assert said is not None
+    assert (said.pr_title, said.pr_body) == ("", "")
+    assert said.notes == (
+        "Ignored prTitle: expected a string, got list",
+        "Ignored prBody: expected a string, got dict",
+    )
+    said = parse_result(result_block(prTitle="T" * 300, prBody="B" * 70_000))
+    assert said is not None
+    assert (len(said.pr_title), len(said.pr_body)) == (PR_TITLE_LIMIT, PR_BODY_LIMIT)
+    assert said.notes == (
+        f"Cut prTitle to {PR_TITLE_LIMIT} characters from 300",
+        f"Cut prBody to {PR_BODY_LIMIT} characters from 70000",
+    )
+    # Only finished work suggests a pull request.
+    asked = parse_result(result_block("needs_input", question="Which?", prTitle="Add it"))
+    assert asked == AgentResult("needs_input", question="Which?")
+
+
+def test_an_unusable_suggestion_is_left_out_without_failing_the_run(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add the feature")
+    runner = FakeRunner(suggests(prTitle=42, prBody="Adds the feature."))
+
+    worker, messages = work(server, runner, repo, once=True)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    [handover] = board.requests("POST", "/api/board/card-1/handover")
+    assert handover is not None
+    assert "prTitle" not in handover
+    assert handover["prBody"] == "Adds the feature."
+    assert ("info", "Result of VP-1: Ignored prTitle: expected a string, got int") in messages
+
+
+def test_a_rework_hands_over_a_new_suggestion_that_replaces_the_old_one(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add a cache")
+    board.card("VP-1").update(
+        branchName="vp-1",
+        suggestedPrTitle="Add a cache",
+        suggestedPrBody="The first version.",
+        suggestedPrBy="claude@laptop",
+    )
+    board.history["idea-1"] = [
+        {"kind": "feedback", "actor": "admin", "message": "Invalidate the cache on delete."},
+    ]
+    git(repo, "branch", "vp-1")
+    runner = FakeRunner(suggests(prTitle="Add a cache invalidated on delete"))
+
+    work(server, runner, repo, once=True)
+
+    prompt = runner.starts[0]["prompt"]
+    assert "A pull request you suggest replaces the earlier one" in prompt
+    [handover] = board.requests("POST", "/api/board/card-1/handover")
+    assert handover is not None
+    assert handover["prTitle"] == "Add a cache invalidated on delete"
+    assert "prBody" not in handover
+    card = board.card("VP-1")
+    assert (card["suggestedPrTitle"], card["suggestedPrBody"]) == (
+        "Add a cache invalidated on delete",
+        None,
+    )
+
+
+def test_a_board_from_before_suggestions_takes_the_hand_over_without_them(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.pr_suggestions_supported = False
+    board.add_task("Add the feature")
+    runner = FakeRunner(suggests(prTitle="Add the feature file", prBody="Adds it."))
+
+    worker, _ = work(server, runner, repo, once=True)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    [handover] = board.requests("POST", "/api/board/card-1/handover")
+    assert handover is not None and handover["prTitle"] == "Add the feature file"
+    card = board.card("VP-1")
+    assert card["column"] == "review"
+    assert "suggestedPrTitle" not in card
+
+
 # --- review mode ---------------------------------------------------------------------
 
 REVIEWER = "claude-review@laptop"
@@ -2045,6 +2198,24 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_clone(
     assert worktrees.worktree_paths(repo) == [repo.resolve()]
     assert worker.summary.approved == ["VP-1"]
     assert worker.summary.ended_because == "No task in review left to claim"
+
+
+def test_a_review_never_suggests_a_pull_request(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+    runner = FakeRunner(says("approve", summary="Fine.", prTitle="Retitled", prBody="Rewritten."))
+
+    review(server, runner, repo)
+
+    assert "prTitle" not in runner.starts[0]["prompt"]
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict is not None and verdict["verdict"] == "approve"
+    assert "prTitle" not in verdict and "prBody" not in verdict
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+    assert "suggestedPrTitle" not in board.card("VP-1")
 
 
 def test_a_rework_verdict_sends_the_feedback_and_the_task_back(

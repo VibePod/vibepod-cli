@@ -59,6 +59,9 @@ class FakeBoard:
     failures: dict[str, int] = field(default_factory=dict)
     # A branch name the hand-over refuses as invalid.
     refused_branch: str | None = None
+    # False plays a board from before suggested pull requests, which ignores `prTitle` and
+    # `prBody` like any unknown key of a request body.
+    pr_suggestions_supported: bool = True
     # The project's review settings.
     required_approvals: int = 1
     max_review_rounds: int = 3
@@ -255,7 +258,18 @@ class FakeBoard:
             return 409, {"error": f"Task {ref} is not claimed by {body.get('assignee')}"}
         if self.refused_branch and body.get("branchName") == self.refused_branch:
             return 400, {"error": "Invalid request body"}
+        suggestion = (
+            (body.get("prTitle"), body.get("prBody")) if self.pr_suggestions_supported else ()
+        )
+        if any(value is not None and not isinstance(value, str) for value in suggestion):
+            return 400, {"error": "Invalid request body"}
+        holder = body.get("assignee")
         card.update(column="review", assignee=None, claimedAt=None, attempts=0)
+        if any(value is not None for value in suggestion):
+            # Either field replaces the suggestion as a whole; blank values clear.
+            title, pr_body = ((value or "").strip() or None for value in suggestion)
+            card.update(suggestedPrTitle=title, suggestedPrBody=pr_body)
+            card["suggestedPrBy"] = holder if title or pr_body else None
         card["branchName"] = body.get("branchName")
         # Reviews and approvals are bound to the commit handed over; a new one starts the
         # approval count over.
