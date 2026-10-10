@@ -10,9 +10,11 @@ import json
 from urllib.parse import urlsplit
 
 from vibepod.core.providers import (
+    HTTP_KEY_REFUSED,
     REASONING_LEVELS,
     ModelSettings,
     Provider,
+    http_key_refused,
     load_provider,
     resolve_key,
 )
@@ -226,8 +228,8 @@ def prepare_native_provider(
             )
         key = resolve_key(provider)
         url = provider.base_url
-        if key and urlsplit(url).scheme != "https":
-            raise ValueError("Authenticated provider launches require an HTTPS endpoint")
+        if http_key_refused(provider, key):
+            raise ValueError(HTTP_KEY_REFUSED.format(name=provider.name))
         if agent == "jcode" and not jcode_accepts_url(url):
             raise ValueError(
                 "Jcode refuses plain-http provider URLs unless the host is localhost, "

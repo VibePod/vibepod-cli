@@ -123,8 +123,26 @@ def test_authenticated_http_runtime_rejected(registry):
         ),
         key="secret",
     )
-    with pytest.raises(ValueError, match="HTTPS"):
+    with pytest.raises(ValueError, match="HTTPS.*vp provider edit insecure"):
         provider_launch.prepare_provider("claude", ["insecure"], {})
+
+
+def test_authenticated_http_runtime_allowed_after_opt_in(registry):
+    save_provider(
+        Provider(
+            "lan",
+            "anthropic",
+            "http://192.168.1.10:8080",
+            auth="key",
+            models=("m",),
+            default_model="m",
+            allow_http_key=True,
+        ),
+        key="secret",
+    )
+    env, _ = provider_launch.prepare_provider("claude", ["lan"], {})
+    assert env["ANTHROPIC_BASE_URL"] == "http://192.168.1.10:8080"
+    assert env["ANTHROPIC_API_KEY"] == "secret"
 
 
 def test_default_model_required_for_claude(registry):

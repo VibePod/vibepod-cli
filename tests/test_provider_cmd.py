@@ -301,17 +301,96 @@ def test_wizard_declining_discovery_falls_back_to_manual_entry(tmp_path, monkeyp
         raise AssertionError("endpoint must not be contacted after declining")
 
     monkeypatch.setattr("vibepod.commands.provider.discover_models", unexpected)
-    # name, protocol, url, auth key + key + store? y, discover? y, send over HTTP? n,
-    # manual models, default, configure settings? n
+    # name, protocol, url, auth key + key + store? y, allow HTTP key? n, discover? y,
+    # send over HTTP? n, manual models, default, configure settings? n
     result = runner.invoke(
         app,
         ["provider", "add"],
-        input="local\nopenai-chat\nhttp://ollama.local:11434/v1\nkey\nsecret\ny\ny\nn\nmanual\nmanual\n\n",
+        input="local\nopenai-chat\nhttp://ollama.local:11434/v1\nkey\nsecret\ny\nn\ny\nn\nmanual\nmanual\n\n",
     )
     assert result.exit_code == 0, result.output
     assert "Discovery skipped" in result.output
     assert load_provider("local").models == ("manual",)
     assert "secret" not in result.output
+
+    assert load_provider("local").allow_http_key is False
+
+
+def test_wizard_persists_http_key_opt_in(tmp_path, monkeypatch):
+    monkeypatch.setenv("VP_PROVIDERS_DIR", str(tmp_path / "providers"))
+    calls = []
+
+    def discover(provider, *, key, allow_http_key):
+        calls.append((key, allow_http_key))
+        return ["m"]
+
+    monkeypatch.setattr("vibepod.commands.provider.discover_models", discover)
+    # name, protocol, url, auth key + key + store? y, allow HTTP key? y, discover? y,
+    # contact endpoint? y, use all? y, default, configure settings? n
+    result = runner.invoke(
+        app,
+        ["provider", "add"],
+        input="brain\nopenai-chat\nhttp://192.168.1.10:8080/v1\nkey\nsecret\ny\ny\ny\ny\ny\nm\n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Send your API key over unencrypted HTTP?" not in result.output
+    assert calls == [("secret", True)]
+    assert load_provider("brain").allow_http_key is True
+    assert "http-key=allowed" in runner.invoke(app, ["provider", "list"]).output
+
+
+def test_wizard_does_not_ask_http_key_for_https_or_no_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("VP_PROVIDERS_DIR", str(tmp_path / "providers"))
+    result = runner.invoke(
+        app,
+        ["provider", "add"],
+        input="local\nopenai-chat\nhttp://ollama:11434/v1\nnone\nn\nm\nm\n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "unencrypted" not in result.output
+    assert load_provider("local").allow_http_key is False
+
+
+def test_edit_switching_to_https_clears_http_key_opt_in(tmp_path, monkeypatch):
+    monkeypatch.setenv("VP_PROVIDERS_DIR", str(tmp_path / "providers"))
+    save_provider(
+        Provider(
+            "brain",
+            "openai-chat",
+            "http://192.168.1.10:8080/v1",
+            auth="key",
+            models=("m",),
+            allow_http_key=True,
+        ),
+        key="secret",
+    )
+    # protocol, url, auth, keep key, refresh? n, models, default, settings? n
+    result = runner.invoke(
+        app,
+        ["provider", "edit", "brain"],
+        input="\nhttps://brain.example/v1\n\n\nn\n\n\n\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert load_provider("brain").allow_http_key is False
+
+
+def test_edit_can_revoke_http_key_opt_in(tmp_path, monkeypatch):
+    monkeypatch.setenv("VP_PROVIDERS_DIR", str(tmp_path / "providers"))
+    save_provider(
+        Provider(
+            "brain",
+            "openai-chat",
+            "http://192.168.1.10:8080/v1",
+            auth="key",
+            models=("m",),
+            allow_http_key=True,
+        ),
+        key="secret",
+    )
+    # protocol, url, auth, keep key, allow HTTP key? n, refresh? n, models, default, settings? n
+    result = runner.invoke(app, ["provider", "edit", "brain"], input="\n\n\n\nn\nn\n\n\n\n")
+    assert result.exit_code == 0, result.output
+    assert load_provider("brain").allow_http_key is False
 
 
 def test_edit_declining_discovery_keeps_previous_selection(tmp_path, monkeypatch):

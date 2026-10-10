@@ -206,6 +206,36 @@ def test_import_none_and_env_auth(store, tmp_path):
     assert providers.load_provider("vendor").key_env == "VENDOR_KEY"
 
 
+def test_http_key_opt_in_is_local_only(store, tmp_path):
+    lan = Provider(
+        "lan",
+        "openai-chat",
+        "http://192.168.1.10:8080/v1",
+        auth="key",
+        models=("m",),
+        allow_http_key=True,
+    )
+    providers.save_provider(lan, key="secret")
+    assert providers.load_provider("lan").allow_http_key is True
+    text = providers.render_exchange(lan)
+    assert "allow_http_key" not in text
+    # A shared file must not pre-authorize plain-HTTP keys, with or without --name.
+    path = tmp_path / "shared.toml"
+    path.write_text(text.replace('name = "lan"', 'name = "shared"') + "allow_http_key = true\n")
+    for extra in ([], ["--name", "renamed"]):
+        result = runner.invoke(
+            app, ["provider", "import", str(path), "--key-env", "LAN_KEY", *extra]
+        )
+        assert result.exit_code == 0, result.output
+    assert providers.load_provider("shared").allow_http_key is False
+    assert providers.load_provider("renamed").allow_http_key is False
+
+
+def test_stored_metadata_omits_http_key_opt_in_when_off(store):
+    providers.save_provider(Provider("local", "openai-chat", "http://ollama:11434/v1"))
+    assert "allow_http_key" not in (store / "local/provider.toml").read_text()
+
+
 def _key_file(tmp_path):
     path = tmp_path / "hosted.toml"
     path.write_text(providers.render_exchange(hosted()))

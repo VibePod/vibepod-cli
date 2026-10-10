@@ -43,13 +43,24 @@ def _confirm_discovery(provider: Provider, key: str, *, abort: bool = True) -> b
     Discovery-only commands keep ``abort`` on: declining ends them.
     """
     console.print(f"Discovery destination: {provider.base_url}", markup=False)
-    if key and urlsplit(provider.base_url).scheme == "http":
+    if key and urlsplit(provider.base_url).scheme == "http" and not provider.allow_http_key:
         if typer.confirm("Send your API key over unencrypted HTTP?", default=False, abort=abort):
             return True
         return None
     if typer.confirm("Contact this endpoint to list models?", default=True, abort=abort):
-        return False
+        return provider.allow_http_key
     return None
+
+
+def _confirm_http_key(base_url: str, auth: str, *, default: bool = False) -> bool:
+    """Ask once whether launches may send the key over plain HTTP; HTTPS never asks."""
+    if auth == "none" or urlsplit(base_url).scheme != "http":
+        return False
+    warning("This endpoint uses plain HTTP: the API key would travel unencrypted.")
+    return typer.confirm(
+        "Allow agents to send the API key over unencrypted HTTP (launches are refused otherwise)?",
+        default=default,
+    )
 
 
 def _validate_protocol(protocol: str) -> None:
@@ -199,7 +210,8 @@ def add() -> None:
             )
         elif auth == "env":
             key_env = typer.prompt("API key environment variable")
-        p = Provider(name, protocol, base_url, auth, key_env)
+        allow_http_key = _confirm_http_key(base_url, auth)
+        p = Provider(name, protocol, base_url, auth, key_env, allow_http_key=allow_http_key)
         p.validate()
         discovered: list[str] = []
         if typer.confirm("Discover models now?", default=True):
@@ -215,8 +227,7 @@ def add() -> None:
                 warning(f"{exc}. You can enter model IDs manually.")
         selected, default = _select_models(discovered)
         settings = _configure_settings(selected, default, {})
-        p = Provider(name, protocol, base_url, auth, key_env, selected, default)
-        p = replace(p, model_settings=settings)
+        p = replace(p, models=selected, default_model=default, model_settings=settings)
         save_provider(p, key=key, discovered=discovered or None)
         success(f"Saved provider '{name}'. Native agent configuration is unchanged.")
     except (ValueError, OSError) as exc:
@@ -249,12 +260,15 @@ def edit(name: Annotated[str, typer.Argument(help="Provider name")]) -> None:
                 )
         elif auth == "env":
             key_env = typer.prompt("API key environment variable", default=previous.key_env)
+        validate_url(base_url)
+        allow_http_key = _confirm_http_key(base_url, auth, default=previous.allow_http_key)
         p = replace(
             previous,
             protocol=protocol,
             base_url=base_url,
             auth=auth,
             key_env=key_env,
+            allow_http_key=allow_http_key,
         )
         p.validate()
         discovered: list[str] | None = None
@@ -297,7 +311,8 @@ def list_() -> None:
             reason = str(exc) if isinstance(exc, ValueError) else "cannot access the provider store"
             warning(f"{name}  ({reason})")
             continue
-        console.print(f"{name}  {p.protocol}  {p.base_url}  auth={p.auth}", markup=False)
+        http_key = "  http-key=allowed" if p.allow_http_key else ""
+        console.print(f"{name}  {p.protocol}  {p.base_url}  auth={p.auth}{http_key}", markup=False)
 
 
 @app.command("models")
@@ -405,7 +420,7 @@ def import_(
                 "Fetched over plain HTTP without TLS; verify the endpoint URL below before use.",
             )
         p = provider_from_toml(text, name=name) if name else provider_from_toml(text)
-        p = replace(p, credential_file="credentials.json")
+        p = replace(p, credential_file="credentials.json", allow_http_key=False)
         if p.name in list_providers():
             raise ValueError(f"Provider '{p.name}' already exists; use --name for another name")
         key = ""
