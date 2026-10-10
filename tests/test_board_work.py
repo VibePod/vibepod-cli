@@ -2199,6 +2199,7 @@ def test_a_review_whose_task_was_handed_over_again_ends_quietly(
     assert report["outcome"] == "cancelled"
     assert "was handed over again" in report["failureReason"]
     assert worker.summary.approved == []
+    assert list(worker.passed_over) == []
     assert not [message for level, message in messages if level == "error"]
 
 
@@ -2252,7 +2253,85 @@ def test_another_reviewers_rework_cancels_the_review_without_a_verdict(
     report = board.runs[0]
     assert (report["outcome"], report["failureReason"]) == ("cancelled", "No.")
     assert board.card("VP-1")["column"] == "planned"
-    assert worker.passed_over[-1] == "idea-1"
+    assert list(worker.passed_over) == []
+    assert not review_path(repo).exists()
+
+
+def test_a_polling_reviewer_reviews_a_new_head_after_another_reviewers_rework(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.required_approvals = 2
+    old_sha = handed_over(board, repo)
+    new_sha = ""
+
+    def request_rework() -> list[dict[str, Any]]:
+        if board.card("VP-1")["headSha"] == old_sha:
+            board._claim_review({"assignee": "codex-review", "mode": "review"})
+            board._submit_review(
+                "card-1",
+                {
+                    "assignee": "codex-review",
+                    "verdict": "rework",
+                    "headSha": old_sha,
+                    "note": "Add tests.",
+                },
+            )
+        return []
+
+    board.on_heartbeat = once_the_agent_runs(request_rework)
+
+    class ReworkClock(Clock):
+        def sleep(self, seconds: float) -> None:
+            nonlocal new_sha
+            super().sleep(seconds)
+            if board.runs and not new_sha:
+                # Wait for A to poll while the task is still Planned, then hand it over.
+                claims = board.requests("POST", "/api/board/claim")
+                assert len(claims) == 2
+                assert claims[-1] is not None and claims[-1].get("exclude", []) == []
+                assert board.card("VP-1")["column"] == "planned"
+                assert not review_path(repo).exists()
+                git(repo, "checkout", "--quiet", "issue-7")
+                git(repo, "commit", "--quiet", "--allow-empty", "-m", "Address review feedback")
+                new_sha = git(repo, "rev-parse", "HEAD")
+                git(repo, "checkout", "--quiet", "main")
+                board.put_in_review("VP-1", "issue-7", new_sha)
+
+    def approve_new_head(path: Path, prompt: str) -> tuple[int, str]:
+        assert git(path, "rev-parse", "HEAD") == new_sha != old_sha
+        return 0, result_block("approve", summary="Tests addressed.")
+
+    class CancelledThenApproves(FakeRunner):
+        def start(self, prompt: str, workspace: Path, **kwargs: Any) -> FakeRun:
+            run = super().start(prompt, workspace, **kwargs)
+            run.polls = None if len(self.runs) == 1 else 2
+            return run
+
+    runner = CancelledThenApproves(approve_new_head)
+    worker, _ = review(
+        server,
+        runner,
+        repo,
+        clock=ReworkClock(),
+        poll_seconds=30,
+        max_tasks=2,
+    )
+
+    assert runner.runs[0].stopped is True
+    assert len(runner.runs) == 2
+    assert list(worker.passed_over) == []
+    assert worker.summary.approved == ["VP-1"]
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict is not None
+    assert (verdict["assignee"], verdict["headSha"], verdict["verdict"]) == (
+        REVIEWER,
+        new_sha,
+        "approve",
+    )
+    assert [report["outcome"] for report in board.runs] == ["cancelled", "done"]
+    assert all(report["kind"] == "review" for report in board.runs)
     assert not review_path(repo).exists()
 
 
@@ -2271,7 +2350,7 @@ def test_a_review_cancelled_from_the_board_ends_without_a_verdict(
     board.on_heartbeat = once_the_agent_runs(cancelled)
     runner = FakeRunner(polls=None)
 
-    review(server, runner, repo)
+    review(server, runner, repo, once=True)
 
     assert runner.runs[0].stopped is True
     assert board.requests("POST", "/api/board/card-1/review") == []
@@ -2337,7 +2416,7 @@ def test_a_review_cancelled_while_preparing_never_starts_the_agent(
     board.on_heartbeat = cancel_while_preparing
     runner = FakeRunner()
 
-    review(server, runner, repo)
+    review(server, runner, repo, once=True)
 
     assert runner.starts == []
     assert board.requests("POST", "/api/board/card-1/review") == []
