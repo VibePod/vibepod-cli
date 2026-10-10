@@ -196,6 +196,12 @@ agents:
       CLAUDE_CODE_PROJECT_DIR_NAME: my-project   # 1-64 letters, digits, - or _
 ```
 
+VibePod already sets `CLAUDE_CONFIG_DIR=/claude`, which Claude Code requires
+for the custom key to take effect. Avoid Windows device names such as `con`;
+Claude ignores invalid names and falls back to the derived path. Set the key
+through VibePod's environment configuration, as above, rather than the `env`
+object in Claude's settings: Claude reads this key before loading settings.
+
 Launch from the project directory so VibePod reads its `.vibepod/config.yaml`.
 `--workspace` selects the mount but does not change where VibePod loads project
 configuration. To launch from elsewhere, pass the key explicitly:
@@ -220,6 +226,10 @@ option and sets neither option for you. `autoMemoryDirectory` would mean writing
 to your repository's `.claude/settings.json`, and whether to commit memory is
 your call. A per-project key set by default would leave existing memory and
 sessions behind under `-workspace`.
+
+The custom key separates the default project scope, but is not an access
+boundary: Claude's session picker can still show all project directories with
+`Ctrl+A`, and `--resume <session-id>` can open a session stored under another key.
 
 ### Other agents
 
