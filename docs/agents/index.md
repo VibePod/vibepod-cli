@@ -148,8 +148,10 @@ user, project, local, managed policy, and `--settings` scopes. A user-scope
 setting pointing at `/workspace/.claude/memory` also applies to every ordinary
 VibePod Claude launch using that config directory.
 
-The value must be an absolute path or start with `~/`. Use the container path
-`/workspace/...`, not the host path. Claude Code applies the project-scope
+The value must be an absolute path or start with `~/`; relative paths such as
+`.claude/memory` are not supported. For ordinary launches use the container path
+`/workspace/...`; for ACP launches use the absolute host workspace path described
+above. Claude Code applies the project-scope
 value under the same workspace-trust rule as hooks, and ignores a
 repository-supplied value while `permissions.blockReadsOutsideWorkingDirectories`
 is on. The memory then lives
@@ -162,9 +164,19 @@ stay in the config dir.
     remembered, including notes about you and your preferences. Commit it on
     purpose (shared team memory) or ignore it.
 
+For private memory, add this entry to the repository's `.gitignore`:
+
+```gitignore
+/.claude/memory/
+```
+
+Ignoring the directory does not untrack memory files already committed; remove
+those files from Git's index separately if you want to stop sharing them.
+
 To check the setup, start `vp run claude` from the project directory, trust the
 workspace, and open `/memory`. Confirm that the auto memory folder is
-`/workspace/.claude/memory`. Ask Claude to remember a project-specific fact,
+`/workspace/.claude/memory` and that auto memory is enabled. Ask Claude to
+remember a project-specific fact,
 then check `.claude/memory/` on the host. Exit and start a new session to check
 recall. Repeat in a second repository with the same setting and profile to
 confirm that each repository has its own memory files. Changing the directory
