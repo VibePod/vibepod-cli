@@ -103,7 +103,8 @@ hot-reload into the running server.
 
 ## Per-project state and the shared `/workspace` path
 
-Every project is mounted at `/workspace`, and an agent's config dir is shared
+For ordinary interactive and task launches, every project is mounted at
+`/workspace`, and an agent's config dir is shared
 by all projects (per agent and [profile](../profiles.md), not per project).
 Agents that key per-project state by the working directory path therefore
 see every project as the same project.
@@ -114,15 +115,22 @@ Claude Code stores [auto memory](https://code.claude.com/docs/en/memory#storage-
 and session transcripts under `<config dir>/projects/<project>/`, where
 `<project>` is derived from the repository path. In a VibePod container that is
 always `projects/-workspace` (on the host:
-`~/.config/vibepod/agents/claude/projects/-workspace/`). So, by default:
+`~/.config/vibepod/agents/claude/projects/-workspace/` for the default profile).
+Named profiles use
+`~/.config/vibepod/profiles/<profile>/agents/claude/projects/-workspace/`
+(see [profile layout](../profiles.md#layout)). Use your `VP_CONFIG_DIR` root
+instead of `~/.config/vibepod` if configured. So, by default:
 
 - memories saved in one project are loaded in every other project, and
-- `claude --continue` / `--resume` list sessions from all projects.
+- `claude --continue` can resume the latest conversation from another project,
+  while `claude --resume` opens a picker with sessions from all projects.
 
 `vp run claude --acp` is not affected: the editor's session cwd is the host
 path, so the key differs per project.
 
 There are two independent fixes. Use either one, or both.
+The workspace-memory example below is for non-ACP launches; in ACP mode use
+the workspace's absolute host path instead of `/workspace`.
 
 **Keep memory in the repository** with Claude Code's `autoMemoryDirectory`
 setting, in the project's `.claude/settings.json` (or
@@ -133,6 +141,12 @@ setting, in the project's `.claude/settings.json` (or
   "autoMemoryDirectory": "/workspace/.claude/memory"
 }
 ```
+
+Merge this key into the existing JSON object, preserving your other settings;
+do not replace the file with the example. Claude Code reads this setting from
+user, project, local, managed policy, and `--settings` scopes. A user-scope
+setting pointing at `/workspace/.claude/memory` also applies to every ordinary
+VibePod Claude launch using that config directory.
 
 The value must be an absolute path or start with `~/`. Use the container path
 `/workspace/...`, not the host path. Claude Code applies the project-scope
@@ -148,6 +162,14 @@ stay in the config dir.
     remembered, including notes about you and your preferences. Commit it on
     purpose (shared team memory) or ignore it.
 
+To check the setup, start `vp run claude` from the project directory, trust the
+workspace, and open `/memory`. Confirm that the auto memory folder is
+`/workspace/.claude/memory`. Ask Claude to remember a project-specific fact,
+then check `.claude/memory/` on the host. Exit and start a new session to check
+recall. Repeat in a second repository with the same setting and profile to
+confirm that each repository has its own memory files. Changing the directory
+does not migrate existing notes; see the migration guidance below.
+
 **Give each project its own key** with
 [`CLAUDE_CODE_PROJECT_DIR_NAME`](https://code.claude.com/docs/en/sessions#name-the-project-directory-yourself)
 (Claude Code ≥ 2.1.234). It moves both memory and transcripts to
@@ -162,25 +184,43 @@ agents:
       CLAUDE_CODE_PROJECT_DIR_NAME: my-project   # 1-64 letters, digits, - or _
 ```
 
-Pick a name per project. Memory already saved under `projects/-workspace/memory/`
-is not moved, so copy the files you want to keep into the new directory
-(`~/.config/vibepod/agents/claude/projects/my-project/memory/`).
+Launch from the project directory so VibePod reads its `.vibepod/config.yaml`.
+`--workspace` selects the mount but does not change where VibePod loads project
+configuration. To launch from elsewhere, pass the key explicitly:
 
-VibePod sets neither option for you. `autoMemoryDirectory` would mean writing
+```bash
+vp run claude -w /path/to/my-project -e CLAUDE_CODE_PROJECT_DIR_NAME=my-project
+```
+
+Pick a unique name per project within each profile. Existing memory is not
+moved automatically. Copy only that project's notes from
+`projects/-workspace/memory/` to `projects/my-project/memory/` under the active
+profile's Claude config directory:
+
+- Default profile: `~/.config/vibepod/agents/claude/`.
+- Named profile: `~/.config/vibepod/profiles/<profile>/agents/claude/`.
+
+For workspace memory, copy the selected notes into `.claude/memory/` instead.
+Use your `VP_CONFIG_DIR` root if configured.
+
+This is intentionally documentation-only: VibePod adds no `agents.claude.memory`
+option and sets neither option for you. `autoMemoryDirectory` would mean writing
 to your repository's `.claude/settings.json`, and whether to commit memory is
 your call. A per-project key set by default would leave existing memory and
 sessions behind under `-workspace`.
 
 ### Other agents
 
-Most other agents also key per-project state by the working directory, so in
-VibePod it is shared across projects:
+The table below covers ordinary interactive and task launches at `/workspace`.
+ACP launches instead use the absolute host workspace path as their container
+working directory, separating cwd-based state across projects. Several agents
+also key per-project state by cwd:
 
 | Agent | Shared across projects at `/workspace` | Per-project workaround |
 |-------|----------------------------------------|------------------------|
 | `codex` | `codex resume --last` / the resume picker (sessions are filtered by cwd); folder trust in `config.toml` `[projects."/workspace"]` | `CODEX_HOME` (moves auth too) |
-| `gemini` | `--resume` chats, checkpoints, shell history, project memory (`~/.gemini/tmp/workspace/`); trusted folders | `GEMINI_CLI_HOME` (moves auth too) |
-| `qwen` | `--resume` / `--continue` sessions (`~/.qwen/projects/-workspace/`), checkpoints, history; trusted folders | `QWEN_RUNTIME_DIR` (keeps auth in place) |
+| `gemini` | `--resume` chats, checkpoints, shell history, project memory (`~/.gemini/tmp/<project_hash>/`); trusted folders | `GEMINI_CLI_HOME` (moves auth too) |
+| `qwen` | `--resume` / `--continue` sessions (`~/.qwen/projects/-workspace/`); shell history (`~/.qwen/tmp/<project_hash>/`); trusted folders (`trustedFolders.json`) | `QWEN_RUNTIME_DIR` isolates conversations, logs and todos only; `QWEN_HOME` isolates global state (moves auth too) |
 | `copilot` | trusted folders and saved tool approvals; `--continue` likely (unverified) | `COPILOT_HOME` (moves auth too) |
 | `auggie` | `--continue` / `--resume` / `session list` | `--augment-cache-dir` flag |
 | `opencode` | only non-git projects (sessions are keyed by the repo's root commit) | `git init`, or `XDG_DATA_HOME` |
@@ -188,8 +228,14 @@ VibePod it is shared across projects:
 Set the env var in the project's `.vibepod/config.yaml` under
 `agents.<agent>.env`, as in the Claude example above. Point it at a
 per-project path inside the agent's config dir, for example
-`QWEN_RUNTIME_DIR: /qwen/runtime/my-project` (qwen's config dir is mounted at `/qwen`). Variables that move the
-whole home also move credentials, so you have to log in again for that project.
+`QWEN_RUNTIME_DIR: /qwen/runtime/my-project` (qwen's config dir is mounted at `/qwen`).
+[Qwen's runtime directory](https://github.com/QwenLM/qwen-code-docs/blob/main/website/content/en/users/configuration/settings.md#environment-variables-table)
+does not relocate folder trust or shell history; use a separate `QWEN_HOME`
+for those too. [Gemini's project state](https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/commands.md)
+uses a hash of the project root, not a literal `workspace` directory.
+Variables that move the whole home also move credentials, so you have to log
+in again for that project. Launch from the project directory to load these
+project env settings, or pass them explicitly with `vp run -e KEY=value`.
 
 ## First run & authentication
 
