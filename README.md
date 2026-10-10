@@ -29,6 +29,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
 - 🔌 **External tools** — LiteLLM, Headroom, RTK, Graphify and other tooling plug in through the shared `vibepod-network` or a project overlay ([docs](https://vibepod.dev/docs/integrations/))
 - 📊 **Local analytics dashboard** — track usage and HTTP traffic per agent, plus token metrics
+- 📋 **Board automation** — `vp board work VP --agent claude` works through the planned tasks of a [vibepod-board](https://github.com/VibePod/vibepod-board) project: one branch per task, the agent headless, an optional verify command, then the task moves to Review ([docs](https://vibepod.dev/docs/board/))
 - 🐑 **Herdr aware** — `vp run` inside a [herdr](https://herdr.dev/) pane reports agent state automatically
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
 - 🔒 **Privacy-first** — all metrics collected and stored locally, never sent to the cloud
