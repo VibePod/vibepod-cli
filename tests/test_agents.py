@@ -125,7 +125,7 @@ def test_cursor_spec_matches_container_contract() -> None:
     assert spec.config_subdir == "cursor"
     assert spec.command == ["cursor-agent"]
     assert spec.config_mount_path == "/config"
-    assert spec.extra_env == {"HOME": "/config"}
+    assert spec.extra_env == {"HOME": "/config", "NODE_USE_ENV_PROXY": "1"}
     assert spec.ikwid_args == ["--force"]
     # Print mode refuses an untrusted workspace without --trust.
     assert spec.headless_prefix == ["--trust", "-p"]

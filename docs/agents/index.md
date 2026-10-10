@@ -1338,9 +1338,11 @@ agents:
 
 Or per run: `vp run cursor -e CURSOR_API_KEY=key_...`.
 
-**Proxy and TLS.** Cursor honors `HTTPS_PROXY` for its API traffic and starts
-Node with `--use-system-ca` plus `NODE_EXTRA_CA_CERTS`, so requests route
-through `vibepod-proxy` with the mounted mitmproxy CA.
+**Proxy and TLS.** VibePod enables Node's environment proxy support with
+`NODE_USE_ENV_PROXY=1`. When the proxy is enabled, VibePod also supplies
+`HTTP_PROXY`/`HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS` pointing at the mounted
+mitmproxy CA. Routing of Cursor's API traffic through the proxy still needs
+verification against the published image.
 
 **Non-interactive mode.** Print mode works with both `vp run` and task mode.
 It refuses a workspace it has not been told to trust, so task mode always

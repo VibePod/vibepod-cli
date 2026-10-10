@@ -324,7 +324,9 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # never downloads packages onto the persisted mount.
         # No llm_env_map: the CLI only talks to Cursor's own API (--endpoint /
         # CURSOR_API_ENDPOINT), so there is no OpenAI-compatible base URL to route.
-        {"HOME": "/config"},
+        # Enable Node's environment proxy support explicitly, rather than
+        # relying on the image to supply it (as with dsh above).
+        {"HOME": "/config", "NODE_USE_ENV_PROXY": "1"},
         ikwid_args=["--force"],
         # `-p/--print` is a boolean flag and the prompt stays positional. Print
         # mode exits with "Workspace Trust Required" on a directory it has not
