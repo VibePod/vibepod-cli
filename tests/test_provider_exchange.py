@@ -224,7 +224,8 @@ def test_http_key_opt_in_is_local_only(store, tmp_path):
     path.write_text(text.replace('name = "lan"', 'name = "shared"') + "allow_http_key = true\n")
     for extra in ([], ["--name", "renamed"]):
         result = runner.invoke(
-            app, ["provider", "import", str(path), "--key-env", "LAN_KEY", *extra]
+            app,
+            ["provider", "import", str(path), "--key-env", "LAN_KEY", *extra],
         )
         assert result.exit_code == 0, result.output
     assert providers.load_provider("shared").allow_http_key is False
