@@ -1955,8 +1955,8 @@ class BoardWorker:
         else:
             self.summary.returned.append(key)
             self.say("warning", f"{key}: {result.reason or result.note}")
-        if result.verdict is None:
-            self.passed_over.append(self._task_id())
+        # Review eligibility belongs to the board and is tied to the reviewed head.
+        # A cancelled or stale review must not exclude a later handover of this task.
         self._report_review(key, result, started_at, started)
         if (
             path is not None
