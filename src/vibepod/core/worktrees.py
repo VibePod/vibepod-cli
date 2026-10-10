@@ -6,7 +6,10 @@ checked out detached. The agent works in its clone only, so whatever it does to 
 tags or configuration stays there: the repository, the user's checkout and the other
 workers' clones are out of its reach. After the run the worker brings the task's branch back
 into the repository with a fetch that only ever moves it forward; a review brings nothing
-back. Only clones in the worker's own folder are ever reused or removed.
+back. Only clones in the worker's own folder are ever reused or removed. Before a run, the
+worker fetches the task's remote into the repository's remote-tracking refs, so that a run
+starts from the latest branches; the only branch that ever moves is the task's own, and only
+forward.
 
 Git runs here on the host, in clones an agent has worked in, so it never runs code from them:
 hooks, fsmonitors and submodule recursion are off for every call, nested repositories are never
@@ -16,6 +19,7 @@ read-only, and those are checked before git touches the clone after a run.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -849,3 +853,194 @@ def _first_error(text: str) -> str:
         if line.startswith(("fatal:", "error:", "remote:", "ERROR:")):
             return line
     return ""
+
+
+# --- fetching from the remote ----------------------------------------------------------
+
+# How long a fetch may take before it is given up.
+FETCH_TIMEOUT_SECONDS = 180
+# The longest error a failed fetch reports.
+FETCH_ERROR_CHARS = 300
+
+
+class FetchError(GitError):
+    """A fetch that did not go through, with a short reason fit to report."""
+
+
+class DivergedError(GitError):
+    """The task's branch in the repository and on the remote each hold commits the other
+    lacks."""
+
+
+def _network(
+    repo: Path,
+    args: list[str],
+    timeout: float,
+    hidden: tuple[str, ...],
+) -> subprocess.CompletedProcess[str]:
+    """Runs git where it talks to a remote, as a push does: no hooks, fsmonitor or
+    submodules, no prompt and no askpass program, no automatic maintenance, without the
+    board's settings and the `hidden` values, and with a time limit."""
+    ssh_configured = bool(_run(repo, "config", "core.sshCommand").stdout.strip())
+    return subprocess.run(
+        [
+            "git",
+            *SAFE_CONFIG,
+            "-c",
+            "core.askPass=",
+            "-c",
+            "fetch.recurseSubmodules=false",
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "maintenance.auto=false",
+            *args,
+        ],
+        cwd=repo,
+        env=push_env(hidden, ssh_configured),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def fetch_remote(
+    repo: Path,
+    remote_url: str | None = None,
+    *,
+    timeout: float = FETCH_TIMEOUT_SECONDS,
+    hidden: tuple[str, ...] = (),
+) -> str | None:
+    """Fetches the branches of the remote whose URL is `remote_url`, else `origin`, into the
+    repository's remote-tracking refs (`refs/remotes/<remote>/*`), pruning those the remote
+    no longer has, and says which remote; None when the repository has no such remote.
+    Only remote-tracking refs move: no branch, tag or checkout of the repository. Where the
+    repository does not know the remote's default branch yet (`<remote>/HEAD`), it is asked
+    for. Raises `FetchError` with a short reason."""
+    remote = push_remote(repo, remote_url)
+    if remote not in remotes(repo):
+        return None
+    try:
+        result = _network(
+            repo,
+            [
+                "fetch",
+                "--prune",
+                "--no-tags",
+                "--no-write-fetch-head",
+                "--no-recurse-submodules",
+                "--quiet",
+                "--",
+                remote,
+                f"+refs/heads/*:refs/remotes/{remote}/*",
+            ],
+            timeout,
+            hidden,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FetchError(f"the fetch from {remote} timed out after {int(timeout)}s") from exc
+    except OSError as exc:
+        raise FetchError(f"git could not run: {exc}") from exc
+    if result.returncode != 0:
+        raise FetchError(fetch_failure(remote, f"{result.stdout}\n{result.stderr}"))
+    if remote_default_branch(repo, remote) is None:
+        # Asked once; a remote without a default branch leaves it unknown.
+        with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+            _network(repo, ["remote", "set-head", remote, "--auto"], timeout, hidden)
+    return remote
+
+
+def fetch_failure(remote: str, output: str) -> str:
+    """A short reason for a failed fetch from git's output, without credentials."""
+    text = _URL_CREDENTIALS.sub("***@", output)
+    if _AUTH.search(text):
+        reason = (
+            f"authentication: {remote} refused the credentials, or none are set up for git "
+            "on this host"
+        )
+    elif _NO_REMOTE.search(text):
+        reason = f"no remote: {remote} is not a repository git can fetch from"
+    elif _NETWORK.search(text):
+        reason = f"network: {remote} could not be reached"
+    else:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        reason = f"fetch failed: {lines[-1] if lines else 'git gave no reason'}"
+    detail = _first_error(text)
+    if detail and detail not in reason:
+        reason += f" ({detail})"
+    return reason[:FETCH_ERROR_CHARS]
+
+
+def remote_branch_commit(repo: Path, remote: str, branch: str) -> str | None:
+    """The commit the remote has the branch at, as last fetched, or None."""
+    ref = f"refs/remotes/{remote}/{branch}^{{commit}}"
+    result = _run(repo, "rev-parse", "--verify", "--quiet", ref)
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
+def remote_default_branch(repo: Path, remote: str) -> str | None:
+    """The remote's default branch as last fetched, such as `origin/main`, or None when the
+    repository does not know it."""
+    result = _run(repo, "symbolic-ref", "--quiet", f"refs/remotes/{remote}/HEAD")
+    target = result.stdout.strip() if result.returncode == 0 else ""
+    prefix = f"refs/remotes/{remote}/"
+    if not target.startswith(prefix):
+        return None
+    branch = target[len(prefix) :]
+    return f"{remote}/{branch}" if remote_branch_commit(repo, remote, branch) else None
+
+
+def is_ancestor(repo: Path, ancestor: str, commit: str) -> bool:
+    return _run(repo, "merge-base", "--is-ancestor", ancestor, commit).returncode == 0
+
+
+@dataclass(frozen=True)
+class BranchStart:
+    """Where a continued task branch is taken from: the repository's branch, or the
+    remote's when only the remote has it or it is ahead."""
+
+    # The commit the branch is at in the repository once synced; None when neither has it.
+    commit: str | None
+    # local, remote (taken from the remote), or None when neither has the branch.
+    source: str | None
+    # What was done, for the run report, such as a fast-forward.
+    note: str | None = None
+
+
+def sync_branch(repo: Path, remote: str | None, branch: str) -> BranchStart:
+    """Brings the task's branch in the repository up to the remote's, as last fetched,
+    before a run continues it. Where only the remote has it, the branch is made from the
+    remote's; where the repository's is behind, it is fast-forwarded, unless it is checked
+    out in a worktree of the repository (which is never worked on anyway). A branch ahead
+    of the remote's, such as with work not pushed yet, stays as it is. Branches that
+    diverged raise `DivergedError`: neither is picked over the other. Only the task's
+    branch ever moves, and only forward."""
+    local = branch_commit(repo, branch)
+    theirs = remote_branch_commit(repo, remote, branch) if remote else None
+    if theirs is None or theirs == local:
+        return BranchStart(local, "local" if local else None)
+    on = f"{remote}/{branch}"
+    ref = f"refs/heads/{branch}"
+    if local is None:
+        if worktree_of_branch(repo, branch) is None:
+            git(repo, "update-ref", ref, theirs, "0" * len(theirs))
+        return BranchStart(theirs, "remote", f"Took {branch} from {on} at {theirs[:12]}")
+    if is_ancestor(repo, theirs, local):
+        return BranchStart(local, "local")
+    if not is_ancestor(repo, local, theirs):
+        raise DivergedError(
+            f"The branch {branch} on {remote} ({theirs[:12]}) and in {repo} ({local[:12]}) "
+            "have diverged; not picking one. Bring them together, such as by rebasing or "
+            "resetting one onto the other, then plan the task again",
+        )
+    if worktree_of_branch(repo, branch) is not None:
+        # Never moved: the run refuses to work in someone else's checkout anyway.
+        return BranchStart(local, "local")
+    git(repo, "update-ref", ref, theirs, local)
+    return BranchStart(
+        theirs,
+        "remote",
+        f"Fast-forwarded {branch} from {local[:12]} to {on} at {theirs[:12]}",
+    )
