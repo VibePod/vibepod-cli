@@ -652,6 +652,7 @@ class BoardWorker:
         # Tasks whose run was cancelled from the board: planned again, but passed over by
         # this worker so it does not restart what it was told to stop.
         self.passed_over: deque[str] = deque(maxlen=PASS_OVER_LIMIT)
+        self.cancelled_reviews: deque[tuple[str, str, str | None]] = deque(maxlen=PASS_OVER_LIMIT)
         # Board writes that kept failing, tried again on every round of the loop, each with
         # the write that replaces it once the worker was stopped, if any.
         self.undelivered: list[tuple[str, Write, tuple[str, Write] | None]] = []
@@ -793,6 +794,20 @@ class BoardWorker:
             self.lock.release()
 
     def _claim(self) -> dict[str, Any] | None:
+        exclude = list(self.passed_over)
+        for task_id, card_id, head_sha in list(self.cancelled_reviews):
+            try:
+                state = self.client.review_state(card_id)
+            except BoardApiError as exc:
+                if not exc.is_not_found:
+                    # Keep the cancellation until the board can confirm a new head.
+                    exclude.append(task_id)
+                    continue
+                state = {}
+            if state.get("column") == "review" and state.get("headSha") == head_sha:
+                exclude.append(task_id)
+            else:
+                self.cancelled_reviews.remove((task_id, card_id, head_sha))
         try:
             result = self.client.claim(
                 self.options.project,
@@ -800,7 +815,7 @@ class BoardWorker:
                 task=self.options.task,
                 labels=self.options.labels,
                 min_readiness=self.options.min_readiness,
-                exclude=list(self.passed_over),
+                exclude=exclude,
                 lease_seconds=self.options.lease_seconds,
                 mode=MODE_REVIEW if self.reviewing else None,
             )
@@ -1955,8 +1970,10 @@ class BoardWorker:
         else:
             self.summary.returned.append(key)
             self.say("warning", f"{key}: {result.reason or result.note}")
-        # Review eligibility belongs to the board and is tied to the reviewed head.
-        # A cancelled or stale review must not exclude a later handover of this task.
+        # Do not restart a board-cancelled review at the same head. Rework and later
+        # handovers make it eligible again; stale verdicts (409/404) need no exclusion.
+        if self.cancel_reason is not None:
+            self.cancelled_reviews.append((self._task_id(), str(card["id"]), head_sha))
         self._report_review(key, result, started_at, started)
         if (
             path is not None
