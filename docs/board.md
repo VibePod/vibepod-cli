@@ -127,6 +127,15 @@ The prompt asks the agent to end every run with a result block:
 `status` is `done`, `needs_input` with a `question`, or `failed` with a
 `reason`. A run whose output has no readable result counts as failed.
 
+With `done`, the agent may also suggest the pull request for its work:
+`prTitle`, one short line, and `prBody`, a few lines of markdown on what
+changed and why. The worker sends them with the hand-over, and the board
+prefills **Open PR** with them. A rework's hand-over sends the new suggestion,
+which replaces the earlier one; review runs never send one. The title is kept
+to one line and both are cut to GitHub's limits; a suggestion that is not a
+string is left out with a note in the worker's output, and the run goes on.
+A board from before suggestions ignores them.
+
 - **Needs input.** When the task is unclear, the agent asks instead of
   guessing. The task is blocked on the board with the question on its card,
   without counting a failed attempt, and the work so far stays on the branch.
