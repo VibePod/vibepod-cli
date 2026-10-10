@@ -130,7 +130,10 @@ class BoardClient:
         min_readiness: int | None = None,
         exclude: Sequence[str] = (),
         lease_seconds: int | None = None,
+        mode: str | None = None,
     ) -> dict[str, Any]:
+        """Claims the next task, or the named one. In `review` mode the task stays in Review
+        and the result's `review` names the commit to judge (`headSha`)."""
         body = _body(
             projectId=project,
             assignee=assignee,
@@ -139,6 +142,7 @@ class BoardClient:
             minReadiness=min_readiness,
             exclude=list(exclude) or None,
             leaseSeconds=lease_seconds,
+            mode=mode,
         )
         result: dict[str, Any] = self.request("POST", "/api/board/claim", body)
         return result
@@ -149,8 +153,11 @@ class BoardClient:
         assignee: str,
         branch_name: str | None = None,
         note: str | None = None,
+        head_sha: str | None = None,
     ) -> dict[str, Any]:
-        body = _body(assignee=assignee, branchName=branch_name, note=note)
+        """Moves a claimed task to Review. `head_sha` names the commit handed over: the
+        board binds the reviews and approvals of the task to it."""
+        body = _body(assignee=assignee, branchName=branch_name, note=note, headSha=head_sha)
         result: dict[str, Any] = self.request("POST", f"/api/board/{_ref(card)}/handover", body)
         return _item(result)
 
@@ -166,10 +173,40 @@ class BoardClient:
         result: dict[str, Any] = self.request("POST", f"/api/board/{_ref(card)}/release", body)
         return _item(result)
 
+    # --- reviews --------------------------------------------------------------------
+
+    def submit_review(
+        self,
+        card: str,
+        assignee: str,
+        verdict: str,
+        head_sha: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Ends the review `assignee` holds with its verdict: approve, rework (the note is
+        the feedback), needs_input (the note is the question), failed or released. A verdict
+        for another commit than the one under review is refused with 409. Returns where the
+        task stands with its reviewers."""
+        body = _body(assignee=assignee, verdict=verdict, headSha=head_sha, note=note)
+        result: dict[str, Any] = self.request("POST", f"/api/board/{_ref(card)}/review", body)
+        return result
+
+    def review_state(self, card: str) -> dict[str, Any]:
+        """The reviews of a task, newest first, and its approvals for the current head."""
+        result: dict[str, Any] = self.request("GET", f"/api/board/{_ref(card)}/reviews")
+        return result
+
     # --- workers --------------------------------------------------------------------
 
-    def register_worker(self, project: str, name: str, agent: str, machine: str) -> dict[str, Any]:
-        body = _body(projectId=project, name=name, agent=agent, machine=machine)
+    def register_worker(
+        self,
+        project: str,
+        name: str,
+        agent: str,
+        machine: str,
+        mode: str | None = None,
+    ) -> dict[str, Any]:
+        body = _body(projectId=project, name=name, agent=agent, machine=machine, mode=mode)
         result: dict[str, Any] = self.request("POST", "/api/workers", body)
         return result
 
@@ -200,6 +237,12 @@ class BoardClient:
     def sign_off(self, worker_id: str) -> dict[str, Any]:
         result: dict[str, Any] = self.request("POST", f"/api/workers/{_ref(worker_id)}/sign-off")
         return _item(result)
+
+    def task_history(self, task: str) -> list[dict[str, Any]]:
+        """The task's history, newest first: claims, questions, answers, feedback."""
+        result: dict[str, Any] = self.request("GET", f"/api/ideas/{_ref(task)}/history")
+        items: list[dict[str, Any]] = result["items"]
+        return items
 
     # --- reports --------------------------------------------------------------------
 
