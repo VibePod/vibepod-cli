@@ -229,13 +229,25 @@ def _raise_interrupt(_signum: int, _frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
+def _board_flag(config: dict[str, Any], key: str, default: bool) -> bool:
+    """A yes/no setting of the `board` config, such as `board.push`."""
+    board = config.get("board")
+    value = board.get(key, default) if isinstance(board, dict) else default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"false", "no", "off", "0"}:
+            return False
+        if text in {"true", "yes", "on", "1"}:
+            return True
+        return default
+    if value is None:
+        return default
+    return value is not False and value != 0
+
+
 def _push_enabled(config: dict[str, Any]) -> bool:
     """Whether `board.push` lets the worker push branches for the board; on unless set off."""
-    board = config.get("board")
-    value = board.get("push", True) if isinstance(board, dict) else True
-    if isinstance(value, str):
-        return value.strip().lower() not in {"false", "no", "off", "0"}
-    return value is not False and value != 0
+    return _board_flag(config, "push", True)
 
 
 def _repo_allowed(path: Path) -> bool:
@@ -313,8 +325,8 @@ def board_work(
         str | None,
         typer.Option(
             "--base",
-            help="Where new branches start, and what reviews diff against; defaults to the "
-            "repository's current branch",
+            help="Where new branches start, and what reviews diff against, taken from the "
+            "remote where it is further along; defaults to the remote's default branch",
         ),
     ] = None,
     branch_template: Annotated[
@@ -342,6 +354,14 @@ def board_work(
             "--no-push",
             help="Do not push branches for the board: neither an approved one nor on request "
             "(also board.push: false)",
+        ),
+    ] = False,
+    require_fetch: Annotated[
+        bool,
+        typer.Option(
+            "--require-fetch",
+            help="Block a task whose remote cannot be fetched, instead of working from the "
+            "repository as it is (also board.require_fetch: true)",
         ),
     ] = False,
     profile: Annotated[
@@ -409,6 +429,11 @@ def board_work(
     runs headless with the task as its prompt; after an optional --verify command passes,
     the branch comes back into the repository and the task moves to Review with it. Failed
     and timed-out tasks go back to Planned (or blocked) with a note.
+
+    Before each run the worker fetches the task's remote: new branches start from the
+    remote's default branch, and a continued branch from where the remote has it when that
+    is further along. A failed fetch goes on with the repository as it is, unless
+    --require-fetch.
 
     With --mode review the worker claims tasks in Review instead, and the agent judges the
     work on the branch, in a clone of its own, without changing it: approve, or send it
@@ -502,6 +527,7 @@ def board_work(
         max_attempts=max_attempts,
         usage_limit_wait_seconds=usage_wait,
         push=not no_push and _push_enabled(config),
+        require_fetch=require_fetch or _board_flag(config, "require_fetch", False),
     )
     runner = DockerAgentRunner(
         selected,
