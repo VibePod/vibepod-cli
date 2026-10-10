@@ -43,6 +43,16 @@ Runner is `pytest` (`python -m pytest`); CI also validates default images with
 `agents.*.env` breaks `test_config.py`). `ruff check` + `ruff format --check`
 and `mypy` are pre-commit gated.
 
+## Snap releases
+
+`snap/snapcraft.yaml` adopts its version from `pyproject.toml`;
+`.github/workflows/snap.yml` validates the installed classic snap against Docker
+and rootless Podman before release uploads. Classic packaging must explicitly
+stage the Python interpreter and stdlib packages: base-provided transitive
+dependencies of `python3-venv` are filtered by Snapcraft. Store setup and the
+confinement rationale live in `docs/snap.md`. Keep publication notices accurate
+until Store setup succeeds.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
