@@ -4152,3 +4152,402 @@ def test_vp_board_work_no_push_and_board_push_off_turn_pushing_off(
     assert pushes("", "--no-push") is False
     assert pushes("board:\n  push: false\n") is False
     assert pushes("board:\n  push: true\n") is True
+
+
+# --- fetching before a run -------------------------------------------------------------
+
+
+def published(repo: Path, github: Path) -> None:
+    """The repository with `github` as its origin, holding its main branch."""
+    git(repo, "remote", "add", "origin", str(github))
+    git(repo, "push", "--quiet", "origin", "main")
+
+
+def colleague(tmp_path: Path, github: Path) -> Path:
+    """Someone else's clone of the remote, to push from."""
+    path = tmp_path / "colleague"
+    git(tmp_path, "clone", "--quiet", str(github), str(path))
+    git(path, "config", "user.name", "Colleague")
+    git(path, "config", "user.email", "colleague@example.com")
+    return path
+
+
+def pushes(path: Path, branch: str, message: str, start: str | None = None) -> str:
+    """A commit on `branch` in the colleague's clone, pushed. Returns it."""
+    git(path, "checkout", "--quiet", "-B", branch, start or "HEAD")
+    git(path, "commit", "--quiet", "--allow-empty", "-m", message)
+    git(path, "push", "--quiet", "origin", f"{branch}:refs/heads/{branch}")
+    return git(path, "rev-parse", "HEAD")
+
+
+def local_state(repo: Path) -> tuple[str, dict[str, str]]:
+    """The repository's checkout and its branches and tags."""
+    return git(repo, "symbolic-ref", "HEAD"), worktrees.branch_refs(repo)
+
+
+def test_a_new_task_starts_from_the_remotes_latest_default_branch(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    upstream = pushes(colleague(tmp_path, github), "main", "Upstream change")
+    # The checkout is on an old branch, and the local main is behind too.
+    git(repo, "checkout", "--quiet", "-b", "old")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Old work")
+    before = local_state(repo)
+    board.add_task("Add the feature")
+
+    worker, messages = work(server, FakeRunner(), repo, once=True)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    assert git(repo, "log", "--format=%s", "vp-1").splitlines() == [
+        "Add the feature",
+        "Upstream change",
+        "Initial commit",
+    ]
+    assert git(repo, "rev-parse", "origin/main") == upstream
+    assert git(repo, "symbolic-ref", "refs/remotes/origin/HEAD") == "refs/remotes/origin/main"
+    # Only the task's branch is new in the repository; the checkout and the other branches
+    # are where they were.
+    after = local_state(repo)
+    assert after[0] == before[0]
+    assert {ref: sha for ref, sha in after[1].items() if ref != "refs/heads/vp-1"} == before[1]
+    assert board.runs[0]["summary"] == "Added feature.txt and committed it."
+    assert not [message for level, message in messages if level == "warning"]
+
+
+def test_base_names_where_new_branches_start_taken_from_the_remote_unless_ahead(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    other = colleague(tmp_path, github)
+    pushes(other, "main", "Upstream change")
+    pushes(other, "release", "Release work", "origin/main")
+    git(repo, "branch", "release", "main")
+    git(repo, "branch", "local-only")
+    board.add_task("Add the feature")
+
+    # The local release is behind the remote's: the remote's is the base.
+    work(server, FakeRunner(), repo, once=True, base="release")
+
+    assert git(repo, "log", "--format=%s", "vp-1").splitlines() == [
+        "Add the feature",
+        "Release work",
+        "Upstream change",
+        "Initial commit",
+    ]
+    worker = BoardWorker(
+        BoardClient(server.url, TOKEN),
+        FakeRunner(),
+        WorkOptions(project="VP", agent="claude", name="x", base="release"),
+    )
+    git(repo, "fetch", "--quiet", "origin")
+    assert worker._base(repo, "origin") == "origin/release"
+    # Ahead of the remote's, such as with work not pushed yet: the local branch.
+    git(repo, "branch", "--force", "release", "vp-1")
+    assert worker._base(repo, "origin") == "release"
+    worker.options.base = "local-only"
+    assert worker._base(repo, "origin") == "local-only"
+    worker.options.base = None
+    assert worker._base(repo, "origin") == "origin/main"
+    assert worker._base(repo, None) == "main"
+
+
+def test_a_rework_continues_from_a_branch_only_the_remote_has(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    theirs = pushes(colleague(tmp_path, github), "issue-7", "Their fix")
+    board.add_task("Add a cache")
+    board.card("VP-1")["branchName"] = "issue-7"
+
+    worker, messages = work(server, FakeRunner(), repo, once=True)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    assert git(repo, "log", "--format=%s", "main..issue-7").splitlines() == [
+        "Add the feature",
+        "Their fix",
+    ]
+    note = f"Took issue-7 from origin/issue-7 at {theirs[:12]}"
+    assert ("info", note) in messages
+    assert board.runs[0]["summary"].endswith(f"\n\n{note}")
+
+
+def test_a_rework_fast_forwards_a_branch_that_is_behind_the_remotes(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    git(repo, "branch", "issue-7")
+    git(repo, "push", "--quiet", "origin", "issue-7")
+    ours = git(repo, "rev-parse", "issue-7")
+    other = colleague(tmp_path, github)
+    theirs = pushes(other, "issue-7", "Review fix on GitHub", "origin/issue-7")
+    board.add_task("Add a cache")
+    board.card("VP-1")["branchName"] = "issue-7"
+
+    work(server, FakeRunner(), repo, once=True)
+
+    assert board.card("VP-1")["column"] == "review"
+    assert git(repo, "log", "--format=%s", "main..issue-7").splitlines() == [
+        "Add the feature",
+        "Review fix on GitHub",
+    ]
+    assert board.runs[0]["summary"].endswith(
+        f"Fast-forwarded issue-7 from {ours[:12]} to origin/issue-7 at {theirs[:12]}",
+    )
+
+
+def test_a_branch_checked_out_by_the_user_is_never_moved(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    git(repo, "checkout", "--quiet", "-b", "issue-7")
+    git(repo, "push", "--quiet", "origin", "issue-7")
+    pushes(colleague(tmp_path, github), "issue-7", "Review fix on GitHub", "origin/issue-7")
+    before = local_state(repo)
+    board.add_task("Add a cache")
+    board.card("VP-1")["branchName"] = "issue-7"
+    runner = FakeRunner()
+
+    work(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert "is checked out in" in release["note"]
+    assert local_state(repo) == before
+
+
+def test_diverged_branches_block_the_task_naming_both_commits(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    git(repo, "branch", "issue-7")
+    git(repo, "push", "--quiet", "origin", "issue-7")
+    theirs = pushes(colleague(tmp_path, github), "issue-7", "Restacked", "origin/main")
+    git(repo, "checkout", "--quiet", "issue-7")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Local work")
+    ours = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "--quiet", "main")
+    before = local_state(repo)
+    board.add_task("Add a cache")
+    board.card("VP-1")["branchName"] = "issue-7"
+    runner = FakeRunner()
+
+    work(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith(
+        f"The branch issue-7 on origin ({theirs[:12]}) and in {repo.resolve()} ({ours[:12]}) "
+        "have diverged",
+    )
+    assert local_state(repo) == before
+
+
+def test_a_rework_whose_branch_was_renamed_continues_on_the_issues_branch(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    pushes(colleague(tmp_path, github), "issue-202", "Renamed work")
+    board.add_task("Add a cache", githubIssueNumber=202)
+    board.card("VP-1")["branchName"] = "vp-34"
+
+    work(server, FakeRunner(), repo, once=True)
+
+    [handover] = board.requests("POST", "/api/board/card-1/handover")
+    assert handover["branchName"] == "issue-202"
+    assert git(repo, "log", "--format=%s", "main..issue-202").splitlines() == [
+        "Add the feature",
+        "Renamed work",
+    ]
+    assert "The branch vp-34 is gone; continuing on issue-202" in board.runs[0]["summary"]
+
+
+def test_a_failed_fetch_goes_on_from_the_local_state_or_blocks_when_required(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(tmp_path / "gone.git"))
+    board.add_task("Add the feature")
+    board.add_task("Add another feature")
+
+    worker, messages = work(server, FakeRunner(), repo, once=True)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    assert "Could not fetch origin, so the run works from" in board.runs[0]["summary"]
+    assert any(
+        level == "warning" and message.startswith("Could not fetch origin")
+        for level, message in messages
+    )
+
+    runner = FakeRunner()
+    worker, _ = work(server, runner, repo, once=True, require_fetch=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-2/release")
+    assert release["outcome"] == "blocked"
+    assert release["note"].startswith("Could not fetch origin (--require-fetch): no remote")
+
+
+def test_a_repository_without_its_remote_needs_one_only_when_fetching_is_required(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add the feature")
+    runner = FakeRunner()
+
+    work(server, runner, repo, once=True, require_fetch=True)
+
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["note"] == f"{repo.resolve()} has no remote origin to fetch (--require-fetch)"
+
+
+def test_a_review_fetches_a_head_only_the_remote_has(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    head = pushes(colleague(tmp_path, github), "issue-7", "Pushed by someone else")
+    task = board.add_task("Add the feature")
+    board.put_in_review(task["key"], "issue-7", head)
+    before = local_state(repo)
+    runner = FakeRunner(says("approve", summary="Good."))
+
+    worker, _ = review(server, runner, repo, push=False, keep_worktree=True)
+
+    assert worker.summary.approved == ["VP-1"]
+    assert git(review_path(repo), "rev-parse", "HEAD") == head
+    prompt = runner.starts[0]["prompt"]
+    assert "The work branched off `origin/main`" in prompt
+    # Nothing of the review comes into the repository but the fetched remote branches.
+    assert local_state(repo) == before
+    assert git(repo, "rev-parse", "origin/issue-7") == head
+
+
+def test_fetching_moves_only_remote_tracking_refs_without_hooks_or_the_token(
+    monkeypatch,
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    other = colleague(tmp_path, github)
+    pushes(other, "gone", "Soon deleted")
+    git(repo, "fetch", "--quiet", "origin")
+    git(other, "push", "--quiet", "origin", "--delete", "gone")
+    git(other, "tag", "v1")
+    git(other, "push", "--quiet", "origin", "v1")
+    upstream = pushes(other, "main", "Upstream change")
+    marker = tmp_path / "hook-ran"
+    hook = repo / ".git" / "hooks" / "reference-transaction"
+    hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    hook.chmod(0o755)
+    monkeypatch.setenv("VP_BOARD_TOKEN", TOKEN)
+    monkeypatch.setenv("SOMETHING", TOKEN)
+    calls: list[tuple[list[str], dict[str, str]]] = []
+    original = subprocess.run
+
+    def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "fetch" in args:
+            calls.append((args, kwargs["env"]))
+        return original(args, **kwargs)
+
+    monkeypatch.setattr(worktrees.subprocess, "run", run)
+    before = worktrees.branch_refs(repo)
+
+    assert worktrees.fetch_remote(repo, None, hidden=(TOKEN,)) == "origin"
+
+    assert worktrees.branch_refs(repo) == before
+    assert git(repo, "rev-parse", "origin/main") == upstream
+    assert git(repo, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/gone") == ""
+    assert not marker.exists()
+    [(args, env)] = calls
+    assert f"core.hooksPath={os.devnull}" in args
+    assert TOKEN not in env.values()
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "GIT_ASKPASS" not in env
+    # The remote is the one with the card's URL; a repository without it fetches nothing.
+    assert worktrees.fetch_remote(repo, "https://github.com/other/app") == "origin"
+    git(repo, "remote", "rename", "origin", "upstream")
+    assert worktrees.fetch_remote(repo, None) is None
+
+    def times_out(args: list[str], **kwargs: Any) -> Any:
+        if "fetch" in args:
+            raise subprocess.TimeoutExpired(args, 1)
+        return original(args, **kwargs)
+
+    monkeypatch.setattr(worktrees.subprocess, "run", times_out)
+    with pytest.raises(worktrees.FetchError, match="^the fetch from upstream timed out after 1s"):
+        worktrees.fetch_remote(repo, f"{github}", timeout=1)
+
+
+def test_vp_board_work_require_fetch_and_its_config(
+    monkeypatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    created: list[BoardWorker] = []
+    original = BoardWorker.__init__
+
+    def init(self: BoardWorker, *args: Any, **kwargs: Any) -> None:
+        original(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(BoardWorker, "__init__", init)
+    monkeypatch.setattr(BoardWorker, "run", lambda self: WorkSummary())
+    monkeypatch.setenv("VP_BOARD_URL", server.url)
+    monkeypatch.setenv("VP_BOARD_TOKEN", TOKEN)
+    monkeypatch.setattr(board_cmd, "DockerAgentRunner", lambda agent, **kwargs: FakeRunner())
+    monkeypatch.setattr(board_cmd, "is_dir_allowed", lambda path: True)
+    command = ["board", "work", "VP", "--agent", "claude", "--repo", str(repo), "--parallel"]
+
+    def requires(config: str, *extra: str) -> bool:
+        directory = tmp_path / f"config-{len(created)}"
+        directory.mkdir()
+        (directory / "config.yaml").write_text(config)
+        monkeypatch.setenv("VP_CONFIG_DIR", str(directory))
+        result = CliRunner().invoke(app, [*command, *extra])
+        assert result.exit_code == 0, result.output
+        return created[-1].options.require_fetch
+
+    assert requires("") is False
+    assert requires("", "--require-fetch") is True
+    assert requires("board:\n  require_fetch: true\n") is True
+    assert requires("board:\n  require_fetch: false\n") is False
