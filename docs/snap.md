@@ -93,6 +93,12 @@ bypass runtime permissions or firewall rules.
 
 ## Build, validate and release
 
+The classic recipe explicitly stages the Python 3.12 interpreter and both
+standard-library packages. Snapcraft filters transitive dependencies already
+present in `core24`, so staging only `python3-venv` omits the runtime and fails
+the Python plugin's build step. Keep these packages aligned with the base's
+Python version when changing bases.
+
 On a snapd-enabled Linux amd64 build host, install Snapcraft and its supported
 build provider, then build from the repository root:
 
