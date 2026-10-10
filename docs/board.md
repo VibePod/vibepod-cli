@@ -211,7 +211,9 @@ When the task moved on during the review, because it was handed over again or
 another reviewer sent it back, the review ends without a verdict. Pause, stop,
 cancel, `--parallel`, the profile lock and usage limits work as for
 implementation workers, and a review the board cannot renew is given up before
-its lease runs out. `--branch-template`, `--existing`, `--on-fail` and
+its lease runs out. A polling worker skips a board-cancelled review while the
+task remains in Review at the same head. It can review the task again after
+rework or a handover at a new head. `--branch-template`, `--existing`, `--on-fail` and
 `--max-attempts` have no meaning for a review and are refused with
 `--mode review`.
 

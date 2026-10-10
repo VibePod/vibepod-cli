@@ -1841,7 +1841,7 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
     assert (seen["head"], seen["branch"]) == (sha, 1)
     # The agent gets all of the git directory read-only: it has nothing to commit.
     git_dir = (repo / ".git").resolve()
-    assert (str(git_dir), str(git_dir), "ro") in start["mounts"]
+    assert (str(git_dir), worktrees.container_path(git_dir), "ro") in start["mounts"]
     prompt = start["prompt"]
     assert "Review the work on task VP-1" in prompt
     assert "Build the feature described here." in prompt
@@ -2257,17 +2257,22 @@ def test_another_reviewers_rework_cancels_the_review_without_a_verdict(
     assert not review_path(repo).exists()
 
 
-def test_a_polling_reviewer_reviews_a_new_head_after_another_reviewers_rework(
+@pytest.mark.parametrize("board_cancel", [False, True])
+def test_a_polling_reviewer_reviews_a_new_head_after_cancellation(
     board: FakeBoard,
     server: FakeBoardServer,
     repo: Path,
+    board_cancel: bool,
 ) -> None:
     board.required_approvals = 2
     old_sha = handed_over(board, repo)
     new_sha = ""
 
     def request_rework() -> list[dict[str, Any]]:
-        if board.card("VP-1")["headSha"] == old_sha:
+        if board_cancel:
+            if board.reviews[0]["open"]:
+                board._cancel_review("card-1", "review-1", {"reason": "Not now"})
+        elif board.card("VP-1")["headSha"] == old_sha:
             board._claim_review({"assignee": "codex-review", "mode": "review"})
             board._submit_review(
                 "card-1",
@@ -2287,11 +2292,12 @@ def test_a_polling_reviewer_reviews_a_new_head_after_another_reviewers_rework(
             nonlocal new_sha
             super().sleep(seconds)
             if board.runs and not new_sha:
-                # Wait for A to poll while the task is still Planned, then hand it over.
+                # Wait for A to poll at the cancelled head, then hand it over again.
                 claims = board.requests("POST", "/api/board/claim")
                 assert len(claims) == 2
-                assert claims[-1] is not None and claims[-1].get("exclude", []) == []
-                assert board.card("VP-1")["column"] == "planned"
+                assert claims[-1] is not None
+                assert claims[-1].get("exclude", []) == (["idea-1"] if board_cancel else [])
+                assert board.card("VP-1")["column"] == ("review" if board_cancel else "planned")
                 assert not review_path(repo).exists()
                 git(repo, "checkout", "--quiet", "issue-7")
                 git(repo, "commit", "--quiet", "--allow-empty", "-m", "Address review feedback")
@@ -2350,8 +2356,16 @@ def test_a_review_cancelled_from_the_board_ends_without_a_verdict(
     board.on_heartbeat = once_the_agent_runs(cancelled)
     runner = FakeRunner(polls=None)
 
-    review(server, runner, repo, once=True)
+    class StopAfterPolling(Clock):
+        def sleep(self, seconds: float) -> None:
+            super().sleep(seconds)
+            if len(board.requests("POST", "/api/board/claim")) >= 3:
+                board.on_heartbeat = lambda beat: [{"type": "stop"}]
 
+    review(server, runner, repo, poll_seconds=30, clock=StopAfterPolling())
+
+    assert len(runner.runs) == 1
+    assert len(board.reviews) == 1
     assert runner.runs[0].stopped is True
     assert board.requests("POST", "/api/board/card-1/review") == []
     assert board.runs[0]["outcome"] == "cancelled"
@@ -2416,9 +2430,16 @@ def test_a_review_cancelled_while_preparing_never_starts_the_agent(
     board.on_heartbeat = cancel_while_preparing
     runner = FakeRunner()
 
-    review(server, runner, repo, once=True)
+    class StopAfterPolling(Clock):
+        def sleep(self, seconds: float) -> None:
+            super().sleep(seconds)
+            if len(board.requests("POST", "/api/board/claim")) >= 3:
+                board.on_heartbeat = lambda beat: [{"type": "stop"}]
+
+    review(server, runner, repo, poll_seconds=30, clock=StopAfterPolling())
 
     assert runner.starts == []
+    assert len(board.reviews) == 1
     assert board.requests("POST", "/api/board/card-1/review") == []
     assert board.runs[0]["outcome"] == "cancelled"
     assert not review_path(repo).exists()
@@ -3414,4 +3435,4 @@ def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) 
 
     mounts = worktrees.agent_mounts(repo, path, read_only=True)
     git_dir = (repo / ".git").resolve()
-    assert mounts[0] == (str(git_dir), str(git_dir), "ro")
+    assert mounts[0] == (str(git_dir), worktrees.container_path(git_dir), "ro")
