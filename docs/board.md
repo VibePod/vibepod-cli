@@ -130,6 +130,15 @@ the task does not stand in for one; agents that log JSON events, such as Pi,
 have their messages decoded first. A run whose output does not end with a
 readable result counts as failed.
 
+With `done`, the agent may also suggest the pull request for its work:
+`prTitle`, one short line, and `prBody`, a few lines of markdown on what
+changed and why. The worker sends them with the hand-over, and the board
+prefills **Open PR** with them. A rework's hand-over sends the new suggestion,
+which replaces the earlier one; review runs never send one. The title is kept
+to one line and both are cut to GitHub's limits; a suggestion that is not a
+string is left out with a note in the worker's output, and the run goes on.
+A board from before suggestions ignores them.
+
 - **Needs input.** When the task is unclear, the agent asks instead of
   guessing. The task is blocked on the board with the question on its card,
   without counting a failed attempt, and the work so far stays on the branch.
