@@ -230,7 +230,14 @@ def _parse_volume_spec(
     # `c:/data` is a one-letter named volume.
     drive = entry[:2] if os.name == "nt" and _WINDOWS_DRIVE_RE.match(entry) else ""
     parts = entry[len(drive) :].split(":")
-    if len(parts) == 2:
+    if len(parts) == 1:
+        if drive or not entry.startswith("/"):
+            raise invalid(
+                "same-path shorthand requires an absolute POSIX host path; "
+                "otherwise use SOURCE:TARGET[:MODE]."
+            )
+        host, target, mode = entry, entry, "rw"
+    elif len(parts) == 2:
         host, target, mode = parts[0], parts[1], "rw"
     elif len(parts) == 3:
         host, target, mode = parts
@@ -280,6 +287,7 @@ def parse_volume_specs(
 ) -> list[tuple[str, str, str]]:
     """Validate `docker run -v` style entries as (source, container_path, mode).
 
+    A single absolute POSIX host path mounts at the same container path in rw mode.
     Sources are host paths (absolute, `~`-prefixed, or relative to *base_dir*)
     or Docker named volumes; `source` names the origin in error messages
     (`agents.<agent>.volumes` or `--volume`). Entries mounted at one of
