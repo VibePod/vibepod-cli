@@ -54,7 +54,8 @@ jobs:
         run: |
           sudo snap install --dangerous --classic "$SNAP_FILE"
           export VP_CONFIG_DIR="$RUNNER_TEMP/vibepod-snap-config"
-          export VP_SNAP_EXPECTED_VERSION="$(python -c 'import importlib.metadata; print(importlib.metadata.version("vibepod"))')"
+          VP_SNAP_EXPECTED_VERSION="$(python -c 'import importlib.metadata; print(importlib.metadata.version("vibepod"))')"
+          export VP_SNAP_EXPECTED_VERSION
           snap run vibepod version
           snap run vibepod.vp version
           snap run --shell vibepod <<'SH'
@@ -65,10 +66,12 @@ jobs:
           VP_SNAP_EXPECTED_RUNTIME: rootless-podman
         run: |
           systemctl --user enable --now podman.socket
-          export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+          DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+          export DOCKER_HOST
           curl --fail --silent --show-error --unix-socket "${DOCKER_HOST#unix://}" http://d/_ping
           export VP_CONFIG_DIR="$RUNNER_TEMP/vibepod-snap-podman-config"
-          export VP_SNAP_EXPECTED_VERSION="$(python -c 'import importlib.metadata; print(importlib.metadata.version("vibepod"))')"
+          VP_SNAP_EXPECTED_VERSION="$(python -c 'import importlib.metadata; print(importlib.metadata.version("vibepod"))')"
+          export VP_SNAP_EXPECTED_VERSION
           snap run --shell vibepod <<'SH'
           exec "$SNAP/bin/python3" "$PWD/scripts/smoke_snap.py"
           SH

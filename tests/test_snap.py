@@ -52,7 +52,10 @@ def test_snap_adopts_project_version(tmp_path: Path) -> None:
     ],
 )
 def test_snap_smoke_requires_expected_runtime(
-    expected: str, podman: bool, rootless: bool, error: str | None
+    expected: str,
+    podman: bool,
+    rootless: bool,
+    error: str | None,
 ) -> None:
     validate = runpy.run_path(str(ROOT / "scripts/smoke_snap.py"))["validate_runtime"]
     manager = Mock(spec=DockerManager)
