@@ -1801,7 +1801,7 @@ def review(
 
 
 def review_path(repo: Path, task: str = "vp-1", name: str = REVIEWER) -> Path:
-    return repo.parent / "app-worktrees" / worktrees.worktree_folder(f"review-{task}-{name}")
+    return repo.parent / "app-worktrees" / worktrees.review_worktree_folder(f"review-{task}-{name}")
 
 
 def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
@@ -1938,6 +1938,44 @@ def test_reviewers_with_different_names_each_approve_in_their_own_worktree(
     assert state["approvedBy"] == [REVIEWER, "codex-review-2"]
     for name in (REVIEWER, "codex-review-2"):
         assert git(review_path(repo, name=name), "rev-parse", "HEAD") == sha
+
+
+@pytest.mark.parametrize("second_name", ["claude-review-host", "claude-review%40host"])
+def test_overlapping_reviewers_with_similar_names_keep_distinct_worktrees(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    second_name: str,
+) -> None:
+    board.required_approvals = 2
+    sha = handed_over(board, repo)
+    first_name = "claude-review@host"
+    # Dash replacement and literal percent escapes must not alias another reviewer.
+
+    def first_review(path: Path, prompt: str) -> tuple[int, str]:
+        scratch = path / "review-notes.txt"
+        scratch.write_text("first review is still running\n")
+
+        def second_review(second_path: Path, second_prompt: str) -> tuple[int, str]:
+            assert second_path != path
+            assert git(second_path, "rev-parse", "HEAD") == sha
+            assert scratch.read_text() == "first review is still running\n"
+            return 0, result_block("approve", summary="Second approval.")
+
+        second, _ = review(server, FakeRunner(second_review), repo, name=second_name)
+        assert second.summary.approved == ["VP-1"]
+        assert scratch.exists()
+        scratch.unlink()
+        return 0, result_block("approve", summary="First approval.")
+
+    first, _ = review(server, FakeRunner(first_review), repo, name=first_name)
+
+    assert first.summary.approved == ["VP-1"]
+    assert set(board.approvers("VP-1")) == {second_name, first_name}
+    assert len(board.runs) == 2
+    assert all(report["kind"] == "review" for report in board.runs)
+    assert not review_path(repo, name=first_name).exists()
+    assert not review_path(repo, name=second_name).exists()
 
 
 def test_a_failing_verify_is_always_a_rework_with_its_output(
@@ -3272,7 +3310,7 @@ def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) 
 
     path = worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a@b", sha)
 
-    assert path == (tmp_path / "trees" / "review-vp-1-a-b").resolve()
+    assert path == (tmp_path / "trees" / "review-vp-1-a%40b").resolve()
     assert worktrees.current_branch(path) is None
     assert git(path, "rev-parse", "HEAD") == sha
     (path / "left.txt").write_text("left\n")

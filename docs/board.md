@@ -173,7 +173,9 @@ For each task, a review worker:
    the claim names the commit the hand-over put up for review.
 2. **Checks out** exactly that commit, detached, in a worktree of its own
    (`<worktree-dir>/review-<key>-<worker>`), so reviewers of one task never
-   share one. No branch is created or moved. A missing branch or commit
+   share one. Punctuation in worker names is percent-escaped in folder names
+   (for example, `@` becomes `%40`) to keep distinct names distinct.
+   No branch is created or moved. A missing branch or commit
    blocks the task in Review with the reason.
 3. **Runs the agent** with a review prompt: the task's title, description and
    acceptance criteria, its history (questions, answers, earlier feedback and

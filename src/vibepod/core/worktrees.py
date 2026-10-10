@@ -20,6 +20,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
+from urllib.parse import quote
 
 # The committer used when the repository has no identity configured.
 FALLBACK_IDENTITY = ("VibePod", "vibepod@users.noreply.github.com")
@@ -157,6 +158,16 @@ def worktree_folder(branch: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "worktree"
 
 
+def review_worktree_folder(name: str) -> str:
+    """Preserve reviewer identity when making a portable folder name.
+
+    Unlike branch folders, review folders must distinguish names that differ only in
+    punctuation: replacing punctuation with dashes can replace another reviewer's tree.
+    Percent signs are escaped too, so an already encoded name remains distinct.
+    """
+    return quote(name, safe="-_.")
+
+
 def _inside(path: Path, folder: Path) -> bool:
     return path.resolve().is_relative_to(folder.resolve())
 
@@ -246,7 +257,7 @@ def prepare_review_worktree(repo: Path, worktrees_dir: Path, name: str, commit: 
     """Checks `commit` out, detached, in a worktree of its own for a review: no branch is
     created, checked out or moved, so several reviewers of one task each get one. A review
     worktree an earlier run left at the same place in the worktree folder is replaced."""
-    path = (worktrees_dir / worktree_folder(name)).resolve()
+    path = (worktrees_dir / review_worktree_folder(name)).resolve()
     if path == repo.resolve():
         raise GitError(f"Not replacing {path}: it is the repository's own checkout")
     if path in worktree_paths(repo):
