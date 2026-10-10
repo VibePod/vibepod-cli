@@ -8,9 +8,11 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
+from http.client import HTTPException
 from importlib.metadata import version
 from pathlib import Path
-from urllib.error import URLError
+from typing import Any
 from urllib.request import urlopen
 from uuid import uuid4
 
@@ -28,25 +30,97 @@ def validate_runtime(manager: DockerManager, expected: str) -> None:
         raise ValueError(f"Unsupported expected runtime: {expected!r}")
 
 
-def main() -> None:
-    snap_root = Path(os.environ["SNAP"]).resolve()
-    assert Path(sys.executable).resolve().is_relative_to(snap_root)
+def script_interpreter(script: Path) -> Path:
+    """Return the interpreter named by a script's shebang line."""
+    first_line = script.read_text(encoding="utf-8", errors="replace").partition("\n")[0]
+    assert first_line.startswith("#!"), f"{script} has no shebang: {first_line!r}"
+    parts = first_line[2:].split()
+    assert len(parts) == 1, f"{script} must name its interpreter directly: {first_line!r}"
+    return Path(parts[0])
+
+
+def validate_bundled_python(snap_root: Path) -> None:
+    """Fail when the snap's Python, stdlib or apps resolve to the host's Python."""
+    assert Path(sys.executable).resolve().is_relative_to(snap_root), sys.executable
+    assert Path(os.__file__).resolve().is_relative_to(snap_root), (
+        f"stdlib loaded from the host: {os.__file__}"
+    )
     import vibepod
 
-    assert Path(vibepod.__file__).resolve().is_relative_to(snap_root)
-    assert version("vibepod") == os.environ["VP_SNAP_EXPECTED_VERSION"]
-    for command in ("vibepod", "vibepod.vp"):
-        reported = subprocess.run(
-            ["snap", "run", command, "version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
+    assert Path(vibepod.__file__).resolve().is_relative_to(snap_root), vibepod.__file__
+    for app in ("vibepod", "vp"):
+        interpreter = script_interpreter(snap_root / "bin" / app)
+        assert interpreter.resolve().is_relative_to(snap_root), (
+            f"bin/{app} runs {interpreter}, outside {snap_root}"
         )
-        assert reported.stdout.splitlines()[0] == (
-            f"VibePod CLI: {os.environ['VP_SNAP_EXPECTED_VERSION']}"
-        ), reported.stdout
-    subprocess.run(["snap", "run", "vibepod", "--help"], check=True, timeout=30)
+
+
+def snap_cli_env() -> dict[str, str]:
+    """Environment for nested `snap run` calls without the runner's Python on PATH.
+
+    A host python3 with vibepod installed (such as the CI checkout) would otherwise
+    hide a snap whose apps resolve python3 through PATH.
+    """
+    return {**os.environ, "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+
+
+def run_snap_cli(command: str, *args: str) -> str:
+    """Run an installed snap app and return its stdout, reporting stderr on failure."""
+    completed = subprocess.run(
+        ["snap", "run", command, *args],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=snap_cli_env(),
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"`snap run {command} {' '.join(args)}` exited {completed.returncode}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}",
+        )
+    return completed.stdout
+
+
+def wait_for_http(
+    url: str,
+    expected: bytes,
+    timeout: float = 30.0,
+    opener: Callable[..., Any] = urlopen,
+) -> None:
+    """Poll *url* until it serves *expected*.
+
+    Published ports accept connections before the container process listens:
+    Docker's userland proxy then closes them, surfacing as resets or a missing
+    response rather than URLError, so every connection error is retried.
+    """
+    deadline = time.monotonic() + timeout
+    last_error: BaseException | None = None
+    while True:
+        try:
+            with opener(url, timeout=2) as response:
+                body = response.read()
+            if body == expected:
+                return
+            last_error = AssertionError(f"unexpected body {body!r}")
+        except (OSError, HTTPException) as exc:
+            last_error = exc
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"{url} did not serve {expected!r} within {timeout}s: {last_error!r}",
+            )
+        time.sleep(0.2)
+
+
+def main() -> None:
+    snap_root = Path(os.environ["SNAP"]).resolve()
+    expected_version = os.environ["VP_SNAP_EXPECTED_VERSION"]
+    validate_bundled_python(snap_root)
+    assert version("vibepod") == expected_version
+    for command in ("vibepod", "vibepod.vp"):
+        reported = run_snap_cli(command, "version")
+        assert reported.splitlines()[0] == f"VibePod CLI: {expected_version}", reported
+    run_snap_cli("vibepod", "--help")
+    print("snap smoke: bundled Python and CLI entry points OK", flush=True)
     manager = DockerManager()
     validate_runtime(manager, os.environ["VP_SNAP_EXPECTED_RUNTIME"])
     manager.pull_image("alpine:3.20")
@@ -76,16 +150,14 @@ def main() -> None:
             container.reload()
             bindings = container.attrs["NetworkSettings"]["Ports"]["8080/tcp"]
             port = bindings[0]["HostPort"]
-            deadline = time.monotonic() + 30
-            while True:
-                try:
-                    with urlopen(f"http://127.0.0.1:{port}/marker", timeout=2) as response:
-                        assert response.read() == b"snap-workspace-ok\n"
-                    break
-                except URLError:
-                    if time.monotonic() >= deadline:
-                        raise
-                    time.sleep(0.2)
+            try:
+                wait_for_http(f"http://127.0.0.1:{port}/marker", b"snap-workspace-ok\n")
+            except AssertionError:
+                container.reload()
+                print(f"container status: {container.status}", file=sys.stderr)
+                print(container.logs().decode(errors="replace"), file=sys.stderr)
+                raise
+            print("snap smoke: published port OK", flush=True)
             result = container.exec_run(
                 [
                     "sh",
@@ -100,25 +172,14 @@ def main() -> None:
             assert b"snap-env-ok" in result.output
             assert (workspace / "container-output").read_text() == "snap-write-ok\n"
             assert container.id in {c.id for c in manager.list_managed(all_containers=True)}
-            listed = subprocess.run(
-                ["snap", "run", "vibepod", "list", "--running", "--json"],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            assert container.name in {
-                row["container"] for row in json.loads(listed.stdout)["running"]
-            }
-            subprocess.run(
-                ["snap", "run", "vibepod", "stop", "--force", container.name],
-                check=True,
-                timeout=30,
-            )
+            listed = run_snap_cli("vibepod", "list", "--running", "--json")
+            assert container.name in {row["container"] for row in json.loads(listed)["running"]}
+            run_snap_cli("vibepod", "stop", "--force", container.name)
             container.reload()
             assert container.status == "exited"
         finally:
             container.remove(force=True)
+    print("snap smoke: container lifecycle OK", flush=True)
 
 
 if __name__ == "__main__":
