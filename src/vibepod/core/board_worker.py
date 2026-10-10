@@ -1,10 +1,10 @@
 """`vp board work`: an agent works through the planned tasks of a board project.
 
-For each task the worker claims it on the board, checks its branch out in a clone of the
-repository of its own, runs the agent headless with the task as the prompt in that clone, runs
-an optional verify command, brings the branch back into the repository, and hands the task
-over to Review, or gives it back to Planned (or blocks it) with a note. Every run leaves a
-report on its task.
+For each task the worker claims it on the board, fetches the task's remote, checks its branch
+out in a clone of the repository of its own, runs the agent headless with the task as the
+prompt in that clone, runs an optional verify command, brings the branch back into the
+repository, and hands the task over to Review, or gives it back to Planned (or blocks it) with
+a note. Every run leaves a report on its task.
 
 In review mode the worker claims tasks in Review instead. It checks the commit the hand-over
 named out, detached, in a clone of its own, has the agent judge the work without changing
@@ -239,6 +239,9 @@ class WorkOptions:
     usage_limit_wait_seconds: int = DEFAULT_USAGE_LIMIT_WAIT
     # Push branches when the board asks: after an approval, and for its push requests.
     push: bool = True
+    # Block a task whose remote cannot be fetched, instead of working from the repository
+    # as it is.
+    require_fetch: bool = False
 
 
 @dataclass
@@ -282,6 +285,9 @@ class TaskResult:
     # The pull request the agent suggests, sent with the hand-over.
     pr_title: str | None = None
     pr_body: str | None = None
+    # How the workspace was prepared, for the run report: a fetch that failed, a branch
+    # taken from the remote.
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -304,6 +310,8 @@ class ReviewResult:
     verify: VerifyResult | None = None
     # The clone is kept for a look rather than removed, since git must not run in it.
     keep_worktree: bool = False
+    # How the workspace was prepared, for the run report, such as a fetch that failed.
+    notes: list[str] = field(default_factory=list)
 
 
 def branch_name(template: str, task: dict[str, Any]) -> str:
@@ -1082,24 +1090,30 @@ class BoardWorker:
         try:
             try:
                 repo = self._repository(task)
+                remote = self._fetch(repo, task, result.notes)
                 result.branch = (
                     str(card["branchName"])
                     if rework
                     else branch_name(self.options.branch_template, task)
                 )
-                if rework and not worktrees.branch_exists(repo, result.branch):
-                    raise TaskProblem(
-                        f"The rework needs the branch {result.branch} it was handed over on, "
-                        f"and it is not in {repo}",
-                    )
+                existing = "continue" if rework or answered else self.options.existing
                 # Checking a branch out can take long in a large repository.
                 with self._keepalive():
+                    if existing == "continue":
+                        result.branch = self._continued_branch(
+                            task,
+                            repo,
+                            remote,
+                            result.branch,
+                            rework,
+                            result.notes,
+                        )
                     worktree = worktrees.prepare_clone(
                         repo,
                         self._worktree_dir(repo),
                         result.branch,
-                        self.options.base or worktrees.current_branch(repo) or "HEAD",
-                        "continue" if rework or answered else self.options.existing,
+                        self._base(repo, remote),
+                        existing,
                     )
                 if worktree.continued:
                     self.say("info", f"Continuing on branch {worktree.branch} in {worktree.path}")
@@ -1158,6 +1172,85 @@ class BoardWorker:
         if root != resolved:
             self._check_allowed(root)
         return root
+
+    def _fetch(self, repo: Path, task: dict[str, Any], notes: list[str]) -> str | None:
+        """Fetches the remote of the task's repository URL, else `origin`, into the
+        repository's remote-tracking refs, so that the run starts from the latest branches.
+        Says the remote to compare branches with, or None for a repository without it. A
+        failed fetch goes on with the repository as it is, and says so in the run report;
+        with --require-fetch it blocks the task instead."""
+        url = str(task.get("repositoryRemoteUrl") or "") or None
+        remote = worktrees.push_remote(repo, url)
+        previous = (self.status, self.status_reason, self.step)
+        self._set(self.status, f"Fetching {remote}", self.step)
+        try:
+            with self._keepalive():
+                fetched = worktrees.fetch_remote(repo, url, hidden=self._hidden_values())
+        except worktrees.FetchError as exc:
+            if self.options.require_fetch:
+                raise TaskProblem(f"Could not fetch {remote} (--require-fetch): {exc}") from exc
+            note = f"Could not fetch {remote}, so the run works from {repo} as it is: {exc}"
+            self.say("warning", note)
+            notes.append(note)
+            return remote
+        finally:
+            self._set(*previous)
+        if fetched is None:
+            if self.options.require_fetch:
+                raise TaskProblem(f"{repo} has no remote {remote} to fetch (--require-fetch)")
+            self.say("info", f"Not fetching: {repo} has no remote {remote}")
+        return fetched
+
+    def _base(self, repo: Path, remote: str | None) -> str:
+        """Where new branches start, and what reviews diff against. --base names it, taken
+        from the remote when the remote has that branch and the repository's is not ahead
+        of it. Without --base, the remote's default branch as fetched, such as `origin/main`;
+        for a repository without a remote, its current branch."""
+        base = self.options.base
+        if base:
+            theirs = worktrees.remote_branch_commit(repo, remote, base) if remote else None
+            if theirs is None:
+                return base
+            ours = worktrees.branch_commit(repo, base)
+            if ours is not None and ours != theirs and worktrees.is_ancestor(repo, theirs, ours):
+                return base
+            return f"{remote}/{base}"
+        default = worktrees.remote_default_branch(repo, remote) if remote else None
+        return default or worktrees.current_branch(repo) or "HEAD"
+
+    def _continued_branch(
+        self,
+        task: dict[str, Any],
+        repo: Path,
+        remote: str | None,
+        branch: str,
+        rework: bool,
+        notes: list[str],
+    ) -> str:
+        """The branch a run continues, brought up to the remote's first (see
+        `worktrees.sync_branch`). A rework whose branch is gone everywhere continues on the
+        branch named after the task's GitHub issue, where that exists: the branch was renamed
+        on GitHub, and the hand-over sends the new name."""
+        start = worktrees.sync_branch(repo, remote, branch)
+        if rework and start.commit is None:
+            issue = task.get("githubIssueNumber")
+            renamed = f"issue-{issue}" if issue else None
+            if renamed and renamed != branch:
+                start = worktrees.sync_branch(repo, remote, renamed)
+            if start.commit is None or renamed is None:
+                where = f" or on {remote}" if remote else ""
+                raise TaskProblem(
+                    f"The rework needs the branch {branch} it was handed over on, and it is "
+                    f"not in {repo}{where}",
+                )
+            note = f"The branch {branch} is gone; continuing on {renamed}, named after the issue"
+            self.say("info", note)
+            notes.append(note)
+            branch = renamed
+        if start.note:
+            self.say("info", start.note)
+            notes.append(start.note)
+        return branch
 
     def _check_allowed(self, path: Path) -> None:
         if self.allow_repo is not None and not self.allow_repo(path):
@@ -1574,7 +1667,7 @@ class BoardWorker:
             "outcome": result.outcome,
             "agent": self.options.agent,
             "workerId": self.worker_id,
-            "summary": result.summary,
+            "summary": _with_notes(result.summary, result.notes),
             "commits": result.commits,
             "branchName": result.branch,
             "verifyCommand": verify.command if verify else None,
@@ -1619,9 +1712,11 @@ class BoardWorker:
         try:
             try:
                 repo = self._repository(task)
+                # A head pushed by someone else is only on the remote.
+                remote = self._fetch(repo, task, result.notes)
                 # Checking a commit out can take long in a large repository.
                 with self._keepalive():
-                    path, base, base_commit = self._prepare_review(task, repo, result)
+                    path, base, base_commit = self._prepare_review(task, repo, remote, result)
                 self.say(
                     "info",
                     f"Reviewing {result.branch} at {(result.commit or '')[:12]} in {path}",
@@ -1677,6 +1772,7 @@ class BoardWorker:
         self,
         task: dict[str, Any],
         repo: Path,
+        remote: str | None,
         result: ReviewResult,
     ) -> tuple[Path, str, str]:
         """Checks the commit under review out in a clone of the reviewer's own. Says where,
@@ -1684,25 +1780,35 @@ class BoardWorker:
         branch = result.branch
         if not branch:
             raise TaskProblem("The card names no branch to review")
-        if not worktrees.branch_exists(repo, branch):
-            raise TaskProblem(f"The branch {branch} to review is not in {repo}")
+        ours = worktrees.branch_commit(repo, branch)
+        theirs = worktrees.remote_branch_commit(repo, remote, branch) if remote else None
+        if ours is None and theirs is None:
+            where = f" or on {remote}" if remote else ""
+            raise TaskProblem(f"The branch {branch} to review is not in {repo}{where}")
         if result.head_sha:
             if not worktrees.commit_exists(repo, result.head_sha):
                 raise TaskProblem(
                     f"The commit {result.head_sha[:12]} of {branch} to review is not in {repo}",
                 )
-            result.commit = worktrees.git(repo, "rev-parse", f"{result.head_sha}^{{commit}}")
+            commit = worktrees.git(repo, "rev-parse", f"{result.head_sha}^{{commit}}")
+        elif theirs is not None and (
+            ours is None or (ours != theirs and worktrees.is_ancestor(repo, ours, theirs))
+        ):
+            # Handed over without naming its commit: the branch as it is now, on the remote
+            # where it is further along there.
+            commit = theirs
         else:
-            # Handed over without naming its commit: the branch as it is now.
-            result.commit = worktrees.git(repo, "rev-parse", f"refs/heads/{branch}^{{commit}}")
-        base = self.options.base or worktrees.current_branch(repo) or "HEAD"
+            assert ours is not None
+            commit = ours
+        result.commit = commit
+        base = self._base(repo, remote)
         base_commit = worktrees.resolve_commit(repo, base)
         key = str(task.get("key") or task["id"]).lower()
         path = worktrees.prepare_review_clone(
             repo,
             self._worktree_dir(repo),
             f"review-{key}-{self.options.name}",
-            result.commit,
+            commit,
         )
         return path, base, base_commit
 
@@ -2039,6 +2145,8 @@ class BoardWorker:
             lines += ["", "Feedback:", result.note]
         if result.verdict == "needs_input" and result.note:
             lines += ["", f"Question: {result.note}"]
+        if result.notes:
+            lines += ["", *result.notes]
         report: dict[str, Any] = {
             # Not a field of the board's run reports yet; it ignores unknown fields.
             "kind": MODE_REVIEW,
@@ -2198,6 +2306,11 @@ REVIEW_VERDICTS = {
 }
 # How much of a failed verify command's output goes into the rework feedback.
 FEEDBACK_OUTPUT_CHARS = 4_000
+
+
+def _with_notes(summary: str, notes: Sequence[str]) -> str:
+    """A run report's summary with how the workspace was prepared after it."""
+    return "\n\n".join(filter(None, [summary, "\n".join(notes)]))
 
 
 def _and(items: Sequence[str]) -> str:
