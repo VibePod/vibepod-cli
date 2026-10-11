@@ -117,6 +117,25 @@ def test_qwen_spec_matches_container_contract() -> None:
     assert spec.headless_prefix == ["-p"]
 
 
+def test_cline_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("cline")
+    assert spec.id == "cline"
+    assert spec.provider == "cline"
+    assert spec.image == DEFAULT_IMAGES["cline"]
+    assert spec.config_subdir == "cline"
+    assert spec.command == ["cline"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env == {"HOME": "/config"}
+    # --yolo would switch to Cline's restricted single-turn mode.
+    assert spec.ikwid_args == ["--auto-approve", "true"]
+    # One-shot runs otherwise reuse the TUI's persisted plan/act mode.
+    assert spec.headless_prefix == ["--act"]
+    assert spec.headless_command is None
+    assert spec.llm_env_map is None
+    assert spec.llm_model_args is None
+    assert spec.preview is False
+
+
 def test_dsh_spec_matches_container_contract() -> None:
     spec = get_agent_spec("dsh")
     assert spec.id == "dsh"
@@ -284,6 +303,7 @@ def test_agents_without_llm_env_map() -> None:
         "freebuff",
         "qwen",
         "dsh",
+        "cline",
     ):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"
@@ -308,6 +328,7 @@ def test_acp_commands_match_contract() -> None:
         "jcode": ["jcode", "acp"],
         "vibe": ["vibe-acp"],
         "hermes": ["hermes-acp"],
+        "cline": ["cline", "--acp"],
     }
     for agent in SUPPORTED_AGENTS:
         spec = get_agent_spec(agent)

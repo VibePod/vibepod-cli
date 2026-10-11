@@ -128,6 +128,9 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
         ),
         (re.compile(rf"{_BOUNDARY}freebuff[ \t]+--continue(?![\w-])"), _fixed("--continue")),
     ),
+    # Cline ends a session with a summary whose "Continue" row reads
+    # "cline --id <sessionId>".
+    "cline": ((re.compile(rf"{_BOUNDARY}cline[ \t]+--id[ \t]+({_TOKEN})"), _with_id("--id")),),
     # Hermes prints both forms on exit (hermes_cli/cli.py):
     #   hermes --resume <session_id>
     #   hermes -c "<session title>"

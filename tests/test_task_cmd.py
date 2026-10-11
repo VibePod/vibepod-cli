@@ -127,6 +127,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
     assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
     assert AGENT_SPECS["hermes"].headless_prefix == ["-z"]
+    assert AGENT_SPECS["cline"].headless_prefix == ["--act"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -497,6 +498,32 @@ def test_task_create_qwen_uses_prompt_flag(monkeypatch, tmp_path, tmp_task_store
     task_cmd.task_create(agent="qwen", prompt="run tests", workspace=tmp_path)
 
     assert stub.run_kwargs["command"] == ["qwen", "-p", "run tests"]
+
+
+@pytest.mark.parametrize("ikwid", [False, True])
+def test_task_create_cline_forces_act_mode_and_keeps_prompt_intact(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    ikwid,
+) -> None:
+    """--act is always passed so a persisted plan mode cannot make a task read-only.
+
+    Only --ikwid adds --auto-approve true.
+    """
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="cline", prompt="fix the tests", workspace=tmp_path, ikwid=ikwid)
+
+    assert stub.run_kwargs["command"] == [
+        "cline",
+        *(["--auto-approve", "true"] if ikwid else []),
+        "--act",
+        "fix the tests",
+    ]
+    assert stub.run_kwargs["env"]["HOME"] == "/config"
 
 
 def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
