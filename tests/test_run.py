@@ -104,6 +104,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "freebuff",
         "qwen",
         "dsh",
+        "cline",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -772,6 +773,48 @@ def test_run_without_configured_ports_publishes_none(monkeypatch, _tmp_config_ro
     assert result.exit_code == 0, result.output
     assert stub.run_kwargs is not None
     assert stub.run_kwargs["ports"] is None
+
+
+@pytest.mark.parametrize("invocation", [["run", "cline"], ["cl"]])
+@pytest.mark.parametrize("ikwid", [False, True])
+def test_cline_launch_preserves_state_and_forwards_arguments(
+    monkeypatch,
+    _tmp_config_root,
+    invocation,
+    ikwid,
+) -> None:
+    """Both entry points launch Cline with persisted HOME and intact arguments."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("cline", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            *invocation,
+            "-w",
+            str(workspace),
+            "--detach",
+            *(["--ikwid"] if ikwid else []),
+            "--",
+            "--id",
+            "session-123",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["command"] == [
+        "cline",
+        *(["--auto-approve", "true"] if ikwid else []),
+        "--id",
+        "session-123",
+    ]
+    assert stub.run_kwargs["config_mount_path"] == "/config"
+    assert Path(stub.run_kwargs["config_dir"]) == _tmp_config_root / "config" / "agents" / "cline"
+    assert stub.run_kwargs["env"]["HOME"] == "/config"
 
 
 def test_run_codex_oauth_ports_merge_with_configured_ports(monkeypatch, _tmp_config_root) -> None:
@@ -3306,6 +3349,7 @@ def _script_acp_editor(
     [
         ("claude", ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]),
         ("hermes", ["hermes-acp"]),
+        ("cline", ["cline", "--acp"]),
     ],
 )
 def test_acp_uses_acp_command_and_stdio_container(monkeypatch, _acp_env, agent, command) -> None:
@@ -3751,6 +3795,13 @@ def test_resolve_acp_command_parses_string_overrides_like_a_shell() -> None:
     # An empty override is "no adapter", not "run the image default".
     assert run_cmd._resolve_acp_command(spec, {"acp_command": ""}) is None
     assert run_cmd._resolve_acp_command(spec, {"acp_command": []}) is None
+
+
+def test_cline_skill_paths_use_shared_agents_dir() -> None:
+    """Cline reads ~/.agents/skills, and the image sets HOME to /config."""
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("cline") == ["/config/.agents/skills"]
 
 
 def test_hermes_skill_paths_use_shared_agents_dir() -> None:

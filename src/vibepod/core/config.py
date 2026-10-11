@@ -177,6 +177,15 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
+            "cline": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["cline"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "ports": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,

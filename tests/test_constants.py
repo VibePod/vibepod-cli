@@ -24,6 +24,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_QWEN",
         "VP_IMAGE_DSH",
         "VP_IMAGE_HERMES",
+        "VP_IMAGE_CLINE",
         "VP_DATASETTE_IMAGE",
         "VP_PROXY_IMAGE",
     ):
@@ -46,6 +47,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["qwen"] == "vibepod/qwen:latest"
     assert images["dsh"] == "vibepod/dsh:latest"
     assert images["hermes"] == "vibepod/hermes:latest"
+    assert images["cline"] == "vibepod/cline:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -120,3 +122,11 @@ def test_vibe_image_override_accepts_legacy_name(monkeypatch) -> None:
     assert get_default_images()["vibe"] == "example/legacy:dev"
     monkeypatch.setenv("VP_IMAGE_VIBE", "example/vibe:dev")
     assert get_default_images()["vibe"] == "example/vibe:dev"
+
+
+def test_cline_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_CLINE", "example/cline:dev")
+
+    images = get_default_images()
+
+    assert images["cline"] == "example/cline:dev"

@@ -69,6 +69,19 @@ def test_detects_jcode_resume_hint() -> None:
     assert build_resume_hint("jcode", output) == "vp run jcode -- --resume my-session"
 
 
+def test_detects_cline_session_summary_hint() -> None:
+    output = (
+        "Session Summary\n"
+        "  ID        1760180000000_a1b2c3\n"
+        "  Continue  \x1b[36mcline --id 1760180000000_a1b2c3\x1b[0m\n"
+    )
+    assert build_resume_hint("cline", output) == "vp run cline -- --id 1760180000000_a1b2c3"
+
+
+def test_cline_hint_ignores_binary_inside_paths() -> None:
+    assert build_resume_hint("cline", "/usr/local/bin/cline --id abc\n") is None
+
+
 def test_detects_freebuff_continue_hint() -> None:
     output = "freebuff --continue conv-42\n"
     assert build_resume_hint("freebuff", output) == "vp run freebuff -- --continue conv-42"
