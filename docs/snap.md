@@ -99,6 +99,13 @@ present in `core24`, so staging only `python3-venv` omits the runtime and fails
 the Python plugin's build step. Keep these packages aligned with the base's
 Python version when changing bases.
 
+Staging the interpreter is not enough on its own: the Python plugin leaves the
+virtual environment's `pyvenv.cfg` pointing at the build host's `/usr/bin` and
+gives the `vibepod` and `vp` scripts a `#!/usr/bin/env python3` shebang, so a
+classic snap would load the host's standard library and run the host's
+`python3`. The recipe's `override-build` repoints both at
+`/snap/vibepod/current`, and the build fails if the plugin output changes shape.
+
 On a snapd-enabled Linux amd64 build host, install Snapcraft and its supported
 build provider, then build from the repository root:
 
@@ -119,8 +126,10 @@ SH
 Use Python 3.11+ for the version-extraction command above. `--dangerous` is only
 for local, unsigned artifacts. Keep Snapcraft's classic and library lint checks
 enabled; fix their findings before publishing. The smoke test runs using the
-packaged interpreter and dependencies, verifies that imports come from the snap
-and that both installed commands report the release version, pulls an image,
+packaged interpreter and dependencies, verifies that the interpreter, standard
+library, imports and app shebangs all resolve inside the snap, runs the
+installed commands with the host's Python off `PATH` and checks that both report
+the release version, pulls an image,
 runs a container, checks host workspace reads and writes, a hidden configuration
 directory bind mount and environment injection, and exercises the installed
 CLI's container listing and stop commands. It also fetches HTTP content through

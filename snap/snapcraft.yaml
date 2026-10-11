@@ -35,6 +35,21 @@ parts:
       - ca-certificates
     build-attributes:
       - enable-patchelf
+    override-build: |
+      craftctl default
+      # The plugin leaves classic snaps tied to the host's Python: the venv's
+      # pyvenv.cfg points at the build host's /usr/bin, which makes the staged
+      # interpreter load the host's stdlib, and console scripts use
+      # `#!/usr/bin/env python3`, which resolves python3 from the host PATH.
+      # Pin both to the bundled interpreter. snapd always mounts the active
+      # revision at /snap/<name>/current, whatever the confinement.
+      snap_root="/snap/${CRAFT_PROJECT_NAME}/current"
+      sed -i "s|^home = .*|home = ${snap_root}/usr/bin|" "${CRAFT_PART_INSTALL}/pyvenv.cfg"
+      grep -qx "home = ${snap_root}/usr/bin" "${CRAFT_PART_INSTALL}/pyvenv.cfg"
+      for script in vibepod vp; do
+        sed -i "1 s|^#!/usr/bin/env python3\$|#!${snap_root}/bin/python3|" "${CRAFT_PART_INSTALL}/bin/${script}"
+        [ "$(head -n 1 "${CRAFT_PART_INSTALL}/bin/${script}")" = "#!${snap_root}/bin/python3" ]
+      done
     override-pull: |
       craftctl default
       craftctl set version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"

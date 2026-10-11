@@ -49,7 +49,9 @@ and `mypy` are pre-commit gated.
 `.github/workflows/snap.yml` validates the installed classic snap against Docker
 and rootless Podman before release uploads. Classic packaging must explicitly
 stage the Python interpreter and stdlib packages: base-provided transitive
-dependencies of `python3-venv` are filtered by Snapcraft. Store setup and the
+dependencies of `python3-venv` are filtered by Snapcraft. Its `override-build`
+must keep `pyvenv.cfg` and the app shebangs on the bundled interpreter, or the
+snap silently runs on the host's Python. Store setup and the
 confinement rationale live in `docs/snap.md`. Keep publication notices accurate
 until Store setup succeeds.
 
