@@ -879,6 +879,7 @@ def test_run_publish_flag_rejects_invalid_entry(monkeypatch, _tmp_config_root) -
     assert stub.run_kwargs is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="same-path shorthand needs an absolute POSIX host path")
 def test_parse_volume_same_path_shorthand(tmp_path: Path) -> None:
     host = tmp_path / "data"
     host.mkdir()
@@ -1114,6 +1115,7 @@ def test_run_volume_flag_replaces_configured_entry_with_missing_source(
     assert custom == [("cache", "/cache", "rw"), ("datasets", "/datasets", "ro")]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="same-path shorthand needs an absolute POSIX host path")
 def test_run_same_path_volume_with_explicit_mapping(monkeypatch, _tmp_config_root) -> None:
     workspace = _tmp_config_root / "workspace"
     workspace.mkdir()
