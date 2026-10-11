@@ -1155,11 +1155,14 @@ def test_run_rejects_invalid_volume_shorthand(monkeypatch, _tmp_config_root, ent
         entry = str(_tmp_config_root / "missing")
 
     result = CliRunner().invoke(
-        app, ["run", "claude", "-w", str(workspace), "--detach", "--volume", entry]
+        app,
+        ["run", "claude", "-w", str(workspace), "--detach", "--volume", entry],
     )
 
     assert result.exit_code != 0
-    assert "Invalid --volume[1]" in result.output
+    # Rich may color the error panel (e.g. on CI), so match on the de-styled text.
+    plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "Invalid --volume[1]" in plain_output
     assert stub.run_kwargs is None
 
 

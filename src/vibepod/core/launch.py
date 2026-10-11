@@ -234,7 +234,7 @@ def _parse_volume_spec(
         if drive or not entry.startswith("/"):
             raise invalid(
                 "same-path shorthand requires an absolute POSIX host path; "
-                "otherwise use SOURCE:TARGET[:MODE]."
+                "otherwise use SOURCE:TARGET[:MODE].",
             )
         host, target, mode = entry, entry, "rw"
     elif len(parts) == 2:
