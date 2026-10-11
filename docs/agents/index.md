@@ -21,6 +21,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
 | `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
 | `hermes` | Nous Research | `vp h` | `vibepod/hermes:latest` |
+| `cline` | Cline | `vp cl` | `vibepod/cline:latest` |
 
 Alias note: `vp run devstral` resolves to `vp run vibe`, `vp run qwen-cli`
 resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
@@ -316,7 +317,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`, `cline`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -448,6 +449,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `qwen` | `--approval-mode=yolo` |
 | `dsh` | Not supported |
 | `hermes` | `--yolo` |
+| `cline` | `--auto-approve true` |
 
 Example:
 
@@ -572,6 +574,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `qwen` | `qwen -p "<prompt>"` |
 | `dsh` | `dsh --profile headless "<prompt>"` |
 | `hermes` | `hermes -z "<prompt>"` |
+| `cline` | `cline --act "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
@@ -661,7 +664,7 @@ claude --resume 39bf1a93-ea1f-4b0a-a894-0a662e5a1d4e
 ```
 
 When VibePod recognizes such a hint in the session output (supported for
-Claude, Codex, Pi, Copilot, Jcode, and Freebuff), it prints the equivalent
+Claude, Codex, Pi, Copilot, Jcode, Freebuff, and Cline), it prints the equivalent
 VibePod command after the agent exits:
 
 ```text
@@ -1293,6 +1296,95 @@ already mounted.
 vp run qwen --ikwid
 vp task create qwen "fix the failing test" --ikwid
 ```
+
+### Cline
+
+```bash
+vp run cline   # or: vp cl
+```
+
+The default image is `vibepod/cline:latest`. Until it is published, build the
+Cline image from the companion
+[vibepod-agents branch](https://github.com/VibePod/vibepod-agents/tree/cline-agent/docker/cline)
+and select the local image explicitly. From that repository's checkout:
+
+```bash
+docker build -t vibepod/cline:local docker/cline
+VP_IMAGE_CLINE=vibepod/cline:local vp run cline
+```
+
+Cline CLI is the terminal edition of the Cline coding agent and shares its
+agent core (plan/act modes, MCP servers, rules, skills, checkpoints) with the
+VS Code extension. The image installs the npm package `cline`, which ships a
+self-contained binary per platform, pins one release and disables the CLI's
+background self-update. State is persisted under
+`~/.config/vibepod/agents/cline/`, mounted at `/config` inside the container
+(`HOME=/config`):
+
+| Path in container | Contents |
+|---|---|
+| `/config/.cline/data/settings/providers.json` | Provider API keys, OAuth tokens and model selection |
+| `/config/.cline/data/settings/global-settings.json`, `cline_mcp_settings.json` | Global settings and MCP servers |
+| `/config/.cline/data/sessions/` | Session history (resume with `cline --id <session-id>`) |
+| `/config/.cline/rules/`, `/config/.cline/skills/`, `/config/.cline/hooks/` | Global rules, skills and hooks |
+
+**Authentication.** Seed a provider and model once; the settings persist in
+the config mount:
+
+```bash
+vp run cline -- auth --provider anthropic --apikey sk-ant-... --modelid claude-sonnet-4-6
+```
+
+`vp run cline -- auth` opens the interactive setup (Sign in with Cline,
+ChatGPT subscription, or your own API key). API keys can also be injected per
+provider through the environment, for example `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY` or `CLINE_API_KEY`:
+
+```yaml
+agents:
+  cline:
+    env:
+      ANTHROPIC_API_KEY: sk-ant-...
+```
+
+Cline picks its provider from the saved settings or `-P/--provider`, not from
+VibePod's global `llm` settings, and `--provider` launches are rejected for it
+(see [Model providers](../providers.md)).
+
+**Non-interactive mode.** A prompt without `-i` runs a single turn and exits,
+with both `vp run` and task mode. Task mode passes `--act`, because without an
+explicit mode flag Cline reuses the plan/act mode last selected in the TUI and
+a task left in plan mode would never edit files:
+
+```bash
+vp run cline -- "explain this repo"
+vp task create cline "Summarize the README"
+```
+
+**IKWID mode.** Cline auto-approves tool calls by default, but the TUI
+remembers a disabled auto-approval toggle; `--ikwid` adds
+`--auto-approve true`, which forces auto-approval for every tool for that run:
+
+```bash
+vp run cline --ikwid
+vp task create cline "fix the failing test" --ikwid
+```
+
+**Editor integration.** `cline --acp` is a built-in ACP server, so
+`vp run cline --acp` works in any ACP editor — see the [ACP docs](../acp.md).
+Configure a provider with `vp run cline -- auth` first; the adapter reuses
+those settings.
+
+**Skills.** Cline scans `~/.agents/skills/` (as well as `~/.cline/skills/`),
+so skills installed via `vp skills` are mounted at
+`/config/.agents/skills/<id>` and picked up automatically.
+
+**Proxy and TLS.** The Cline binary honors `HTTP_PROXY`/`HTTPS_PROXY` and
+`NODE_EXTRA_CA_CERTS`, which VibePod sets when the proxy is enabled; the
+image also appends the mounted mitmproxy CA to the system bundle, which the
+CLI merges into its trust store on every launch. Routing of Cline's API
+traffic through the proxy still needs verification against the published
+image.
 
 ## Hermes Agent (`hermes`) — developer preview
 
