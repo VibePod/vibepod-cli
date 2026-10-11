@@ -778,7 +778,10 @@ def test_run_without_configured_ports_publishes_none(monkeypatch, _tmp_config_ro
 @pytest.mark.parametrize("invocation", [["run", "cursor"], ["cu"]])
 @pytest.mark.parametrize("ikwid", [False, True])
 def test_cursor_launch_preserves_state_and_forwards_arguments(
-    monkeypatch, _tmp_config_root, invocation, ikwid
+    monkeypatch,
+    _tmp_config_root,
+    invocation,
+    ikwid,
 ) -> None:
     """Both entry points launch Cursor with persisted HOME and intact arguments."""
     workspace = _tmp_config_root / "workspace"
