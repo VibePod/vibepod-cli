@@ -3777,6 +3777,19 @@ def test_resolve_acp_command_parses_string_overrides_like_a_shell() -> None:
     assert run_cmd._resolve_acp_command(spec, {"acp_command": []}) is None
 
 
+def test_junie_skill_paths_use_junie_home() -> None:
+    """Junie reads user skills only from $JUNIE_HOME/skills, not ~/.agents/skills."""
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("junie") == ["/config/.junie/skills"]
+
+
+@pytest.mark.parametrize("workspace", ["/opt/junie", "/opt/junie/project"])
+def test_junie_acp_rejects_installation_overlap(workspace: str) -> None:
+    with pytest.raises(typer.Exit):
+        run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("junie"))
+
+
 def test_hermes_skill_paths_use_shared_agents_dir() -> None:
     """Hermes' skills live under the official image's /opt/data state volume."""
     from vibepod.commands.run import _agent_skill_paths
