@@ -1841,7 +1841,7 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
     assert (seen["head"], seen["branch"]) == (sha, 1)
     # The agent gets all of the git directory read-only: it has nothing to commit.
     git_dir = (repo / ".git").resolve()
-    assert (str(git_dir), str(git_dir), "ro") in start["mounts"]
+    assert (str(git_dir), worktrees.container_path(git_dir), "ro") in start["mounts"]
     prompt = start["prompt"]
     assert "Review the work on task VP-1" in prompt
     assert "Build the feature described here." in prompt
@@ -3435,4 +3435,4 @@ def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) 
 
     mounts = worktrees.agent_mounts(repo, path, read_only=True)
     git_dir = (repo / ".git").resolve()
-    assert mounts[0] == (str(git_dir), str(git_dir), "ro")
+    assert mounts[0] == (str(git_dir), worktrees.container_path(git_dir), "ro")
