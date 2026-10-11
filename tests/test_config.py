@@ -417,3 +417,19 @@ def test_config_init_vibe_fails_when_legacy_devstral_configured(
     result = runner.invoke(app, ["config", "init", "vibe"])
     assert result.exit_code == 1
     assert "already contains agent 'vibe'" in result.stdout
+
+
+def test_default_config_includes_cursor_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+
+    cursor = config["agents"]["cursor"]
+
+    assert cursor["enabled"] is True
+    assert cursor["image"] == "vibepod/cursor:latest"
+    assert cursor["auto_pull"] is None
+    assert cursor["env"] == {}
+    assert cursor["volumes"] == []
+    # Unlike dsh, this integration publishes nothing.
+    assert cursor["ports"] == []
+    assert cursor["init"] == []
