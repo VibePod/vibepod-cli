@@ -776,8 +776,9 @@ def test_run_without_configured_ports_publishes_none(monkeypatch, _tmp_config_ro
 
 
 @pytest.mark.parametrize("invocation", [["run", "cursor"], ["cu"]])
+@pytest.mark.parametrize("ikwid", [False, True])
 def test_cursor_launch_preserves_state_and_forwards_arguments(
-    monkeypatch, _tmp_config_root, invocation
+    monkeypatch, _tmp_config_root, invocation, ikwid
 ) -> None:
     """Both entry points launch Cursor with persisted HOME and intact arguments."""
     workspace = _tmp_config_root / "workspace"
@@ -788,12 +789,26 @@ def test_cursor_launch_preserves_state_and_forwards_arguments(
 
     result = CliRunner().invoke(
         app,
-        [*invocation, "-w", str(workspace), "--detach", "--ikwid", "--", "--resume", "chat-123"],
+        [
+            *invocation,
+            "-w",
+            str(workspace),
+            "--detach",
+            *(["--ikwid"] if ikwid else []),
+            "--",
+            "--resume",
+            "chat-123",
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert stub.run_kwargs is not None
-    assert stub.run_kwargs["command"] == ["cursor-agent", "--force", "--resume", "chat-123"]
+    assert stub.run_kwargs["command"] == [
+        "cursor-agent",
+        *(["--force"] if ikwid else []),
+        "--resume",
+        "chat-123",
+    ]
     assert stub.run_kwargs["config_mount_path"] == "/config"
     assert Path(stub.run_kwargs["config_dir"]) == _tmp_config_root / "config" / "agents" / "cursor"
     assert stub.run_kwargs["env"]["HOME"] == "/config"

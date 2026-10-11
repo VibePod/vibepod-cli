@@ -1303,6 +1303,20 @@ vp task create qwen "fix the failing test" --ikwid
 vp run cursor   # or: vp cu
 ```
 
+The default image is `vibepod/cursor:latest`. Until it is published, build the
+Cursor image from the companion
+[vibepod-agents branch](https://github.com/VibePod/vibepod-agents/tree/cursor-agent/docker/cursor)
+and select the local image explicitly. From that repository's checkout:
+
+```bash
+docker build -t vibepod/cursor:local docker/cursor
+VP_IMAGE_CURSOR=vibepod/cursor:local vp run cursor
+```
+
+The `:local` tag avoids automatic pulls of `:latest`. The CLI registration
+alone does not install Cursor; the image must provide `cursor-agent` and the
+`/config` state mount described below.
+
 Cursor CLI (`cursor-agent`) is the terminal agent from the makers of the Cursor
 editor. It is closed source and ships as a self-contained package (bundled
 Node.js runtime) from `downloads.cursor.com`; the image pins one release and
