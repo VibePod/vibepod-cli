@@ -34,6 +34,12 @@ Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
 
+Cline's image contract is `HOME=/config` with all state under `~/.cline`; its
+install root is under `/usr`, already reserved for ACP binds. Tasks pass
+`--act` because one-shot runs otherwise reuse the TUI's persisted plan/act
+mode; `--ikwid` adds `--auto-approve true` (not `--yolo`, which switches to a
+restricted single-turn mode).
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with
