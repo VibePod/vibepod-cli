@@ -127,6 +127,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["jcode"].headless_prefix == ["run"]
     assert AGENT_SPECS["qwen"].headless_prefix == ["-p"]
     assert AGENT_SPECS["hermes"].headless_prefix == ["-z"]
+    assert AGENT_SPECS["pi"].headless_prefix == ["--mode", "json"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -497,6 +498,50 @@ def test_task_create_qwen_uses_prompt_flag(monkeypatch, tmp_path, tmp_task_store
     task_cmd.task_create(agent="qwen", prompt="run tests", workspace=tmp_path)
 
     assert stub.run_kwargs["command"] == ["qwen", "-p", "run tests"]
+
+
+def test_task_create_pi_uses_json_mode(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(agent="pi", prompt="run tests", workspace=tmp_path, ikwid=True)
+
+    assert stub.run_kwargs["command"] == ["pi", "--approve", "--mode", "json", "--", "run tests"]
+
+
+def test_task_create_pi_ends_options_before_prompt(monkeypatch, tmp_path, tmp_task_store) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="pi",
+        prompt="- fix the bug",
+        workspace=tmp_path,
+        passthrough_args=["--thinking", "high"],
+    )
+
+    assert stub.run_kwargs["command"] == [
+        "pi",
+        "--mode",
+        "json",
+        "--thinking",
+        "high",
+        "--",
+        "- fix the bug",
+    ]
+
+
+def test_task_create_pi_does_not_touch_settings(monkeypatch, tmp_path, tmp_task_store) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", _CapturingDockerManager)
+
+    task_cmd.task_create(agent="pi", prompt="go", workspace=tmp_path)
+
+    assert not (task_cmd.agent_config_dir("pi") / ".pi" / "agent" / "settings.json").exists()
 
 
 def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
@@ -1665,21 +1710,97 @@ def test_task_create_provider_conflict_fails_before_docker(
         )
 
 
-@pytest.mark.parametrize("agent", ["opencode", "pi"])
-def test_task_create_provider_rejected_without_headless_mode(
+def test_task_create_pi_provider_wraps_json_mode_command(
     monkeypatch,
     tmp_path,
     tmp_task_store,
     provider_registry,
-    agent,
 ) -> None:
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", lambda: _task_config_with("pi"))
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="pi",
+        prompt="run tests",
+        workspace=tmp_path,
+        provider_names=["hosted"],
+    )
+
+    kwargs = stub.run_kwargs
+    assert kwargs is not None
+    wrapped = json.loads(kwargs["env"]["VIBEPOD_PROVIDER_COMMAND"])
+    assert wrapped == [
+        "pi",
+        "--mode",
+        "json",
+        "--provider",
+        "hosted",
+        "--model",
+        "m",
+        "--",
+        "run tests",
+    ]
+
+
+def _save_second_provider() -> None:
+    from vibepod.core.providers import Provider, save_provider
+
+    save_provider(
+        Provider(
+            "other",
+            "openai-chat",
+            "https://example.org/v1",
+            auth="key",
+            models=("n",),
+            default_model="n",
+        ),
+        key="secret",
+    )
+
+
+def test_task_create_pi_rejects_providers_without_model(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    _save_second_provider()
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", lambda: _task_config_with("pi"))
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
     with pytest.raises(typer.Exit):
         task_cmd.task_create(
-            agent=agent,
+            agent="pi",
             prompt="go",
             workspace=tmp_path,
-            provider_names=["hosted"],
+            provider_names=["hosted", "other"],
         )
+    assert stub.run_kwargs is None
+
+
+def test_task_create_pi_providers_accept_explicit_model(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    provider_registry,
+) -> None:
+    _save_second_provider()
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", lambda: _task_config_with("pi"))
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="pi",
+        prompt="go",
+        workspace=tmp_path,
+        provider_names=["hosted", "other"],
+        passthrough_args=["--model", "other/n"],
+    )
+
+    wrapped = json.loads(stub.run_kwargs["env"]["VIBEPOD_PROVIDER_COMMAND"])
+    assert wrapped == ["pi", "--mode", "json", "--model", "other/n", "--", "go"]
 
 
 def test_task_create_opencode_provider_rejected_no_headless(

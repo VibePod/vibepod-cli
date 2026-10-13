@@ -553,6 +553,18 @@ def launch_task(
         except (ValueError, OSError) as exc:
             error(str(exc) if isinstance(exc, ValueError) else "Cannot access provider credentials")
             raise typer.Exit(1) from exc
+        explicit_model = any(
+            arg in ("--model", "-m") or arg.startswith("--model=")
+            for arg in [*provider_args, *passthrough_args]
+        )
+        if selected == "pi" and not explicit_model:
+            # Without --model, headless Pi falls back to the model saved in its
+            # own settings, which may belong to an unrelated provider.
+            error(
+                "Pi tasks need a model when no single provider has a default: "
+                "set one with `vp provider` or pass `-- --model <provider>/<model>`.",
+            )
+            raise typer.Exit(1)
 
     # A worktree the board runner created inherits the permission of its repository.
     allowed_path = allow_check_path.expanduser().resolve() if allow_check_path else workspace_path
@@ -719,6 +731,16 @@ def launch_task(
         # (dsh runs `dsh web` interactively but `dsh --profile headless` one-shot).
         command = (
             list(spec.headless_command) + ikwid_prefix + provider_args + [prompt] + passthrough_args
+        )
+    elif spec.headless_options_before_prompt:
+        # `--` ends option parsing, so a prompt starting with "-" stays a prompt.
+        command = (
+            list(base_command or [])
+            + ikwid_prefix
+            + list(spec.headless_prefix or [])
+            + provider_args
+            + passthrough_args
+            + ["--", prompt]
         )
     else:
         command = (
