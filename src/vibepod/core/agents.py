@@ -181,6 +181,9 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         "/config",
         {"HOME": "/config", "PI_CODING_AGENT_DIR": "/config/.pi/agent"},
         ikwid_args=["--approve"],
+        # JSON mode is non-interactive by itself and streams every event plus
+        # the final answer as JSON lines, so task logs stay machine-readable.
+        headless_prefix=["--mode", "json"],
         # Community adapter (svkozak/pi-acp) that runs the image's `pi`. npx
         # uses a pre-installed copy when the image ships one and fetches it
         # otherwise; the fetch is cached in the config mount (HOME=/config).

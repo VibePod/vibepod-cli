@@ -468,6 +468,37 @@ class LaunchedTask:
     store: TaskStore
 
 
+def _seed_pi_project_trust(config_dir: Path) -> None:
+    """Default Pi's project trust to "always" unless the user already chose one.
+
+    Without a UI, Pi's default ("ask") resolves to untrusted and silently skips the
+    project's .pi settings and extensions. Pi reads the key only from the global
+    settings.json under PI_CODING_AGENT_DIR (/config/.pi/agent in the container).
+    """
+    settings_path = config_dir / ".pi" / "agent" / "settings.json"
+    settings: dict[str, Any] = {}
+    if settings_path.is_file():
+        try:
+            loaded = _json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            warning(f"Could not parse {settings_path}; leaving Pi project trust unset")
+            return
+        if not isinstance(loaded, dict):
+            warning(f"{settings_path} is not a JSON object; leaving Pi project trust unset")
+            return
+        settings = loaded
+    if "defaultProjectTrust" in settings:
+        return
+    settings["defaultProjectTrust"] = "always"
+    try:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(_json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        warning(f"Could not write {settings_path}: {exc}")
+        return
+    info(f'Set defaultProjectTrust to "always" in {settings_path} for headless Pi runs')
+
+
 def launch_task(
     agent: str,
     prompt: str,
@@ -742,6 +773,8 @@ def launch_task(
 
     config_dir = agent_config_dir(selected, active_profile)
     config_dir.mkdir(parents=True, exist_ok=True)
+    if selected == "pi":
+        _seed_pi_project_trust(config_dir)
 
     extra_volumes = agent_extra_volumes(selected, config_dir)
     for host_path, _, _ in extra_volumes:

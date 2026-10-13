@@ -572,6 +572,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `qwen` | `qwen -p "<prompt>"` |
 | `dsh` | `dsh --profile headless "<prompt>"` |
 | `hermes` | `hermes -z "<prompt>"` |
+| `pi` | `pi --mode json "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
@@ -920,7 +921,9 @@ Pi has a per-project **trust/approval system**: before loading project-local ext
 
 - Interactive: run `/trust` to save the decision. It is written to `PI_CODING_AGENT_DIR` (`/config/.pi/agent/trust.json`), which lives inside the persisted config mount, so the trust survives container restarts.
 - `--ikwid`: appends `--approve`, trusting project-local files for that run (see [IKWID mode](#ikwid-mode---ikwid)).
-- Non-interactive modes (`-p`, `--mode json`, `--mode rpc`) show no prompt and fall back to `defaultProjectTrust` in `/config/.pi/agent/settings.json` (`ask` | `always` | `never`). Pre-seed this file if you need unattended runs to trust projects automatically.
+- Non-interactive modes (`-p`, `--mode json`, `--mode rpc`) show no prompt and fall back to `defaultProjectTrust` in `/config/.pi/agent/settings.json` (`ask` | `always` | `never`); with `ask` they treat the project as untrusted and skip its project-local files. `vp task create pi` sets the key to `always` when it is absent, and leaves a value you set yourself untouched.
+
+`vp task create pi "<prompt>"` runs `pi --mode json "<prompt>"`, so `vp task logs` shows the session header and then one JSON event per line, including the final assistant message.
 
 #### Local models (Ollama, LM Studio, Lemonade, llama.cpp)
 
