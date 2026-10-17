@@ -26,34 +26,115 @@ def test_engine_mounts_host_sockets_assumes_capable_when_engine_unreachable(monk
     assert doctor_cmd._engine_mounts_host_sockets() is True
 
 
-def test_herdr_doctor_vm_backed_engine_skips_injected_file_failures(
-    monkeypatch,
-    tmp_path: Path,
-    capsys,
-) -> None:
-    """On a VM-backed engine the deliberately-uninjected hook files and unregistered
-    settings are reported as expected, not counted as failures."""
+def _herdr_doctor_env(monkeypatch, tmp_path: Path, *, sockets: bool) -> Path:
     from vibepod.commands import doctor as doctor_cmd
 
     monkeypatch.setenv("HERDR_ENV", "1")
     monkeypatch.setenv("HERDR_PANE_ID", "pane-1")
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "vp"))
     cfg_dir = tmp_path / "cfg"
     cfg_dir.mkdir()
-
     monkeypatch.setattr(doctor_cmd, "agent_config_dir", lambda _agent, _profile="default": cfg_dir)
     monkeypatch.setattr(doctor_cmd, "resolve_profile", lambda _profile, _config: "default")
     monkeypatch.setattr(doctor_cmd, "get_config", lambda: {})
     monkeypatch.setattr("vibepod.core.herdr.resolve_socket", lambda: Path("/fake/herdr.sock"))
     monkeypatch.setattr("vibepod.core.herdr.resolve_binary", lambda: None)
-    monkeypatch.setattr(doctor_cmd, "_engine_mounts_host_sockets", lambda: False)
+    monkeypatch.setattr("vibepod.core.herdr.release_agent", lambda *a, **kw: False)
+    monkeypatch.setattr(doctor_cmd, "_engine_mounts_host_sockets", lambda: sockets)
+    return cfg_dir
 
-    # A VM-backed engine can't inject hooks, so this must NOT raise typer.Exit(1)
-    # even though no hook files or settings registration exist yet.
+
+def test_herdr_doctor_summary_reports_socket_transport(monkeypatch, tmp_path: Path, capsys) -> None:
+    from vibepod.commands import doctor as doctor_cmd
+
+    _herdr_doctor_env(monkeypatch, tmp_path, sockets=True)
+    doctor_cmd.herdr_doctor(agent=None)
+    out = capsys.readouterr().out
+    assert "socket: the herdr socket is mounted" in out
+    assert "file relay" not in out
+
+
+def test_herdr_doctor_probes_file_relay_on_vm_backed_engine(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    """Off Linux the probe replays the hook through the events file and checks
+    that the relay forwards what the container wrote."""
+    from vibepod.commands import doctor as doctor_cmd
+    from vibepod.core import herdr as herdr_core
+
+    cfg_dir = _herdr_doctor_env(monkeypatch, tmp_path, sockets=False)
+    herdr_core.sync_herdr_files("claude", cfg_dir, {})
+    herdr_core.register_claude_hooks(cfg_dir)
+    forwarded: list[dict] = []
+    monkeypatch.setattr(herdr_core, "forward_event", lambda e: forwarded.append(e) or True)
+    seen: dict = {}
+
+    class _Containers:
+        def run(self, image, **kwargs):
+            seen.update(kwargs)
+            host_dir = next(
+                host for host, bind in kwargs["volumes"].items() if bind["bind"] == "/herdr-events"
+            )
+            env = kwargs["environment"]
+            event = {
+                "pane_id": env["HERDR_PANE_ID"],
+                "source": "vibepod",
+                "agent": "claude",
+                "state": "idle",
+            }
+            with (Path(host_dir) / "herdr-events.jsonl").open("a") as handle:
+                handle.write(json.dumps(event) + "\n")
+            return b""
+
+    class _Manager:
+        client = type("_Client", (), {"containers": _Containers()})()
+
+    monkeypatch.setattr("vibepod.core.docker.DockerManager", _Manager)
+
     doctor_cmd.herdr_doctor(agent="claude")
 
     out = capsys.readouterr().out
-    assert "run `vp run claude` inside a pane to inject" not in out
-    assert "absent (expected" in out
+    assert "file relay: this engine runs in a VM" in out
+    assert "1 event(s) forwarded to herdr" in out
+    assert seen["environment"]["HERDR_EVENTS_FILE"] == "/herdr-events/herdr-events.jsonl"
+    assert "HERDR_SOCKET_PATH" not in seen["environment"]
+    assert all(bind["bind"] != "/herdr/herdr.sock" for bind in seen["volumes"].values())
+    assert forwarded == [
+        {"pane_id": "pane-1", "source": "vibepod", "agent": "claude", "state": "idle"},
+    ]
+    # the probe's events dir is gone again
+    assert list((tmp_path / "vp" / "herdr-relay").iterdir()) == []
+
+
+def test_herdr_doctor_fails_when_no_relayed_event_arrives(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    import pytest
+    import typer
+
+    from vibepod.commands import doctor as doctor_cmd
+    from vibepod.core import herdr as herdr_core
+
+    cfg_dir = _herdr_doctor_env(monkeypatch, tmp_path, sockets=False)
+    herdr_core.sync_herdr_files("claude", cfg_dir, {})
+    herdr_core.register_claude_hooks(cfg_dir)
+
+    class _Manager:
+        client = type(
+            "_Client",
+            (),
+            {"containers": type("_C", (), {"run": lambda self, image, **kw: b""})()},
+        )()
+
+    monkeypatch.setattr("vibepod.core.docker.DockerManager", _Manager)
+
+    with pytest.raises(typer.Exit):
+        doctor_cmd.herdr_doctor(agent="claude")
+    assert "no event from the container reached herdr" in capsys.readouterr().out
 
 
 def test_doctor_missing_dir(tmp_path: Path, monkeypatch) -> None:
@@ -176,3 +257,44 @@ def test_doctor_reports_host_env_mode(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "CLAUDE_CODE_OAUTH_TOKEN" in result.stdout
     assert "passed from host env" in result.stdout
+
+
+def test_herdr_doctor_reports_events_herdr_rejects(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    import pytest
+    import typer
+
+    from vibepod.commands import doctor as doctor_cmd
+    from vibepod.core import herdr as herdr_core
+
+    cfg_dir = _herdr_doctor_env(monkeypatch, tmp_path, sockets=False)
+    herdr_core.sync_herdr_files("claude", cfg_dir, {})
+    herdr_core.register_claude_hooks(cfg_dir)
+    monkeypatch.setattr(herdr_core, "forward_event", lambda event: False)
+
+    def run(self, image, **kwargs):
+        host_dir = next(
+            host for host, bind in kwargs["volumes"].items() if bind["bind"] == "/herdr-events"
+        )
+        event = {
+            "pane_id": kwargs["environment"]["HERDR_PANE_ID"],
+            "source": "vibepod",
+            "agent": "claude",
+            "state": "idle",
+        }
+        with (Path(host_dir) / "herdr-events.jsonl").open("a") as handle:
+            handle.write(json.dumps(event) + "\n")
+        return b""
+
+    class _Manager:
+        client = type("_Client", (), {"containers": type("_C", (), {"run": run})()})()
+
+    monkeypatch.setattr("vibepod.core.docker.DockerManager", _Manager)
+
+    with pytest.raises(typer.Exit):
+        doctor_cmd.herdr_doctor(agent="claude")
+    out = " ".join(capsys.readouterr().out.split())
+    assert "herdr rejected 1 valid event(s); check the herdr connection" in out
