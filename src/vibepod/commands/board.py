@@ -1,4 +1,5 @@
-"""`vp board work`: let an agent work through the planned tasks of a vibepod-board project."""
+"""`vp board work`: let an agent work through the planned tasks of a vibepod-board project, or
+review the tasks in its Review column."""
 
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from vibepod.core.allowed_dirs import add_allowed_dir, is_dir_allowed, is_protec
 from vibepod.core.board_client import BoardApiError, BoardClient, resolve_board_settings
 from vibepod.core.board_worker import (
     DEFAULT_BRANCH_TEMPLATE,
+    MODE_REVIEW,
     AgentStopError,
     BoardWorker,
     FileProfileLock,
@@ -47,6 +49,11 @@ app = typer.Typer(
     help="Work through vibepod-board projects with agents",
     no_args_is_help=True,
 )
+
+
+class WorkMode(str, Enum):
+    IMPLEMENT = "implement"
+    REVIEW = "review"
 
 
 class ExistingMode(str, Enum):
@@ -203,7 +210,7 @@ def _say(level: str, message: str) -> None:
 
 def _ensure_allowed(repo: Path) -> None:
     """The repository must be on the allow list, like any `vp task` workspace; the task
-    worktrees made from it inherit its permission."""
+    clones made from it inherit its permission."""
     if is_protected_dir(repo):
         error(f"'{repo}' is a protected directory (home or root); use a project repository.")
         raise typer.Exit(1)
@@ -222,6 +229,27 @@ def _raise_interrupt(_signum: int, _frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
+def _board_flag(config: dict[str, Any], key: str, default: bool) -> bool:
+    """A yes/no setting of the `board` config, such as `board.push`."""
+    board = config.get("board")
+    value = board.get(key, default) if isinstance(board, dict) else default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"false", "no", "off", "0"}:
+            return False
+        if text in {"true", "yes", "on", "1"}:
+            return True
+        return default
+    if value is None:
+        return default
+    return value is not False and value != 0
+
+
+def _push_enabled(config: dict[str, Any]) -> bool:
+    """Whether `board.push` lets the worker push branches for the board; on unless set off."""
+    return _board_flag(config, "push", True)
+
+
 def _repo_allowed(path: Path) -> bool:
     """A repository an agent may work in: on the allow list and not home or root."""
     return not is_protected_dir(path) and is_dir_allowed(path)
@@ -230,14 +258,28 @@ def _repo_allowed(path: Path) -> bool:
 @app.command("work")
 def board_work(
     project: Annotated[str, typer.Argument(help="Board project key, such as VP")],
-    agent: Annotated[str, typer.Option("--agent", "-a", help="Agent that implements the tasks")],
+    agent: Annotated[
+        str,
+        typer.Option("--agent", "-a", help="Agent that implements or reviews the tasks"),
+    ],
+    mode: Annotated[
+        WorkMode,
+        typer.Option(
+            "--mode",
+            help="implement planned tasks, or review the tasks in Review: rework or PR ready",
+        ),
+    ] = WorkMode.IMPLEMENT,
     board_url: Annotated[
         str | None,
         typer.Option("--board-url", help="Board URL; defaults to board.url or VP_BOARD_URL"),
     ] = None,
     name: Annotated[
         str | None,
-        typer.Option("--name", help="Worker name on the board; defaults to <agent>@<host>"),
+        typer.Option(
+            "--name",
+            help="Worker name on the board; defaults to <agent>@<host>, or <agent>-review@<host> "
+            "for a review worker. Each reviewer name counts as one approval",
+        ),
     ] = None,
     label: Annotated[
         list[str] | None,
@@ -276,34 +318,51 @@ def board_work(
         Path | None,
         typer.Option(
             "--worktree-dir",
-            help="Where task worktrees go; defaults to <repo>-worktrees next to the repository",
+            help="Where task clones go; defaults to <repo>-worktrees next to the repository",
         ),
     ] = None,
     base: Annotated[
         str | None,
         typer.Option(
             "--base",
-            help="Where new branches start; defaults to the repository's current branch",
+            help="Where new branches start, and what reviews diff against, taken from the "
+            "remote where it is further along; defaults to the remote's default branch",
         ),
     ] = None,
     branch_template: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--branch-template",
             help="Branch name from {issue}, {number}, {key} and {project}; tasks without a "
-            "GitHub issue use {key}, such as vp-12",
+            f"GitHub issue use {{key}}, such as vp-12  [default: {DEFAULT_BRANCH_TEMPLATE}]",
         ),
-    ] = DEFAULT_BRANCH_TEMPLATE,
+    ] = None,
     existing: Annotated[
-        ExistingMode,
+        ExistingMode | None,
         typer.Option(
             "--existing",
-            help="When the task's branch or worktree exists: continue or refuse",
+            help="When the task's branch exists: continue or refuse  [default: continue]",
         ),
-    ] = ExistingMode.CONTINUE,
+    ] = None,
     keep_worktree: Annotated[
         bool,
-        typer.Option("--keep-worktree", help="Keep worktrees after the hand-over"),
+        typer.Option("--keep-worktree", help="Keep task clones after the hand-over or review"),
+    ] = False,
+    no_push: Annotated[
+        bool,
+        typer.Option(
+            "--no-push",
+            help="Do not push branches for the board: neither an approved one nor on request "
+            "(also board.push: false)",
+        ),
+    ] = False,
+    require_fetch: Annotated[
+        bool,
+        typer.Option(
+            "--require-fetch",
+            help="Block a task whose remote cannot be fetched, instead of working from the "
+            "repository as it is (also board.require_fetch: true)",
+        ),
     ] = False,
     profile: Annotated[
         str | None,
@@ -337,16 +396,17 @@ def board_work(
         str | None,
         typer.Option(
             "--verify",
-            help="Command that must pass in the worktree before the hand-over",
+            help="Command that must pass in the task's clone before the hand-over",
         ),
     ] = None,
     on_fail: Annotated[
-        OnFail,
+        OnFail | None,
         typer.Option(
             "--on-fail",
-            help="Where failed and timed-out tasks go: planned (counts an attempt) or blocked",
+            help="Where failed and timed-out tasks go: planned (counts an attempt) or blocked  "
+            "[default: planned]",
         ),
-    ] = OnFail.PLANNED,
+    ] = None,
     max_attempts: Annotated[
         int | None,
         typer.Option("--max-attempts", min=1, help="Failed attempts before a task is blocked"),
@@ -365,10 +425,43 @@ def board_work(
 ) -> None:
     """Claim planned tasks of a board project and let an agent implement each one.
 
-    Each task gets its own branch and worktree. The agent runs headless with the task as
-    its prompt; after an optional --verify command passes, the task moves to Review with
-    its branch. Failed and timed-out tasks go back to Planned (or blocked) with a note.
+    Each task gets its own branch and a clone of the repository to work on it in. The agent
+    runs headless with the task as its prompt; after an optional --verify command passes,
+    the branch comes back into the repository and the task moves to Review with it. Failed
+    and timed-out tasks go back to Planned (or blocked) with a note.
+
+    Before each run the worker fetches the task's remote: new branches start from the
+    remote's default branch, and a continued branch from where the remote has it when that
+    is further along. A failed fetch goes on with the repository as it is, unless
+    --require-fetch.
+
+    With --mode review the worker claims tasks in Review instead, and the agent judges the
+    work on the branch, in a clone of its own, without changing it: approve, or send it
+    back for rework with feedback. A failing --verify command always sends it back.
+
+    When the board asks, the worker pushes branches to GitHub from the repository with your
+    git credentials: the commit a reviewer approved, and the branches of push requests, such
+    as for Open PR. --no-push turns that off.
     """
+    reviewing = mode == WorkMode.REVIEW
+    if reviewing:
+        meaningless = [
+            option
+            for option, value in (
+                ("--branch-template", branch_template),
+                ("--existing", existing),
+                ("--on-fail", on_fail),
+                ("--max-attempts", max_attempts),
+            )
+            if value is not None
+        ]
+        if meaningless:
+            error(
+                f"{', '.join(meaningless)} cannot be used with --mode review: a review works on "
+                "the branch the task was handed over on, and never fails a task.",
+            )
+            raise typer.Exit(1)
+    branch_template = branch_template or DEFAULT_BRANCH_TEMPLATE
     config = get_config()
     try:
         settings = resolve_board_settings(config, board_url)
@@ -413,13 +506,14 @@ def board_work(
     options = WorkOptions(
         project=project,
         agent=selected,
-        name=name or f"{selected}@{host}",
+        name=name or (f"{selected}-review@{host}" if reviewing else f"{selected}@{host}"),
         machine=host,
+        mode=mode.value,
         repo=repo_path,
         worktree_dir=worktree_dir.expanduser().resolve() if worktree_dir else None,
         base=base,
         branch_template=branch_template,
-        existing=existing.value,
+        existing=(existing or ExistingMode.CONTINUE).value,
         keep_worktree=keep_worktree,
         labels=tuple(label or ()),
         min_readiness=min_readiness,
@@ -429,9 +523,11 @@ def board_work(
         poll_seconds=float(poll_seconds) if poll_seconds else None,
         timeout_seconds=timeout_seconds,
         verify=verify,
-        on_fail=on_fail.value,
+        on_fail=(on_fail or OnFail.PLANNED).value,
         max_attempts=max_attempts,
         usage_limit_wait_seconds=usage_wait,
+        push=not no_push and _push_enabled(config),
+        require_fetch=require_fetch or _board_flag(config, "require_fetch", False),
     )
     runner = DockerAgentRunner(
         selected,
@@ -471,13 +567,29 @@ def board_work(
         error(getattr(exc, "message", str(exc)))
         raise typer.Exit(1) from exc
     except KeyboardInterrupt as exc:
-        warning("Interrupted; the task in progress went back to Planned.")
+        if reviewing:
+            warning("Interrupted; the review in progress was given up.")
+        else:
+            warning("Interrupted; the task in progress went back to Planned.")
         raise typer.Exit(130) from exc
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 
-    info(f"Handed over {len(summary.handed_over)} task(s), gave back {len(summary.returned)}.")
+    if options.mode == MODE_REVIEW:
+        info(
+            f"Approved {len(summary.approved)} task(s), sent {len(summary.reworked)} back for "
+            f"rework; {len(summary.returned)} review(s) ended without either.",
+        )
+    else:
+        info(
+            f"Handed over {len(summary.handed_over)} task(s), gave back {len(summary.returned)}.",
+        )
+    if summary.pushed or summary.push_failed:
+        info(
+            f"Pushed {len(summary.pushed)} branch(es) for the board"
+            + (f"; {len(summary.push_failed)} push(es) failed." if summary.push_failed else "."),
+        )
     if summary.ended_because.startswith(
         ("The agent could not be started", "The agent could not be stopped"),
     ):
