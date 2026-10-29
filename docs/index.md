@@ -34,6 +34,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 ## Next Steps
 
 - [**Quickstart**](quickstart.md) — install and run your first agent in two minutes.
+- [**Snap distribution**](snap.md) — installation, permissions and publishing.
 - [**Development**](development.md) — local setup, tests, and docs workflow.
 - [**Agents**](agents/index.md) — per-agent setup and credential instructions.
 - [**Configuration**](configuration.md) — full reference for global and project-level config.
