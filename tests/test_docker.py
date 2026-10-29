@@ -1280,6 +1280,31 @@ def test_network_hostnames_lists_names_and_aliases() -> None:
     assert manager.network_hostnames("web_default") == ["db", "web-db-1"]
 
 
+def test_network_hostnames_skips_member_that_disappeared() -> None:
+    gone_id = "b" * 64
+    live_id = "c" * 64
+    network = MagicMock()
+    network.attrs = {
+        "Containers": {gone_id: {"Name": "web-worker-1"}, live_id: {"Name": "web-db-1"}},
+    }
+    live = MagicMock()
+    live.name = "web-db-1"
+    live.attrs = {"NetworkSettings": {"Networks": {"web_default": {"Aliases": ["db"]}}}}
+
+    def get_container(container_id: str) -> MagicMock:
+        if container_id == gone_id:
+            raise NotFound("gone")
+        return live
+
+    client = MagicMock()
+    client.networks.get.return_value = network
+    client.containers.get.side_effect = get_container
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    assert manager.network_hostnames("web_default") == ["db", "web-db-1", "web-worker-1"]
+
+
 def test_network_hostnames_unknown_network_is_empty() -> None:
     client = MagicMock()
     client.networks.get.side_effect = NotFound("missing")

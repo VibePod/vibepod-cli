@@ -588,8 +588,14 @@ class DockerManager:
             network = self.client.networks.get(network_name)
             members = network.attrs.get("Containers") or {}
             names: set[str] = set()
-            for container_id in members:
-                container = self.client.containers.get(container_id)
+            for container_id, member in members.items():
+                try:
+                    container = self.client.containers.get(container_id)
+                except DockerException:
+                    # The container left or cannot be inspected: keep the name
+                    # the network reported and go on with the others.
+                    names.add(str((member or {}).get("Name") or ""))
+                    continue
                 names.add(str(container.name))
                 networks = container.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
                 endpoint = networks.get(network_name) or {}

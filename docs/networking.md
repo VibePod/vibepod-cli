@@ -97,7 +97,7 @@ vp run claude --network myshop_default
 vp task create claude "run the integration tests against db" --network myshop_default
 
 # Board workers: every agent run joins the network
-vp board work --network myshop_default
+vp board work VP --agent claude --network myshop_default
 ```
 
 Find the network name with `docker network ls` or
