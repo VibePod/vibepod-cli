@@ -84,6 +84,7 @@ vp board work VP --agent codex --repo ~/src/app --poll 2m
 | --- | --- |
 | `--agent`, `-a` | The agent that implements the tasks (required; it needs headless mode). |
 | `--name` | The worker's name on the board, and the holder of its claims. Defaults to `<agent>@<host>`. Give two workers on one machine different names. |
+| `--instance` | The instance id shown with the worker on the board. Defaults to the container's short id when `vp` runs in a container, else the process id. |
 | `--label` | Only claim tasks carrying this label; repeat to require more. |
 | `--min-readiness` | Only claim tasks with at least this readiness score. |
 | `--task` | Work on this one task, such as `VP-12`, then exit. |
@@ -148,7 +149,9 @@ paused with the reason.
 ## The board's controls
 
 The worker registers with the board when it starts and signs off when it stops,
-so the board lists it with its status, current task and step. A heartbeat
+so the board lists it with its status, current task and step, and its instance
+id (see `--instance`) to tell runs under one name apart, such as after a restart.
+A stopped worker is removed from the list once it signs off. A heartbeat
 every few seconds keeps the worker online and its claim alive, and the reply
 carries the board's instructions:
 
@@ -158,6 +161,9 @@ carries the board's instructions:
   Planned, and the worker signs off.
 - **Cancel** a run: the task is already back in Planned; the worker ends the
   run and reports it as cancelled.
+- **Remove** the worker from the board's worker list: its next heartbeat finds
+  it gone, and it stops with "Removed from the board; stopping", giving the run
+  in progress back to Planned.
 
 `Ctrl+C` stops the worker the same way. If the worker itself fails with an
 unexpected error, it gives the task back to Planned before it exits, so the task

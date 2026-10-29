@@ -72,6 +72,13 @@ USAGE_LIMIT_PATTERNS = (
 # Claude Code: "Claude AI usage limit reached|1759140000" names when the limit resets.
 USAGE_LIMIT_RESET = re.compile(r"limit reached\|(\d{10})\b", re.IGNORECASE)
 
+# Docker and Podman bind these files from the container's own folder, which is named by its
+# id. A host lists the mounts of the containers it runs too, but not at these mount points.
+CONTAINER_FILES = {"/etc/hostname", "/etc/hosts", "/etc/resolv.conf"}
+CONTAINER_ID = re.compile(r"containers/([0-9a-f]{64})/")
+# Cgroup paths such as /docker/<id>, docker-<id>.scope, libpod-<id> or cri-containerd-<id>.
+CGROUP_CONTAINER_ID = re.compile(r"[/-]([0-9a-f]{64})(?:\.scope)?$")
+
 
 class AgentRun(Protocol):
     @property
@@ -181,12 +188,38 @@ def _unlock_file(handle: IO[str]) -> None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def detect_instance(root: Path = Path("/")) -> str:
+    """A short id of this worker process for the board: the 12-character container id when
+    `vp` runs in a container, else the process id."""
+    proc = root / "proc" / "self"
+    with contextlib.suppress(OSError):
+        for line in (proc / "mountinfo").read_text().splitlines():
+            fields = line.split()
+            if len(fields) > 4 and fields[4] in CONTAINER_FILES:
+                match = CONTAINER_ID.search(fields[3])
+                if match:
+                    return match.group(1)[:12]
+    with contextlib.suppress(OSError):
+        for line in (proc / "cgroup").read_text().splitlines():
+            match = CGROUP_CONTAINER_ID.search(line)
+            if match:
+                return match.group(1)[:12]
+    # Container runtimes name the container's host after its short id by default.
+    if (root / ".dockerenv").exists() or (root / "run" / ".containerenv").exists():
+        hostname = socket.gethostname().split(".")[0]
+        if hostname:
+            return hostname
+    return str(os.getpid())
+
+
 @dataclass
 class WorkOptions:
     project: str
     agent: str
     name: str
     machine: str = field(default_factory=socket.gethostname)
+    # Tells this run of the worker from others under its name, such as after a restart.
+    instance: str = field(default_factory=detect_instance)
     # Workspace: the repository (else the task's local path), where worktrees go, the base
     # of new branches, the branch name template, and what to do with an existing branch.
     repo: Path | None = None
@@ -403,6 +436,8 @@ class BoardWorker:
         self.step: str | None = None
         self.board_pause: str | None = None
         self.stop_requested = False
+        # The board removed this worker, such as from its worker list: it stops.
+        self.removed = False
         self.cancel_reason: str | None = None
         self.usage_pause_until: float | None = None
         self.usage_resume_at: datetime | None = None
@@ -427,6 +462,7 @@ class BoardWorker:
             self.options.name,
             self.options.agent,
             self.options.machine,
+            self.options.instance,
         )
         self.worker_id = str(reply["item"]["id"])
         self.heartbeat_seconds = float(reply.get("heartbeatSeconds") or 15)
@@ -597,7 +633,12 @@ class BoardWorker:
                 lease_seconds=self.options.lease_seconds,
             )
         except BoardApiError as exc:
-            if exc.is_conflict or exc.is_not_found:
+            if exc.is_not_found:
+                if not self.removed:
+                    self.say("error", "Removed from the board; stopping")
+                self.removed = self.stop_requested = True
+                self.summary.ended_because = "Removed from the board"
+            elif exc.is_conflict:
                 # Signed off, or replaced by a worker registered under the same name.
                 self.say("error", f"The board dropped this worker: {exc.message}")
                 self.stop_requested = True
@@ -804,6 +845,11 @@ class BoardWorker:
     def _worktree_dir(self, repo: Path) -> Path:
         return self.options.worktree_dir or repo.parent / f"{repo.name}-worktrees"
 
+    def _stopped(self) -> str:
+        if self.removed:
+            return "The worker was removed from the board"
+        return "The worker was stopped from the board"
+
     def _failure(self) -> str:
         return "blocked" if self.options.on_fail == "blocked" else "failed"
 
@@ -946,7 +992,7 @@ class BoardWorker:
         if ended == "stop":
             result.outcome, result.reason, result.release = (
                 "cancelled",
-                "The worker was stopped from the board",
+                self._stopped(),
                 "released",
             )
         elif ended == "cancel":
@@ -1035,7 +1081,7 @@ class BoardWorker:
         card_ref = str(card["id"])
         branch, note = result.branch, self._handover_note(result)
         if result.outcome == "done":
-            stopped = "The worker was stopped from the board"
+            stopped = self._stopped()
             delivered = self._deliver(
                 f"Handing {key} over",
                 lambda: self.client.hand_over(card_ref, self.options.name, branch, note),

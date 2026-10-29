@@ -168,8 +168,16 @@ class BoardClient:
 
     # --- workers --------------------------------------------------------------------
 
-    def register_worker(self, project: str, name: str, agent: str, machine: str) -> dict[str, Any]:
-        body = _body(projectId=project, name=name, agent=agent, machine=machine)
+    def register_worker(
+        self,
+        project: str,
+        name: str,
+        agent: str,
+        machine: str,
+        instance: str | None = None,
+    ) -> dict[str, Any]:
+        # Boards that predate `instance` ignore it, as they do every field they do not know.
+        body = _body(projectId=project, name=name, agent=agent, machine=machine, instance=instance)
         result: dict[str, Any] = self.request("POST", "/api/workers", body)
         return result
 

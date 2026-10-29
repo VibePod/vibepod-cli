@@ -30,6 +30,7 @@ from vibepod.core.board_worker import (
     WorkOptions,
     branch_name,
     build_prompt,
+    detect_instance,
     usage_limit_in,
     usage_limit_reset,
 )
@@ -208,6 +209,7 @@ def work(
             agent="claude",
             name="claude@laptop",
             machine="laptop",
+            instance="4f2a9c1e7b3d",
             repo=repo,
             **options,
         ),
@@ -861,6 +863,38 @@ def test_a_stop_from_the_board_ends_the_run_and_the_worker(
     assert board.runs[0]["outcome"] == "cancelled"
     assert board.card("VP-2")["column"] == "planned"
     assert worker.summary.ended_because == "Stopped from the board"
+    assert board.requests("POST", "/api/workers/worker-1/sign-off") == [None]
+
+
+def test_a_worker_removed_from_the_board_stops_and_gives_its_run_back(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Removed")
+    board.add_task("Never started")
+
+    def removed() -> list[dict[str, Any]]:
+        board.remove_worker("worker-1")
+        return []
+
+    board.on_heartbeat = once_the_agent_runs(removed)
+    runner = FakeRunner(polls=None)
+
+    worker, messages = work(server, runner, repo, poll_seconds=30)
+
+    assert runner.runs[0].stopped is True
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert (release["outcome"], release["note"]) == (
+        "released",
+        "The worker was removed from the board",
+    )
+    assert board.runs[0]["outcome"] == "cancelled"
+    assert board.card("VP-1")["column"] == "planned"
+    assert board.card("VP-2")["column"] == "planned"
+    assert worker.summary.ended_because == "Removed from the board"
+    assert messages.count(("error", "Removed from the board; stopping")) == 1
+    # It still signs off, which the board answers with 404 once the worker is gone.
     assert board.requests("POST", "/api/workers/worker-1/sign-off") == [None]
 
 
@@ -1627,6 +1661,123 @@ def test_a_worker_waits_for_the_profile_lock(
 # --- the board client ----------------------------------------------------------------
 
 
+def test_registration_sends_the_instance(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    work(server, FakeRunner(), repo)
+
+    [registration] = [
+        body for m, path, body in board.calls if (m, path) == ("POST", "/api/workers")
+    ]
+    assert registration == {
+        "projectId": "VP",
+        "name": "claude@laptop",
+        "agent": "claude",
+        "machine": "laptop",
+        "instance": "4f2a9c1e7b3d",
+    }
+
+
+def test_registration_without_an_instance_leaves_the_field_out(
+    board: FakeBoard,
+    server: FakeBoardServer,
+) -> None:
+    BoardClient(server.url, TOKEN).register_worker("VP", "claude@laptop", "claude", "laptop")
+
+    [registration] = [
+        body for m, path, body in board.calls if (m, path) == ("POST", "/api/workers")
+    ]
+    assert "instance" not in (registration or {})
+
+
+def test_registration_works_with_a_board_that_ignores_the_instance(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Old board")
+    # Boards from before instances take the registration as they took it then; the
+    # request models of the board ignore fields they do not know.
+    register = board._register
+    board._register = lambda body: register(  # type: ignore[method-assign]
+        {key: value for key, value in body.items() if key != "instance"}
+    )
+
+    worker, _ = work(server, FakeRunner(), repo)
+
+    assert worker.summary.handed_over == ["VP-1"]
+    assert "instance" not in board.workers["worker-1"]
+
+
+CONTAINER_ID = "080517adae7c343fb787e193e670292f16d94d8ba81f0190464ae258699329fc"
+OTHER_ID = "9d1e2b3c4a5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"
+
+
+def fake_root(tmp_path: Path, *, mountinfo: str = "", cgroup: str = "0::/\n") -> Path:
+    proc = tmp_path / "proc" / "self"
+    proc.mkdir(parents=True)
+    (proc / "mountinfo").write_text(mountinfo)
+    (proc / "cgroup").write_text(cgroup)
+    (tmp_path / "run").mkdir()
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "mountinfo",
+    [
+        # Docker
+        f"612 603 254:1 /var/lib/docker/containers/{CONTAINER_ID}/hostname /etc/hostname "
+        "rw,relatime - ext4 /dev/vda1 rw\n",
+        # Podman
+        f"895 881 0:29 /containers/storage/overlay-containers/{CONTAINER_ID}/userdata/hostname "
+        "/etc/hostname rw - tmpfs tmpfs rw\n",
+    ],
+)
+def test_the_instance_is_the_container_id_from_the_mounts(
+    tmp_path: Path,
+    mountinfo: str,
+) -> None:
+    root = fake_root(tmp_path, mountinfo="22 1 0:21 / /proc rw - proc proc rw\n" + mountinfo)
+
+    assert detect_instance(root) == CONTAINER_ID[:12]
+
+
+@pytest.mark.parametrize(
+    "cgroup",
+    [
+        f"12:memory:/docker/{CONTAINER_ID}\n",
+        f"0::/system.slice/docker-{CONTAINER_ID}.scope\n",
+        f"0::/machine.slice/libpod-{CONTAINER_ID}.scope/container\n0::/libpod-{CONTAINER_ID}\n",
+    ],
+)
+def test_the_instance_is_the_container_id_from_the_cgroup(tmp_path: Path, cgroup: str) -> None:
+    assert detect_instance(fake_root(tmp_path, cgroup=cgroup)) == CONTAINER_ID[:12]
+
+
+def test_the_instance_falls_back_to_the_hostname_in_a_container(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("socket.gethostname", lambda: "abc123def456")
+    root = fake_root(tmp_path)
+    (root / "run" / ".containerenv").touch()
+
+    assert detect_instance(root) == "abc123def456"
+
+
+def test_the_instance_is_the_process_id_outside_a_container(tmp_path: Path) -> None:
+    # A host lists the mounts of the containers it runs, which are not its own.
+    mountinfo = (
+        f"910 29 0:52 / /var/lib/docker/containers/{OTHER_ID}/mounts/shm rw - tmpfs shm rw\n"
+    )
+    root = fake_root(tmp_path, mountinfo=mountinfo, cgroup="0::/user.slice/session-2.scope\n")
+
+    assert detect_instance(root) == str(os.getpid())
+    assert detect_instance(tmp_path / "missing") == str(os.getpid())
+
+
 def test_the_client_names_the_board_error(board: FakeBoard, server: FakeBoardServer) -> None:
     board.add_task("Held", column="review")
     client = BoardClient(server.url, TOKEN)
@@ -1954,6 +2105,8 @@ def test_vp_board_work_runs_a_task_end_to_end(
             "--once",
             "--name",
             "ci-worker",
+            "--instance",
+            "ci-run-42",
             "--profile",
             "default",
             "--ikwid",
@@ -1968,6 +2121,7 @@ def test_vp_board_work_runs_a_task_end_to_end(
     assert board.card("VP-1")["column"] == "review"
     assert board.card("VP-1")["branchName"] == "issue-7"
     assert board.workers["worker-1"]["name"] == "ci-worker"
+    assert board.workers["worker-1"]["instance"] == "ci-run-42"
     assert created[0]["ikwid"] is True
     assert created[0]["forbidden_env_values"] == (TOKEN,)
     assert "Handed over 1 task(s)" in result.output

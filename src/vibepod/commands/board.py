@@ -27,6 +27,7 @@ from vibepod.core.board_worker import (
     RunnerError,
     WorkerError,
     WorkOptions,
+    detect_instance,
     validate_branch_template,
 )
 from vibepod.core.config import get_config, get_config_root
@@ -239,6 +240,13 @@ def board_work(
         str | None,
         typer.Option("--name", help="Worker name on the board; defaults to <agent>@<host>"),
     ] = None,
+    instance: Annotated[
+        str | None,
+        typer.Option(
+            "--instance",
+            help="Instance id shown on the board; defaults to the container or process id",
+        ),
+    ] = None,
     label: Annotated[
         list[str] | None,
         typer.Option("--label", help="Only claim tasks with this label; repeat to require more"),
@@ -415,6 +423,7 @@ def board_work(
         agent=selected,
         name=name or f"{selected}@{host}",
         machine=host,
+        instance=(instance or "").strip() or detect_instance(),
         repo=repo_path,
         worktree_dir=worktree_dir.expanduser().resolve() if worktree_dir else None,
         base=base,

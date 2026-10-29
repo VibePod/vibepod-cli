@@ -181,8 +181,18 @@ class FakeBoard:
             "heartbeatSeconds": 15,
         }
 
+    def remove_worker(self, worker_id: str) -> None:
+        """Removes a worker as the board's worker list does: claims it still holds go back
+        to Planned, and its heartbeats get 404 from then on."""
+        worker = self.workers.pop(worker_id)
+        for card in self.cards.values():
+            if card.get("claimedAt") and card.get("assignee") == worker.get("name"):
+                card.update(column="planned", assignee=None, claimedAt=None)
+
     def _sign_off(self, worker_id: str) -> tuple[int, Any]:
-        worker = self.workers[worker_id]
+        worker = self.workers.get(worker_id)
+        if worker is None:
+            return 404, {"error": f"Worker not found: {worker_id}"}
         if worker["status"] != "offline":
             # As the board does: claims the worker still holds go back to Planned.
             for card in self.cards.values():
@@ -193,7 +203,9 @@ class FakeBoard:
 
     def _heartbeat(self, worker_id: str, body: dict[str, Any]) -> tuple[int, Any]:
         worker = self.workers.get(worker_id)
-        if worker is None or worker["status"] == "offline":
+        if worker is None:
+            return 404, {"error": f"Worker not found: {worker_id}"}
+        if worker["status"] == "offline":
             return 409, {"error": "Worker is signed off; register again to reconnect"}
         worker.update(status=body.get("status"), task=body.get("task"), step=body.get("step"))
         self.heartbeats.append(dict(body))
