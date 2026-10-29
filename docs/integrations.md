@@ -131,6 +131,7 @@ vp run claude --network mytool_default
 When the workspace itself contains a compose file, `vp run` offers this
 interactively — see
 [Connecting to a Docker Compose network](agents/index.md#connecting-to-a-docker-compose-network).
+[Connecting to other containers](networking.md) covers that flow in detail.
 
 ## LiteLLM
 

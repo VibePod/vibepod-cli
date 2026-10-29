@@ -685,6 +685,10 @@ You can also specify the network explicitly:
 vp run claude --network my-compose-network
 ```
 
+See [Connecting to other containers](../networking.md) for the full flow,
+how proxy routing is handled, running commands against services, and
+troubleshooting.
+
 ## Individual agents
 
 ### Claude (Anthropic)

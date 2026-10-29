@@ -39,7 +39,11 @@ markdown_extensions:
   - admonition
   - pymdownx.highlight:
       anchor_linenums: true
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.inlinehilite
   - pymdownx.tabbed:
       alternate_style: true
@@ -68,4 +72,5 @@ nav:
   - LLM Integration: llm.md
   - Badge: badge.md
   - External tools: integrations.md
+  - Connecting to other containers: networking.md
   - CLI Reference: cli-reference.md
