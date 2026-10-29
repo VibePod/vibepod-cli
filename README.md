@@ -75,6 +75,54 @@ before agent flags so VibePod does not parse them as its own options:
 vp run <agent> -- <agent-args>
 ```
 
+## Generic agents (`--image` / `--command`)
+
+Run any agent that is not built in — a private, internal or experimental
+one — with the `generic` agent (alias: `custom`). It has no default image,
+so pass the image with `--image` and, optionally, the start command with
+`--command`:
+
+```bash
+vp run generic --image ghcr.io/acme/my-agent:1.4
+vp run generic --image ghcr.io/acme/my-agent:1.4 --command "my-agent --interactive"
+vp run generic --image my-agent:dev --command "my-agent" -- --model fast
+```
+
+- `--command` is split with shell quoting rules and replaces the image `CMD`;
+  the image `ENTRYPOINT`, if it has one, still runs first (the same as
+  `docker run IMAGE COMMAND`). Without `--command` the image's own `CMD`
+  starts. Arguments after `--` are appended to the command.
+- The workspace is mounted at `/workspace` (the working directory) and the
+  agent config dir `~/.config/vibepod/agents/generic/` at `/config`, so set
+  `-e HOME=/config` if the agent should persist its login and settings there.
+  `-e`, `-v`, `-p`, `--network`, `--profile`, init commands and overlays work
+  as for the built-in agents. The proxy env vars are set too; HTTPS through
+  it needs an image that trusts the proxy CA.
+- Save the image and command in config to skip the flags. `command` takes a
+  string (shell-quoted) or a list:
+
+  ```yaml
+  # ~/.config/vibepod/config.yaml (or .vibepod/config.yaml)
+  agents:
+    generic:
+      image: ghcr.io/acme/my-agent:1.4
+      command: ["my-agent", "--interactive"]
+      env:
+        HOME: /config
+  ```
+
+- `--image` and `--command` also work on the built-in agents, to try another
+  build of an agent for one run (`vp run claude --image myorg/claude:dev`).
+  The flags win over `agents.<agent>.image` / `agents.<agent>.command`.
+
+VibePod refuses to start, with an error naming the fix, when `generic` has no
+image, when the image is empty or contains whitespace (a command passed in
+`--image` by mistake), when `--command` cannot be parsed (for example an
+unclosed quote) or names no program, and when `--command` is combined with
+`--acp` (ACP mode starts `agents.<agent>.acp_command` instead). The `generic`
+agent has no `--ikwid` flag or `vp task` mode, since VibePod does not know its
+CLI.
+
 ## IKWID Mode (`--ikwid`)
 
 Use `--ikwid` to append each agent's auto-approval / permission-skip flag when supported.
@@ -190,6 +238,7 @@ Current defaults:
 - `qwen` -> `vibepod/qwen:latest`
 - `dsh` -> `vibepod/dsh:latest`
 - `hermes` -> `vibepod/hermes:latest`
+- `generic` (alias: `custom`) -> no default; pass `--image` (see [Generic agents](#generic-agents---image----command))
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 

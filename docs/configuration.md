@@ -54,6 +54,10 @@ agents:
     ports: [] # Ports to publish on the host, `docker run -p` syntax
     init: [] # Optional shell commands run before agent startup
     overlay: true # Set false to ignore the project's .vibepod/overlay/ (see Project overlays)
+    # command: start command replacing the agent's default (and the image
+    # CMD); a list, or a string parsed with shell quoting rules. `vp run
+    # --command` overrides it for one run. Not present by default.
+    # command: ["claude", "--verbose"]
     # acp_command: ACP adapter command for `vp run <agent> --acp` (editor
     # integration via the Agent Client Protocol). Defaults exist for claude,
     # gemini, qwen, codex, opencode, copilot, auggie, jcode and vibe;
@@ -168,6 +172,17 @@ agents:
   hermes:
     enabled: true
     image: vibepod/hermes:latest
+    env: {}
+    volumes: []
+    ports: []
+    init: []
+
+  # Bring-your-own agent (alias: custom). No default image: `vp run generic`
+  # needs this or --image. See Agents > Generic agent.
+  generic:
+    enabled: true
+    image: "" # e.g. ghcr.io/acme/my-agent:1.4
+    command: null # e.g. "my-agent --interactive"; null runs the image CMD
     env: {}
     volumes: []
     ports: []

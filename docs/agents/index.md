@@ -21,10 +21,61 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `qwen` | Qwen (Alibaba) | `vp q` | `vibepod/qwen:latest` |
 | `dsh` (DeepSeek Harness) | DeepSeek | `vp ds` | `vibepod/dsh:latest` |
 | `hermes` | Nous Research | `vp h` | `vibepod/hermes:latest` |
+| `generic` (alias: `custom`) | any | `vp generic` | none — `--image` or `agents.generic.image` |
 
 Alias note: `vp run devstral` resolves to `vp run vibe`, `vp run qwen-cli`
 resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
-resolve to `vp run dsh`.
+resolve to `vp run dsh`, and `vp run custom` resolves to `vp run generic`.
+
+## Generic agent (`generic`) — bring your own image
+
+`generic` runs an agent VibePod does not ship: any image, with any start
+command. It has no default image, so give it one per run or in config:
+
+```bash
+vp run generic --image ghcr.io/acme/my-agent:1.4
+vp run generic --image ghcr.io/acme/my-agent:1.4 --command "my-agent --interactive"
+vp run generic --image my-agent:dev --command my-agent -- --model fast
+```
+
+```yaml
+# ~/.config/vibepod/config.yaml (or .vibepod/config.yaml)
+agents:
+  generic:
+    image: ghcr.io/acme/my-agent:1.4
+    command: "my-agent --interactive" # or a list: ["my-agent", "--interactive"]
+```
+
+**Start command.** `--command` (or `agents.generic.command`) is split with
+shell quoting rules and replaces the image `CMD`. The image `ENTRYPOINT` still
+runs in front of it, exactly as with `docker run IMAGE COMMAND`, so an image
+whose entrypoint is the agent binary only needs its arguments. With no command
+set, the image's own `CMD` starts. Arguments after `--` are appended.
+
+**Mounts and environment.** The workspace is mounted at `/workspace` (the
+working directory) and the agent config dir
+(`~/.config/vibepod/agents/generic/`, per [profile](../profiles.md)) at
+`/config`. VibePod does not change `HOME` for a generic image, so add
+`-e HOME=/config` (or `agents.generic.env.HOME`) when the agent should keep
+its login and settings across runs. `USER_UID`/`USER_GID` carry the host
+identity, but only images that read them map file ownership; others write to
+`/workspace` as their own user. `-e`, `-v`, `-p`, `--network`, init commands
+and overlays work as for built-in agents. The proxy env vars are set as well,
+but HTTPS through the proxy needs an image that trusts its CA.
+
+**Validation.** VibePod stops before starting anything when `generic` has no
+image, when the image is empty or contains whitespace, when the command
+cannot be parsed or names no program, and when `--command` is combined with
+`--acp` (set `agents.generic.acp_command` to run a generic agent as an
+[ACP](../acp.md) adapter). `--ikwid` is ignored with a warning and `vp task`
+is unsupported, since VibePod does not know the agent's CLI.
+
+`--image` and `--command` are accepted for every agent, so a built-in agent
+can also be pointed at another build for one run:
+
+```bash
+vp run claude --image myorg/claude:dev
+```
 
 ## DeepSeek Harness (`dsh`) — Web UI agent
 
@@ -316,7 +367,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`, `generic`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), `deepseek` / `deepseek-harness` (→ `dsh`), and `custom` (→ `generic`). Image customization means changing the image used for one of those IDs. For an agent that is not built in, use the [generic agent](#generic-agent-generic-bring-your-own-image).
 
 ### 1. Extend an existing image for an agent
 
@@ -377,6 +428,8 @@ You can also test quickly without editing config:
 
 ```bash
 VP_IMAGE_OPENCODE=registry.example.com/team/opencode:2026-03-01 vp run opencode
+# or, for one run, with the flag (it wins over config and VP_IMAGE_*)
+vp run opencode --image registry.example.com/team/opencode:2026-03-01
 ```
 
 ## Passing environment variables

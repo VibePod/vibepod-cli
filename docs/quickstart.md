@@ -181,6 +181,17 @@ When forwarding flags to the agent, use `--` to stop VibePod option parsing:
 vp run <agent> -- <agent-flag> <value>
 ```
 
+## Run an agent from your own image
+
+Agents that VibePod does not ship run as the `generic` agent, from any image
+and start command:
+
+```bash
+vp run generic --image ghcr.io/acme/my-agent:1.4 --command "my-agent --interactive"
+```
+
+See [Generic agent](agents/index.md#generic-agent-generic-bring-your-own-image).
+
 ## Bootstrap a project config
 
 Create a project-level config file that you can extend later:

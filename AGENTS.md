@@ -30,6 +30,12 @@ image needs its own runtime user and rejects the UID rootless keep-id maps the
 container to, including 0), and `/opt/hermes` (its install root) is reserved so
 an `--acp` workspace bind cannot shadow the entrypoint/venv/`hermes-acp`.
 
+`generic` (alias `custom`) is the bring-your-own-image agent: it is in
+`SUPPORTED_AGENTS` but listed in `IMAGELESS_AGENTS` and absent from
+`DEFAULT_IMAGES`, so code iterating agents must not index `DEFAULT_IMAGES`
+directly. `vp run --image/--command` (and `agents.<agent>.command`) resolve in
+`run.py::_resolve_image`/`_resolve_start_command` for every agent.
+
 Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
