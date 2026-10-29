@@ -15,7 +15,7 @@ import pytest
 
 from vibepod.core.provider_launch import prepare_provider
 from vibepod.core.provider_runtime import WRAPPED_AGENTS, bootstrap_volume, wrap_provider_command
-from vibepod.core.providers import Provider, save_provider
+from vibepod.core.providers import ModelSettings, Provider, save_provider
 
 pytestmark = [
     pytest.mark.integration,
@@ -162,13 +162,27 @@ def test_agent_routes_to_selected_provider_without_profile_writes(tmp_path, monk
             gateway = client.networks.get("bridge").attrs["IPAM"]["Config"][0]["Gateway"]
             url = f"http://{gateway}:{server.server_port}/v1"
         protocol = "openai-responses" if agent == "codex" else "openai-chat"
+        # A reasoning model makes Tau validate the rendered thinking metadata.
+        model_settings = (
+            {
+                "vp-test-model": ModelSettings(
+                    reasoning_levels=("low", "medium", "high"),
+                    reasoning_default="medium",
+                ),
+                "vp-test-reasoner": ModelSettings(reasoning=True),
+            }
+            if agent == "tau"
+            else {}
+        )
+        models = ("vp-test-model", "vp-test-reasoner") if agent == "tau" else ("vp-test-model",)
         save_provider(
             Provider(
                 "custom",
                 protocol,
                 url,
-                models=("vp-test-model",),
+                models=models,
                 default_model="vp-test-model",
+                model_settings=model_settings,
             ),
         )
         env, args = prepare_provider(agent, ["custom"], {})

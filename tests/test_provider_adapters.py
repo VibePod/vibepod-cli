@@ -1020,11 +1020,11 @@ try:
 except ImportError:  # Python 3.10 runners
     import tomli as tomllib
 [entry] = tomllib.loads(open(os.environ['HOME'] + '/.tau/catalog.toml').read())['providers']
+assert entry['thinking_levels'] == ['low', 'high', 'xhigh'], entry
 assert entry['thinking_parameter'] == 'reasoning_effort', entry
 assert entry['thinking_default'] == 'high', entry
 big = entry['model_metadata']['big']
-assert big == {'context_window': 32768, 'max_tokens': 8192, 'reasoning': True,
-               'unsupported_thinking_levels': ['off', 'minimal', 'medium']}, big
+assert big == {'context_window': 32768, 'max_tokens': 8192, 'reasoning': True}, big
 assert entry['model_metadata']['plain'] == {'reasoning': False}
 """
     result = run_python_bootstrap(env, script, registry, "tau")

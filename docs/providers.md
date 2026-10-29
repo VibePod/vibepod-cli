@@ -62,12 +62,20 @@ What each agent receives (only fields you set; unset fields stay agent defaults)
 | Pi | `contextWindow` | `maxTokens` | `reasoning` | `thinkingLevelMap` (unsupported levels `null`, `xhigh` mapped for OpenAI-style APIs); default via `--thinking` |
 | Codex | `model_context_window` | not a Codex setting | via effort | `model_reasoning_effort` from the default level (`off` → `none`) |
 | OpenCode | `limit.context` (with output) | `limit.output` (with context) | `reasoning` | no portable control |
-| Tau | `model_metadata.<id>.context_window` | `max_tokens` | `reasoning` | `unsupported_thinking_levels`, provider `thinking_parameter` by protocol, `thinking_default` |
+| Tau | `model_metadata.<id>.context_window` | `max_tokens` | `reasoning` | provider `thinking_levels`, `thinking_default`, `thinking_parameter` by protocol; per-model `unsupported_thinking_levels` |
 | Jcode | `context_window` per model | no setting | no setting | no setting |
 | Claude | no setting | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | native | native |
 | Qwen | no setting | no setting | no setting | no setting |
 
 OpenCode's `limit` needs both values; with only one set, nothing is emitted.
+
+Tau declares thinking per provider. When any selected model is a reasoning
+model, the provider's `thinking_levels` is the union of the reasoning models'
+levels in Tau's order (a reasoning model without saved levels offers all of
+them), and each model with its own levels lists the rest as
+`unsupported_thinking_levels`. The default model's level becomes
+`thinking_default` only when it is one of the provider's levels; otherwise it is
+left out and Tau uses its own default.
 
 ## Sharing providers
 

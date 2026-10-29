@@ -86,6 +86,17 @@ def write_private(path: Path, text: str) -> None:
     os.chmod(path, 0o600)
 
 
+def tau_thinking_levels(settings: dict[str, Any], models: list[str]) -> list[str]:
+    """Union of the reasoning models' levels in Tau's order; no saved levels means all."""
+    offered: set[str] = set()
+    for model in models:
+        model_settings = settings.get(model) or {}
+        if model_settings.get("reasoning"):
+            offered.update(model_settings.get("reasoningLevels") or REASONING_LEVELS)
+    # Levels Tau does not know (such as Pi's ``max``) are dropped by the filter.
+    return [level for level in REASONING_LEVELS if level in offered]
+
+
 def render_tau_catalog(original: str, providers: dict[str, Any]) -> str:
     """Append VibePod providers as ``[[providers]]`` entries to Tau's user catalog."""
     raw = tomllib.loads(original) if original.strip() else {}
@@ -117,13 +128,23 @@ def render_tau_catalog(original: str, providers: dict[str, Any]) -> str:
         ]
         settings = entry.get("settings") or {}
         default_model = entry.get("defaultModel") or models[0]
-        if any(settings.get(m, {}).get("reasoning") for m in models):
+        provider_levels = tau_thinking_levels(settings, models)
+        if provider_levels:
+            # Tau requires thinking_levels (normalized, in its order) before any other
+            # thinking key, and thinking_default to be one of those levels.
+            rendered = ", ".join(toml_string(level) for level in provider_levels)
+            lines.append(f"thinking_levels = [{rendered}]")
+            default_level = settings.get(default_model, {}).get("reasoningDefault")
+            if default_level in provider_levels:
+                lines.append(f"thinking_default = {toml_string(default_level)}")
+            elif default_level:
+                lines.append(
+                    f"# thinking_default {toml_string(default_level)} omitted: "
+                    "not one of the provider's thinking_levels",
+                )
             lines.append(
                 f"thinking_parameter = {toml_string(TAU_THINKING_PARAMETER[entry['protocol']])}",
             )
-            default_level = settings.get(default_model, {}).get("reasoningDefault")
-            if default_level:
-                lines.append(f"thinking_default = {toml_string(default_level)}")
         # Sub-tables must follow every scalar key of this [[providers]] element.
         for model in models:
             model_settings = settings.get(model)
@@ -136,9 +157,10 @@ def render_tau_catalog(original: str, providers: dict[str, Any]) -> str:
                 lines.append(f"max_tokens = {int(model_settings['maxOutputTokens'])}")
             if "reasoning" in model_settings:
                 lines.append(f"reasoning = {'true' if model_settings['reasoning'] else 'false'}")
+            # Relative to the provider's thinking_levels, so each model offers its own.
             levels = model_settings.get("reasoningLevels")
-            if levels:
-                unsupported = [level for level in REASONING_LEVELS if level not in levels]
+            unsupported = [level for level in provider_levels if level not in (levels or ())]
+            if model_settings.get("reasoning") and levels and unsupported:
                 rendered = ", ".join(toml_string(level) for level in unsupported)
                 lines.append(f"unsupported_thinking_levels = [{rendered}]")
     return "\n".join(lines) + "\n"
