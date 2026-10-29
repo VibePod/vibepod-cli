@@ -23,7 +23,7 @@
 5. **Verify** with an optional command, such as the test suite, run in the
    clone.
 6. **Bring the branch back** into the repository: only the task's branch, and
-   only forward (see [Safety](#safety)).
+   only where nobody else moved it (see [Safety](#safety)).
 7. **Hand over** the task to Review with its branch name, or give it back to
    Planned (or block it) with a note saying why.
 
@@ -333,11 +333,15 @@ The agent runs in its container; the worker keeps it there:
 - After the run, the worker brings only the task's branch back into the
   repository, with `git fetch <clone> <branch>:<branch>`. The new commits come
   with it into the repository's own objects, so removing the clone loses
-  nothing. The branch only moves forward: when it moved in the repository during
-  the run, such as by someone else's commit on a branch being reworked, and the
-  run's work does not continue from there, it is left as it is and the task is
-  blocked with the reason; the work stays in the clone. A review never brings
-  anything back.
+  nothing. Where the branch is still at the commit the run started from, the
+  run owned it, and its branch is brought back even when the run rewrote it,
+  such as by rebasing it onto a newer main: the branch is updated with
+  `git update-ref` only if it is still at that commit, so a move meanwhile is
+  never overwritten. When it moved in the repository during the run, such as
+  by someone else's commit on a branch being reworked, it only moves forward
+  from there: where the run's work does not continue from it, it is left as it
+  is and the task is blocked with the reason; the work stays in the clone. A
+  review never brings anything back.
 - Git on your machine never runs hooks, an fsmonitor or submodules in a clone,
   and never looks into nested repositories of a clone, whose configuration the
   agent could have written; a submodule change is committed only if the agent
@@ -356,8 +360,8 @@ The agent runs in its container; the worker keeps it there:
 - A branch checked out in a worktree of the repository, such as in your own
   checkout, is never worked on or moved: the task is blocked instead.
 - Fetching before a run only moves the repository's remote-tracking refs. The
-  only branch the worker ever moves is the task's own, and only forward: by
-  the fast-forward to the remote's before a run and by the write-back after it.
+  only branch the worker ever moves is the task's own: by the fast-forward to
+  the remote's before a run and by the write-back after it.
 - A repository named by a task on the board must be on the allowed directories list,
   like any `vp task` workspace, before the worker touches it.
 - `--verify` runs on your machine, in the clone, with the agent's changes: it runs

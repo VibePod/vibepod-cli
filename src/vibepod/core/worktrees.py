@@ -5,11 +5,12 @@ Each run gets a local clone of its own that shares the repository's objects (`gi
 checked out detached. The agent works in its clone only, so whatever it does to branches,
 tags or configuration stays there: the repository, the user's checkout and the other
 workers' clones are out of its reach. After the run the worker brings the task's branch back
-into the repository with a fetch that only ever moves it forward; a review brings nothing
-back. Only clones in the worker's own folder are ever reused or removed. Before a run, the
-worker fetches the task's remote into the repository's remote-tracking refs, so that a run
-starts from the latest branches; the only branch that ever moves is the task's own, and only
-forward.
+into the repository: where nobody moved it during the run the clone's branch replaces it,
+rewritten or not, and where somebody did it only moves forward from there; a review brings
+nothing back. Only clones in the worker's own folder are ever reused or removed. Before a
+run, the worker fetches the task's remote into the repository's remote-tracking refs, so
+that a run starts from the latest branches; the only branch that ever moves is the task's
+own.
 
 Git runs here on the host, in clones an agent has worked in, so it never runs code from them:
 hooks, fsmonitors and submodule recursion are off for every call, nested repositories are never
@@ -448,39 +449,68 @@ def _remove_tree(path: Path) -> None:
 
 
 def write_back(repo: Path, clone: TaskClone) -> str:
-    """Brings the task's branch from the clone into the repository and says its commit. The
-    branch only moves forward: where it moved in the repository during the run, to where the
-    clone's branch does not continue from, it is left as it is and this fails. So is a branch
-    checked out in a worktree of the repository meanwhile. No tag or other branch of the
-    clone comes along."""
+    """Brings the task's branch from the clone into the repository and says its commit. Where
+    the branch is still at the commit the run started from, the run owned it and the clone's
+    branch replaces it, also when the run rewrote it (a rebase); the update only happens if
+    the branch is still there, so a concurrent move is never overwritten. Where the branch
+    moved in the repository during the run, it only moves on forward from there, and is left
+    as it is otherwise and this fails. So is a branch checked out in a worktree of the
+    repository meanwhile. No tag or other branch of the clone comes along."""
     tip = git(clone.path, "rev-parse", "--verify", f"refs/heads/{clone.branch}^{{commit}}")
     if branch_commit(repo, clone.branch) == tip:
         return tip
     ref = f"refs/heads/{clone.branch}"
-    result = _run(
-        repo,
+    fetch = (
         "fetch",
         "--quiet",
         "--no-tags",
         "--no-write-fetch-head",
         "--no-recurse-submodules",
         str(clone.path),
-        f"{ref}:{ref}",
     )
+    result = _run(repo, *fetch, f"{ref}:{ref}")
     if result.returncode == 0:
         return tip
     now = branch_commit(repo, clone.branch)
     if now != clone.tip:
-        was = clone.tip[:12] if clone.tip else "no branch"
-        raise GitError(
-            f"The branch {clone.branch} moved in {repo} during the run (from {was} to "
-            f"{now[:12] if now else 'deleted'}), and the run's work does not continue from "
-            f"there; not overwriting it. The work is in {clone.path}",
-        )
-    detail = (result.stderr or result.stdout).strip()
-    raise GitError(
-        f"Could not bring the branch {clone.branch} back into {repo}: {detail}. The work is "
-        f"in {clone.path}",
+        raise _moved(repo, clone, now)
+    if clone.tip is None:
+        raise _not_brought_back(repo, clone, _detail(result))
+    checkout = worktree_of_branch(repo, clone.branch)
+    if checkout is not None:
+        raise _not_brought_back(repo, clone, f"it is checked out in {checkout}")
+    # The run rewrote the branch: its objects come in first, then the branch moves to them
+    # only from where the run started.
+    result = _run(repo, *fetch, ref)
+    if result.returncode != 0:
+        raise _not_brought_back(repo, clone, _detail(result))
+    result = _run(repo, "update-ref", "-m", "vibepod: write back", ref, tip, clone.tip)
+    if result.returncode == 0:
+        return tip
+    now = branch_commit(repo, clone.branch)
+    if now != clone.tip:
+        raise _moved(repo, clone, now)
+    raise _not_brought_back(repo, clone, _detail(result))
+
+
+def _detail(result: subprocess.CompletedProcess[str]) -> str:
+    """What git said about a failure, or its exit code where it said nothing."""
+    return (result.stderr or result.stdout).strip() or f"git exited with {result.returncode}"
+
+
+def _moved(repo: Path, clone: TaskClone, now: str | None) -> GitError:
+    was = clone.tip[:12] if clone.tip else "no branch"
+    return GitError(
+        f"The branch {clone.branch} moved in {repo} during the run (from {was} to "
+        f"{now[:12] if now else 'deleted'}), and the run's work does not continue from "
+        f"there; not overwriting it. The work is in {clone.path}",
+    )
+
+
+def _not_brought_back(repo: Path, clone: TaskClone, detail: str) -> GitError:
+    return GitError(
+        f"Could not bring the branch {clone.branch} back into {repo}: "
+        f"{detail or 'unknown reason'}. The work is in {clone.path}",
     )
 
 

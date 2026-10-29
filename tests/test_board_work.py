@@ -1480,6 +1480,35 @@ def test_a_rework_whose_branch_moved_during_the_run_is_blocked_instead_of_overwr
     assert git(clone, "log", "-1", "--format=%s") == "Add the feature"
 
 
+def test_a_rework_that_rebased_its_branch_brings_it_back_when_nobody_moved_it(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Update the docs")
+    board.card("VP-1")["branchName"] = "issue-7"
+    git(repo, "checkout", "--quiet", "-b", "issue-7")
+    (repo / "docs.txt").write_text("docs\n")
+    git(repo, "add", "docs.txt")
+    git(repo, "commit", "--quiet", "-m", "Document it")
+    started = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "--quiet", "main")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Newer main")
+
+    def rebases(path: Path, prompt: str) -> tuple[int, str]:
+        git(path, "rebase", "--quiet", "origin/main")
+        return 0, result_block(summary="Rebased onto main.")
+
+    work(server, FakeRunner(rebases), repo, once=True)
+
+    assert board.card("VP-1")["column"] == "review"
+    head = git(repo, "rev-parse", "issue-7")
+    assert head != started
+    assert git(repo, "merge-base", "--is-ancestor", "main", "issue-7") == ""
+    assert git(repo, "log", "--format=%s", "main..issue-7") == "Document it"
+    git(repo, "fsck", "--full", "--no-dangling")
+
+
 def test_a_rework_continues_from_where_the_branch_moved_on_before_the_run(
     board: FakeBoard,
     server: FakeBoardServer,
@@ -3503,6 +3532,103 @@ def test_clone_helpers_prepare_write_back_and_clean_up(repo: Path, tmp_path: Pat
     assert not fresh.path.exists()
     assert worktrees.branch_exists(repo, "vp-9")
     git(repo, "fsck", "--full", "--no-dangling")
+
+
+def _rewritten_clone(repo: Path, trees: Path) -> tuple[worktrees.TaskClone, str]:
+    """A clone of the branch vp-9 whose run amended the commit the branch was at."""
+    git(repo, "branch", "vp-9")
+    git(repo, "checkout", "--quiet", "vp-9")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "First")
+    git(repo, "checkout", "--quiet", "main")
+    clone = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    git(clone.path, "commit", "--quiet", "--amend", "--allow-empty", "-m", "First, reworded")
+    return clone, git(clone.path, "rev-parse", "HEAD")
+
+
+def test_a_rewritten_branch_is_written_back_where_it_did_not_move(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    clone, rewritten = _rewritten_clone(repo, tmp_path / "trees")
+    assert clone.tip is not None
+
+    assert worktrees.write_back(repo, clone) == rewritten
+    assert git(repo, "rev-parse", "vp-9") == rewritten
+    assert git(repo, "log", "-1", "--format=%s", "vp-9") == "First, reworded"
+    git(repo, "fsck", "--full", "--no-dangling")
+
+
+def test_a_rewritten_branch_that_moved_in_the_repository_is_not_overwritten(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    clone, _ = _rewritten_clone(repo, tmp_path / "trees")
+    git(repo, "checkout", "--quiet", "vp-9")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Someone else's")
+    git(repo, "checkout", "--quiet", "main")
+    moved = git(repo, "rev-parse", "vp-9")
+
+    with pytest.raises(worktrees.GitError, match="moved in .* not overwriting it"):
+        worktrees.write_back(repo, clone)
+    assert git(repo, "rev-parse", "vp-9") == moved
+
+
+def test_a_rewritten_branch_that_moves_while_it_is_written_back_is_not_overwritten(
+    monkeypatch: pytest.MonkeyPatch,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    clone, _ = _rewritten_clone(repo, tmp_path / "trees")
+    run = worktrees._run
+    moved: list[str] = []
+
+    def moves_before_the_update(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        if args[:1] == ("update-ref",) and not moved:
+            git(repo, "update-ref", "refs/heads/vp-9", git(repo, "rev-parse", "main"))
+            moved.append(git(repo, "rev-parse", "vp-9"))
+        return run(cwd, *args)
+
+    monkeypatch.setattr(worktrees, "_run", moves_before_the_update)
+
+    with pytest.raises(worktrees.GitError, match="moved in .* not overwriting it"):
+        worktrees.write_back(repo, clone)
+    assert git(repo, "rev-parse", "vp-9") == moved[0]
+
+
+def test_a_rewritten_branch_checked_out_in_a_worktree_is_not_moved(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    clone, _ = _rewritten_clone(repo, tmp_path / "trees")
+    started = git(repo, "rev-parse", "vp-9")
+    mine = tmp_path / "mine"
+    git(repo, "worktree", "add", "--quiet", str(mine), "vp-9")
+
+    with pytest.raises(worktrees.GitError, match=f"checked out in {mine.resolve()}"):
+        worktrees.write_back(repo, clone)
+    assert git(repo, "rev-parse", "vp-9") == started
+
+
+def test_a_write_back_that_git_refuses_silently_still_says_why(
+    monkeypatch: pytest.MonkeyPatch,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    clone = worktrees.prepare_clone(repo, tmp_path / "trees", "vp-9", "main")
+    git(clone.path, "commit", "--quiet", "--allow-empty", "-m", "Change")
+    run = worktrees._run
+
+    def silent_fetch(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        if args[:1] == ("fetch",):
+            return subprocess.CompletedProcess(["git", *args], 1, "", "")
+        return run(cwd, *args)
+
+    monkeypatch.setattr(worktrees, "_run", silent_fetch)
+
+    with pytest.raises(worktrees.GitError) as caught:
+        worktrees.write_back(repo, clone)
+    assert "back into" in str(caught.value)
+    assert ": git exited with 1. The work is in" in str(caught.value)
 
 
 def test_git_on_the_host_does_not_look_into_nested_repositories(repo: Path) -> None:
