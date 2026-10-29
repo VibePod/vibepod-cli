@@ -1676,6 +1676,8 @@ def test_run_uses_keep_id_for_rootless_podman_agents(
     stub = _StubDockerManager(rootless_podman=True)
     config = _make_config()
     config["agents"][agent] = {"env": {}, "init": []}
+    if agent == "generic":
+        config["agents"][agent]["image"] = "example/agent:1"
     monkeypatch.setattr(run_cmd, "get_config", lambda: config)
     monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
 
@@ -3904,3 +3906,162 @@ def test_run_skips_image_inspection_when_logging_disabled(
     run_cmd.run(agent="claude", workspace=tmp_path, detach=False)
 
     assert inspections["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Generic agent: --image / --command
+# ---------------------------------------------------------------------------
+
+
+def _generic_config(agent: str = "generic", **agent_cfg: object) -> dict:
+    config = _ports_config(agent, None)
+    config["agents"][agent].update(agent_cfg)
+    return config
+
+
+def _invoke_run(monkeypatch, tmp_path: Path, config: dict, args: list[str]):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    stub = _PortCapturingManager()
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    command, *rest = args
+    result = CliRunner().invoke(app, [command, "-w", str(workspace), "--detach", *rest])
+    return result, stub
+
+
+def test_generic_requires_an_image(monkeypatch, tmp_path: Path) -> None:
+    result, stub = _invoke_run(monkeypatch, tmp_path, _generic_config(), ["run", "generic"])
+
+    assert result.exit_code == 1
+    assert "has no default image" in result.output
+    assert "--image" in result.output
+    assert stub.run_kwargs is None
+
+
+def test_generic_runs_the_given_image_with_its_own_cmd(monkeypatch, tmp_path: Path) -> None:
+    result, stub = _invoke_run(
+        monkeypatch,
+        tmp_path,
+        _generic_config(),
+        ["run", "generic", "--image", "ghcr.io/acme/agent:1.2"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["agent"] == "generic"
+    assert stub.run_kwargs["image"] == "ghcr.io/acme/agent:1.2"
+    assert stub.run_kwargs["command"] is None
+    assert stub.run_kwargs["config_mount_path"] == "/config"
+    assert stub.run_kwargs["config_dir"].name == "generic"
+
+
+def test_generic_command_is_shell_split_and_takes_passthrough(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    result, stub = _invoke_run(
+        monkeypatch,
+        tmp_path,
+        _generic_config(),
+        [
+            "generic",
+            "--image",
+            "acme/agent",
+            "--command",
+            "my-agent --greeting 'hello world'",
+            "--",
+            "--verbose",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["command"] == ["my-agent", "--greeting", "hello world", "--verbose"]
+
+
+def test_generic_uses_configured_image_and_command(monkeypatch, tmp_path: Path) -> None:
+    config = _generic_config(image="acme/agent:2", command=["my-agent", "serve"])
+    result, stub = _invoke_run(monkeypatch, tmp_path, config, ["run", "custom"])
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["image"] == "acme/agent:2"
+    assert stub.run_kwargs["command"] == ["my-agent", "serve"]
+
+
+def test_flags_override_configured_image_and_command(monkeypatch, tmp_path: Path) -> None:
+    config = _generic_config(image="acme/agent:2", command="my-agent serve")
+    result, stub = _invoke_run(
+        monkeypatch,
+        tmp_path,
+        config,
+        ["run", "generic", "--image", "acme/agent:3", "--command", "other-agent"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["image"] == "acme/agent:3"
+    assert stub.run_kwargs["command"] == ["other-agent"]
+
+
+def test_image_and_command_override_a_builtin_agent(monkeypatch, tmp_path: Path) -> None:
+    result, stub = _invoke_run(
+        monkeypatch,
+        tmp_path,
+        _generic_config("claude"),
+        ["run", "claude", "--image", "acme/claude:dev", "--command", "claude-dev", "--ikwid"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["agent"] == "claude"
+    assert stub.run_kwargs["image"] == "acme/claude:dev"
+    assert stub.run_kwargs["command"] == ["claude-dev", "--dangerously-skip-permissions"]
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--image", "acme/agent", "--command", "my-agent 'unclosed"], "--command: cannot parse"),
+        (["--image", "acme/agent", "--command", "  "], "--command must name the program"),
+        (["--image", "   "], "--image must not be empty"),
+        (["--image", "acme/agent my-agent"], "not a valid image reference"),
+    ],
+)
+def test_invalid_image_or_command_is_rejected(
+    monkeypatch,
+    tmp_path: Path,
+    args: list[str],
+    message: str,
+) -> None:
+    result, stub = _invoke_run(monkeypatch, tmp_path, _generic_config(), ["run", "generic", *args])
+
+    assert result.exit_code == 1
+    assert message in result.output
+    assert stub.run_kwargs is None
+
+
+def test_invalid_configured_command_names_the_config_key(monkeypatch, tmp_path: Path) -> None:
+    config = _generic_config(image="acme/agent", command={"bad": "value"})
+    result, stub = _invoke_run(monkeypatch, tmp_path, config, ["run", "generic"])
+
+    assert result.exit_code == 1
+    assert "agents.generic.command must be a string or a list" in result.output
+    assert stub.run_kwargs is None
+
+
+def test_command_flag_is_rejected_in_acp_mode(monkeypatch, tmp_path: Path, capsys) -> None:
+    stub = _StubDockerManager(rootless_podman=False)
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _generic_config("claude"))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    with pytest.raises(typer.Exit) as exc:
+        run_cmd.run(agent="claude", workspace=tmp_path, acp=True, command_override="claude")
+
+    assert exc.value.exit_code == 1
+    assert stub.run_kwargs is None
+    output = capsys.readouterr()
+    assert "--command cannot be combined with --acp" in output.err
+    assert output.out == ""

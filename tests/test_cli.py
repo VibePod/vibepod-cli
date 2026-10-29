@@ -434,3 +434,36 @@ def test_legacy_devstral_command_runs_vibe(monkeypatch) -> None:
     result = runner.invoke(app, ["devstral"])
     assert result.exit_code == 0
     assert called["agent"] == "vibe"
+
+
+def test_run_and_alias_forward_image_and_command_flags(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["image"] = kwargs.get("image_override")
+        called["command"] = kwargs.get("command_override")
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(
+        app,
+        ["run", "generic", "--image", "acme/agent:1", "--command", "my-agent --flag"],
+    )
+    assert result.exit_code == 0
+    assert called == {
+        "agent": "generic",
+        "image": "acme/agent:1",
+        "command": "my-agent --flag",
+        "passthrough": [],
+    }
+
+    result = runner.invoke(app, ["generic", "--image", "acme/agent:2", "--", "--verbose"])
+    assert result.exit_code == 0
+    assert called == {
+        "agent": "generic",
+        "image": "acme/agent:2",
+        "command": None,
+        "passthrough": ["--verbose"],
+    }

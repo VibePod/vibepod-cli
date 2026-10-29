@@ -25,7 +25,8 @@ def _configured_agent_rows() -> list[dict[str, str]]:
             {
                 "short": get_agent_shortcut(agent) or "-",
                 "agent": agent,
-                "image": DEFAULT_IMAGES[agent],
+                # Imageless agents (generic) take the image per run.
+                "image": DEFAULT_IMAGES.get(agent) or "-",
             },
         )
     return rows

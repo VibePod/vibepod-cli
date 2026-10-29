@@ -177,6 +177,19 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
+            # Bring-your-own agent: no default image, so `vp run generic`
+            # needs --image or agents.generic.image. command (string or list)
+            # replaces the image CMD; None keeps it.
+            "generic": {
+                "enabled": True,
+                "image": "",
+                "command": None,
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "ports": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,

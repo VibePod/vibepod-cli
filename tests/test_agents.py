@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from vibepod.constants import AGENT_SHORTCUTS, DEFAULT_IMAGES, SUPPORTED_AGENTS
+from vibepod.constants import (
+    AGENT_SHORTCUTS,
+    DEFAULT_IMAGES,
+    IMAGELESS_AGENTS,
+    SUPPORTED_AGENTS,
+)
 from vibepod.core.agents import (
     get_agent_shortcut,
     get_agent_spec,
@@ -24,7 +29,7 @@ def test_get_agent_spec_supported() -> None:
         spec = get_agent_spec(agent)
         assert spec.id == agent
         assert spec.provider
-        assert spec.image
+        assert bool(spec.image) is (agent not in IMAGELESS_AGENTS)
         assert spec.config_subdir
         assert spec.config_mount_path
         assert isinstance(spec.extra_env, dict)
@@ -192,6 +197,7 @@ def test_resolve_agent_name_accepts_short_and_full_forms() -> None:
     assert resolve_agent_name("QWEN-CLI") == "qwen"
     assert resolve_agent_name("deepseek") == "dsh"
     assert resolve_agent_name("DEEPSEEK-HARNESS") == "dsh"
+    assert resolve_agent_name("custom") == "generic"
     assert resolve_agent_name("unknown") is None
 
 
@@ -238,7 +244,7 @@ def test_unsupported_agents_have_no_ikwid_args() -> None:
 
 def test_get_agent_shortcut_known_agent() -> None:
     expected_by_agent = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
-    assert set(expected_by_agent.keys()) == set(SUPPORTED_AGENTS) - {"pi"}
+    assert set(expected_by_agent.keys()) == set(SUPPORTED_AGENTS) - {"pi", "generic"}
     for agent, shortcut in expected_by_agent.items():
         assert get_agent_shortcut(agent) == shortcut
         assert get_agent_shortcut(f" {agent.upper()} ") == shortcut
@@ -356,3 +362,15 @@ def test_acp_adapters_drive_the_image_binaries() -> None:
     """claude/codex adapters bundle their own CLI; the images point them at theirs."""
     assert get_agent_spec("codex").extra_env["CODEX_PATH"] == "/usr/local/bin/codex"
     assert get_agent_spec("claude").extra_env["CLAUDE_CODE_EXECUTABLE"] == "/usr/local/bin/claude"
+
+
+def test_generic_spec_has_no_default_image_or_command() -> None:
+    spec = get_agent_spec("generic")
+    assert "generic" in IMAGELESS_AGENTS
+    assert "generic" not in DEFAULT_IMAGES
+    assert spec.image == ""
+    assert spec.command is None
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env == {}
+    assert spec.headless_prefix is None
+    assert spec.acp_command is None

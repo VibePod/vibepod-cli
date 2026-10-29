@@ -13,7 +13,7 @@ import typer
 from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
-from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
+from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, IMAGELESS_AGENTS, SUPPORTED_AGENTS
 from vibepod.core import skills_engine
 from vibepod.core.acp import AcpClientChannel
 from vibepod.core.agents import (
@@ -169,6 +169,76 @@ def _resolve_acp_command(spec: AgentSpec, agent_cfg: dict[str, Any]) -> list[str
     else:
         parts = [str(part) for part in override]
     return parts or None
+
+
+def _parse_start_command(value: Any, source: str) -> list[str]:
+    """Parse a start command override into argv.
+
+    A string is split with shell quoting rules (like ``acp_command``), a list
+    is taken element by element. Raises ValueError naming *source* when the
+    value cannot be parsed or yields no executable.
+    """
+    if isinstance(value, str):
+        try:
+            parts = shlex.split(value)
+        except ValueError as exc:
+            raise ValueError(f"{source}: cannot parse '{value}': {exc}") from exc
+    elif isinstance(value, list):
+        parts = [str(part) for part in value]
+    else:
+        raise ValueError(f"{source} must be a string or a list of strings")
+    if not parts or not parts[0].strip():
+        raise ValueError(f"{source} must name the program to start")
+    return parts
+
+
+def _resolve_start_command(
+    agent: str,
+    agent_cfg: dict[str, Any],
+    override: str | None,
+) -> list[str] | None:
+    """Resolve the start command: --command wins over agents.<agent>.command.
+
+    None means neither is set, so the agent spec's command (or, without one,
+    the image CMD) is used.
+    """
+    if override is not None:
+        return _parse_start_command(override, "--command")
+    configured = agent_cfg.get("command")
+    if configured is None:
+        return None
+    return _parse_start_command(configured, f"agents.{agent}.command")
+
+
+def _resolve_image(
+    agent: str,
+    config: dict[str, Any],
+    override: str | None,
+) -> str:
+    """Resolve the agent image: --image wins over agents.<agent>.image.
+
+    Raises ValueError when the result is empty (an agent without a default
+    image that was given none) or is not a single image reference.
+    """
+    if override is not None:
+        image = override.strip()
+        source = "--image"
+    else:
+        image = effective_agent_image(agent, config).strip()
+        source = f"agents.{agent}.image"
+    if not image:
+        if override is None and agent in IMAGELESS_AGENTS:
+            raise ValueError(
+                f"Agent '{agent}' has no default image. Pass --image IMAGE "
+                f"or set agents.{agent}.image in the VibePod config.",
+            )
+        raise ValueError(f"{source} must not be empty")
+    if any(char.isspace() for char in image):
+        raise ValueError(
+            f"{source}: '{image}' is not a valid image reference (it contains whitespace). "
+            "Pass the start command with --command instead.",
+        )
+    return image
 
 
 def _remove_container_quietly(container: Any) -> None:
@@ -560,6 +630,18 @@ def run(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    image_override: Annotated[
+        str | None,
+        typer.Option("--image", help="Docker image to run instead of the agent's configured one"),
+    ] = None,
+    command_override: Annotated[
+        str | None,
+        typer.Option(
+            "--command",
+            help="Start command to run in the image (shell-quoted string); replaces "
+            "the agent's command or the image CMD",
+        ),
+    ] = None,
     passthrough_args: list[str] | None = None,
     provider_names: list[str] | None = None,
 ) -> None:
@@ -568,6 +650,9 @@ def run(
     Any trailing arguments after the agent name are forwarded to the agent's
     command inside the container. Use `--` before agent flags when they could
     be parsed as VibePod flags.
+
+    `--image` and `--command` launch any image as the agent; the `generic`
+    agent has no default image and is meant for exactly that.
     """
     passthrough_args = passthrough_args or []
     if acp:
@@ -627,6 +712,29 @@ def run(
     try:
         if not provider_names:
             validate_llm_support(selected_agent, config)
+    except ValueError as exc:
+        error(str(exc))
+        raise typer.Exit(1) from exc
+
+    # Validated with the wiring above, before anything is persisted or
+    # provisioned for a launch that cannot start.
+    if acp and command_override is not None:
+        error(
+            "--command cannot be combined with --acp: ACP mode starts the adapter "
+            "command. Set agents.<agent>.acp_command in the config instead.",
+        )
+        raise typer.Exit(1)
+    try:
+        image = _resolve_image(selected_agent, config, image_override)
+        start_command = (
+            None
+            if acp
+            else _resolve_start_command(
+                selected_agent,
+                config.get("agents", {}).get(selected_agent, {}),
+                command_override,
+            )
+        )
     except ValueError as exc:
         error(str(exc))
         raise typer.Exit(1) from exc
@@ -813,8 +921,6 @@ def run(
         if llm_model and spec.llm_model_args:
             llm_command_extra = [*spec.llm_model_args, llm_model]
 
-    image = effective_agent_image(selected_agent, config)
-
     try:
         manager = DockerManager()
     except DockerClientError as exc:
@@ -872,7 +978,8 @@ def run(
         rebuild_overlay=rebuild_overlay,
     )
 
-    command = spec.command
+    base_command = start_command if start_command is not None else spec.command
+    command = base_command
     if acp:
         command = list(acp_command or [])
     entrypoint: list[str] | None = None
@@ -882,7 +989,7 @@ def run(
     native_prefix_len = 0
     if init_commands:
         info(f"Applying {len(init_commands)} init command(s) before startup")
-        init_command = acp_command if acp else spec.command
+        init_command = acp_command if acp else base_command
         try:
             # The init wrapper replaces the image entrypoint, so the launch
             # argv has to be made explicit. In ACP mode that argv is the
@@ -906,7 +1013,7 @@ def run(
         elif spec.ikwid_args:
             if command is None:
                 try:
-                    command = manager.resolve_launch_command(image=image, command=spec.command)
+                    command = manager.resolve_launch_command(image=image, command=base_command)
                 except DockerClientError as exc:
                     error(str(exc))
                     raise typer.Exit(1) from exc
@@ -921,7 +1028,7 @@ def run(
     if passthrough_args:
         if command is None:
             try:
-                command = manager.resolve_launch_command(image=image, command=spec.command)
+                command = manager.resolve_launch_command(image=image, command=base_command)
             except DockerClientError as exc:
                 error(str(exc))
                 raise typer.Exit(1) from exc

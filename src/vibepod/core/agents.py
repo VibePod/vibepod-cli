@@ -317,6 +317,21 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # Hermes is pre-1.0 and its PyPI release line trails upstream main.
         preview=True,
     ),
+    "generic": AgentSpec(
+        "generic",
+        "custom",
+        # No default image: run resolves --image or agents.generic.image and
+        # aborts when neither is set.
+        "",
+        "generic",
+        # None keeps the image's own CMD; --command / agents.generic.command
+        # replace it (the image ENTRYPOINT still runs, as with `docker run`).
+        None,
+        # The persisted agent config dir. HOME is left to the image: setting
+        # it here would hide whatever the image installed under its own home.
+        "/config",
+        {},
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

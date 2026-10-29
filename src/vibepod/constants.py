@@ -34,7 +34,12 @@ SUPPORTED_AGENTS = (
     "qwen",
     "dsh",
     "hermes",
+    "generic",
 )
+
+#: Agents without a published default image: the user supplies one per run
+#: (``--image``) or in config (``agents.<agent>.image``).
+IMAGELESS_AGENTS: tuple[str, ...] = ("generic",)
 
 AGENT_SHORTCUTS: dict[str, str] = {
     "c": "claude",
@@ -68,6 +73,7 @@ AGENT_ALIASES: dict[str, str] = {
     "qwen-cli": "qwen",
     "deepseek": "dsh",
     "deepseek-harness": "dsh",
+    "custom": "generic",
 }
 
 

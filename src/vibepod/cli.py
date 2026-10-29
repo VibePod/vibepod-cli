@@ -123,6 +123,18 @@ def run_command(
         list[str] | None,
         typer.Option("--provider", help="Temporarily use a global provider"),
     ] = None,
+    image_override: Annotated[
+        str | None,
+        typer.Option("--image", help="Docker image to run instead of the agent's configured one"),
+    ] = None,
+    command_override: Annotated[
+        str | None,
+        typer.Option(
+            "--command",
+            help="Start command to run in the image (shell-quoted string); replaces "
+            "the agent's command or the image CMD",
+        ),
+    ] = None,
 ) -> None:
     """Start an agent container."""
     run.run(
@@ -143,6 +155,8 @@ def run_command(
         acp=acp,
         profile=profile,
         provider_names=provider_names,
+        image_override=image_override,
+        command_override=command_override,
         passthrough_args=_context_args(ctx),
     )
 
@@ -253,6 +267,21 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             list[str] | None,
             typer.Option("--provider", help="Temporarily use a global provider"),
         ] = None,
+        image_override: Annotated[
+            str | None,
+            typer.Option(
+                "--image",
+                help="Docker image to run instead of the agent's configured one",
+            ),
+        ] = None,
+        command_override: Annotated[
+            str | None,
+            typer.Option(
+                "--command",
+                help="Start command to run in the image (shell-quoted string); replaces "
+                "the agent's command or the image CMD",
+            ),
+        ] = None,
     ) -> None:
         run.run(
             agent=agent_name,
@@ -272,6 +301,8 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             acp=acp,
             profile=profile,
             provider_names=provider_names,
+            image_override=image_override,
+            command_override=command_override,
             passthrough_args=_context_args(ctx),
         )
 

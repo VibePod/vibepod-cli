@@ -67,6 +67,7 @@ def test_list_json_includes_short_and_full_agent_names(monkeypatch, tmp_path: Pa
     for shortcut, agent in AGENT_SHORTCUTS.items():
         assert by_agent[agent]["short"] == shortcut
     assert by_agent["pi"]["short"] == "-"
+    assert by_agent["generic"]["image"] == "-"
 
 
 def test_list_running_json_preserves_multiple_instances(monkeypatch) -> None:
