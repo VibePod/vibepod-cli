@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import sys
 import time
@@ -72,6 +73,9 @@ from vibepod.core.launch import (
 )
 from vibepod.core.launch import (
     apply_proxy_env as _apply_proxy_env,
+)
+from vibepod.core.launch import (
+    bypass_proxy_for_network as _bypass_proxy_for_network,
 )
 from vibepod.core.launch import (
     check_custom_volume_targets as _check_custom_volume_targets,
@@ -352,8 +356,24 @@ def _web_ui_url(container_port: int | None, ports: dict[str, Any] | None) -> str
     return None
 
 
+_COMPOSE_FILE_NAMES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
+
+
 def _compose_file_present(workspace: Path) -> bool:
-    return (workspace / "docker-compose.yml").exists() or (workspace / "compose.yml").exists()
+    return any((workspace / name).exists() for name in _COMPOSE_FILE_NAMES)
+
+
+def _compose_project_name(workspace: Path) -> str:
+    """Default compose project name: the directory name, normalized like compose does."""
+    name = os.environ.get("COMPOSE_PROJECT_NAME") or workspace.resolve().name
+    return re.sub(r"[^a-z0-9_-]", "", name.lower())
+
+
+def _rank_compose_networks(workspace: Path, candidates: list[str]) -> list[str]:
+    """Put networks of the workspace's own compose project first."""
+    prefix = f"{_compose_project_name(workspace)}_"
+    own = [name for name in candidates if name.startswith(prefix)]
+    return own + [name for name in candidates if name not in own]
 
 
 def _open_acp_channel() -> AcpClientChannel | None:
@@ -458,7 +478,9 @@ def _maybe_select_network(
 
     networks = manager.networks_with_running_containers()
     excluded = {primary_network, "bridge", "host", "none"}
-    candidates = [name for name in networks if name not in excluded]
+    candidates = _rank_compose_networks(
+        workspace, [name for name in networks if name not in excluded]
+    )
     if not candidates:
         return None
 
@@ -1053,6 +1075,10 @@ def run(
                 warning(f"Proxy CA not found yet at {proxy_ca_path}")
 
         _apply_proxy_env(merged_env, proxy_policy_id)
+        if extra_network and extra_network != network_name:
+            bypassed = _bypass_proxy_for_network(manager, merged_env, extra_network)
+            if bypassed:
+                info(f"Bypassing proxy for hosts on {extra_network}: {', '.join(bypassed)}")
 
         if proxy_ca_dir:
             extra_volumes.append((str(proxy_ca_dir), _PROXY_CA_MOUNT_PATH, "ro"))

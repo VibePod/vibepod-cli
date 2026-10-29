@@ -49,6 +49,7 @@ from vibepod.core.launch import (
     agent_port_bindings,
     apply_overlay_if_enabled,
     apply_proxy_env,
+    bypass_proxy_for_network,
     check_custom_volume_targets,
     get_container_ip,
     host_identity_env,
@@ -858,6 +859,10 @@ def launch_task(
                     time.sleep(0.25)
 
             apply_proxy_env(merged_env, proxy_policy_id)
+            if network and network != network_name:
+                bypassed = bypass_proxy_for_network(manager, merged_env, network)
+                if bypassed:
+                    info(f"Bypassing proxy for hosts on {network}: {', '.join(bypassed)}")
 
             extra_volumes.append((str(actual_ca_dir), PROXY_CA_MOUNT_PATH, "ro"))
 

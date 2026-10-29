@@ -579,6 +579,28 @@ class DockerManager:
             networks.update(attached.keys())
         return sorted(networks)
 
+    def network_hostnames(self, network_name: str) -> list[str]:
+        """Return container names and DNS aliases resolvable on a network.
+
+        Best effort: an unknown network or an engine error yields an empty list.
+        """
+        try:
+            network = self.client.networks.get(network_name)
+            members = network.attrs.get("Containers") or {}
+            names: set[str] = set()
+            for container_id in members:
+                container = self.client.containers.get(container_id)
+                names.add(str(container.name))
+                networks = container.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
+                endpoint = networks.get(network_name) or {}
+                for key in ("Aliases", "DNSNames"):
+                    names.update(str(alias) for alias in endpoint.get(key) or [])
+        except DockerException:
+            return []
+        # Docker also registers the short container ID as an alias; skip those.
+        short_ids = {container_id[:12] for container_id in members}
+        return sorted(name for name in names if name and name not in short_ids)
+
     def connect_network(self, container: Any, network_name: str) -> None:
         try:
             network = self.client.networks.get(network_name)

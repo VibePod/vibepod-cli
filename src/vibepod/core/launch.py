@@ -606,6 +606,30 @@ def apply_proxy_env(merged_env: dict[str, str], policy_id: str) -> None:
         merged_env.setdefault(key, _PROXY_CA_PATH)
 
 
+def bypass_proxy_for_network(manager: Any, merged_env: dict[str, str], network: str) -> list[str]:
+    """Exempt hosts on an extra network from the proxy.
+
+    ``vibepod-proxy`` only sits on the primary network, so it cannot resolve
+    service names of a compose network the agent joins; HTTP requests to them
+    would fail at the proxy. Their names are appended to ``NO_PROXY`` (and
+    ``no_proxy`` when set) so clients connect directly. Returns the added hosts.
+    """
+    lookup = getattr(manager, "network_hostnames", None)
+    if not callable(lookup):
+        return []
+    hosts = [str(host) for host in lookup(network) or []]
+    added: list[str] = []
+    for key in ("NO_PROXY", "no_proxy"):
+        if key not in merged_env:
+            continue
+        entries = [entry.strip() for entry in merged_env[key].split(",") if entry.strip()]
+        new = [host for host in hosts if host not in entries]
+        merged_env[key] = ",".join([*entries, *new])
+        if key == "NO_PROXY":
+            added = new
+    return added
+
+
 def managed_proxy_policy_ids(manager: Any) -> set[str] | None:
     """Return policy IDs on all existing managed containers, or None if unknowable."""
     lister = getattr(manager, "list_managed", None)

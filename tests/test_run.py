@@ -3904,3 +3904,57 @@ def test_run_skips_image_inspection_when_logging_disabled(
     run_cmd.run(agent="claude", workspace=tmp_path, detach=False)
 
     assert inspections["count"] == 0
+
+
+@pytest.mark.parametrize(
+    "name", ["compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"]
+)
+def test_compose_file_present_accepts_every_default_name(tmp_path: Path, name: str) -> None:
+    assert run_cmd._compose_file_present(tmp_path) is False
+    (tmp_path / name).write_text("services: {}\n")
+    assert run_cmd._compose_file_present(tmp_path) is True
+
+
+def test_rank_compose_networks_puts_workspace_project_first(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
+    workspace = tmp_path / "My.Shop"
+    workspace.mkdir()
+
+    ranked = run_cmd._rank_compose_networks(
+        workspace, ["api_default", "myshop_backend", "myshop_default", "zeta"]
+    )
+
+    assert ranked == ["myshop_backend", "myshop_default", "api_default", "zeta"]
+
+
+def test_rank_compose_networks_honors_compose_project_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("COMPOSE_PROJECT_NAME", "api")
+
+    ranked = run_cmd._rank_compose_networks(tmp_path, ["myshop_default", "api_default"])
+
+    assert ranked == ["api_default", "myshop_default"]
+
+
+class _HostnameManager:
+    def __init__(self, hosts: list[str]) -> None:
+        self.hosts = hosts
+
+    def network_hostnames(self, network: str) -> list[str]:
+        return self.hosts
+
+
+def test_bypass_proxy_for_network_extends_no_proxy() -> None:
+    env = {"NO_PROXY": "localhost,127.0.0.1,::1,db", "no_proxy": "localhost"}
+
+    added = launch.bypass_proxy_for_network(_HostnameManager(["db", "web"]), env, "web_default")
+
+    assert added == ["web"]
+    assert env["NO_PROXY"] == "localhost,127.0.0.1,::1,db,web"
+    assert env["no_proxy"] == "localhost,db,web"
+
+
+def test_bypass_proxy_for_network_without_lookup_is_a_noop() -> None:
+    env = {"NO_PROXY": "localhost"}
+
+    assert launch.bypass_proxy_for_network(object(), env, "web_default") == []
+    assert env == {"NO_PROXY": "localhost"}

@@ -1255,3 +1255,35 @@ def test_stop_agent_matches_legacy_agent_label(monkeypatch) -> None:
     assert manager.stop_agent("vibe") == 2
     assert legacy.stopped and current.stopped
     assert not other.stopped
+
+
+def test_network_hostnames_lists_names_and_aliases() -> None:
+    member_id = "a" * 64
+    network = MagicMock()
+    network.attrs = {"Containers": {member_id: {"Name": "web-db-1"}}}
+    container = MagicMock()
+    container.name = "web-db-1"
+    container.attrs = {
+        "NetworkSettings": {
+            "Networks": {
+                "web_default": {"Aliases": ["db", member_id[:12]], "DNSNames": ["web-db-1", "db"]},
+                "other": {"Aliases": ["ignored"]},
+            }
+        }
+    }
+    client = MagicMock()
+    client.networks.get.return_value = network
+    client.containers.get.return_value = container
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    assert manager.network_hostnames("web_default") == ["db", "web-db-1"]
+
+
+def test_network_hostnames_unknown_network_is_empty() -> None:
+    client = MagicMock()
+    client.networks.get.side_effect = NotFound("missing")
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    assert manager.network_hostnames("missing") == []
