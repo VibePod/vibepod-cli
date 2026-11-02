@@ -34,6 +34,11 @@ Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
 
+Cursor's image contract is `HOME=/config` with `cursor-agent` under
+`/opt/cursor-agent`; that install root is reserved for ACP workspace binds.
+Detached Cursor tasks always pass `--trust` to avoid an interactive workspace
+prompt; only `--ikwid` adds `--force` to bypass command approvals.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with
