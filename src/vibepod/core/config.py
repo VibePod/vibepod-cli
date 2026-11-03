@@ -206,6 +206,10 @@ def _default_config() -> dict[str, Any]:
         "board": {
             "url": "",
             "token": "",
+            # Push branches when the board asks (`vp board work --no-push` turns it off).
+            "push": True,
+            # Block a task whose remote cannot be fetched (`--require-fetch`).
+            "require_fetch": False,
         },
         "aliases": DEFAULT_ALIASES.copy(),
     }
