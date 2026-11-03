@@ -417,3 +417,18 @@ def test_config_init_vibe_fails_when_legacy_devstral_configured(
     result = runner.invoke(app, ["config", "init", "vibe"])
     assert result.exit_code == 1
     assert "already contains agent 'vibe'" in result.stdout
+
+
+def test_default_config_includes_cline_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    config = get_config()
+
+    cline = config["agents"]["cline"]
+
+    assert cline["enabled"] is True
+    assert cline["image"] == "vibepod/cline:latest"
+    assert cline["auto_pull"] is None
+    assert cline["env"] == {}
+    assert cline["volumes"] == []
+    assert cline["ports"] == []
+    assert cline["init"] == []
