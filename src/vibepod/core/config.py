@@ -177,6 +177,15 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
+            "junie": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["junie"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "ports": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,

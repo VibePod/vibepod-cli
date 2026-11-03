@@ -30,6 +30,11 @@ image needs its own runtime user and rejects the UID rootless keep-id maps the
 container to, including 0), and `/opt/hermes` (its install root) is reserved so
 an `--acp` workspace bind cannot shadow the entrypoint/venv/`hermes-acp`.
 
+Junie's image contract is `HOME=/config` plus `JUNIE_HOME=/config/.junie`, with
+the app bundle under `/opt/junie`; that install root is reserved for ACP
+workspace binds. Junie reads user skills only from `$JUNIE_HOME/skills`, so
+`_agent_skill_paths` mounts them there instead of `~/.agents/skills`.
+
 Mistral Vibe uses the canonical ID `vibe` (`devstral` is a CLI/config alias).
 Its published `devstral` image and credentials subdirectory are retained for
 compatibility; `VP_IMAGE_VIBE` takes precedence over `VP_IMAGE_DEVSTRAL`.
