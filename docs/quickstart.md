@@ -118,6 +118,19 @@ export DOCKER_HOST=unix://$(podman machine inspect --format '{{.ConnectionInfo.P
     pixi global install vibepod
     ```
 
+=== "Snap (publication pending)"
+
+    Requires Linux amd64, snapd, and a separately installed Docker or Podman.
+    Store registration and classic confinement approval are pending. Once
+    published:
+
+    ```bash
+    sudo snap install vibepod --classic
+    sudo snap alias vibepod.vp vp
+    ```
+
+    See [Snap installation, permissions, updates and removal](snap.md).
+
 Verify the installation:
 
 ```bash
