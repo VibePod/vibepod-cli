@@ -148,6 +148,8 @@ jobs:
             | while IFS= read -r line; do echo "::error title=AppArmor::$line"; done || true
 
   integration-macos:
+    # Allowed to fail and slow to set up, so pull requests skip it.
+    if: github.event_name != 'pull_request'
     runs-on: macos-26-intel
     timeout-minutes: 45
     continue-on-error: true
