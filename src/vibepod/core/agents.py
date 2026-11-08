@@ -317,6 +317,34 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # Hermes is pre-1.0 and its PyPI release line trails upstream main.
         preview=True,
     ),
+    "cline": AgentSpec(
+        "cline",
+        "cline",
+        DEFAULT_IMAGES["cline"],
+        "cline",
+        ["cline"],
+        "/config",
+        # Cline derives all user state from HOME: ~/.cline holds provider
+        # credentials (data/settings/providers.json), sessions, rules, skills
+        # and hooks. The image disables the CLI's background self-update
+        # (CLINE_NO_AUTO_UPDATE=1) so it never reinstalls over the pinned copy.
+        # No llm_env_map: the CLI selects its provider from saved settings or
+        # -P/--provider, and VibePod has no verified env-only mapping for a
+        # custom base URL (`cline auth --baseurl` persists it instead). The
+        # compiled CLI honours HTTP(S)_PROXY and NODE_EXTRA_CA_CERTS natively.
+        {"HOME": "/config"},
+        # Tool auto-approval defaults to on but the TUI persists the user's
+        # toggle; --auto-approve true overrides it for the run. --yolo is not
+        # used: it switches to a restricted unsupervised mode that exits after
+        # one turn.
+        ikwid_args=["--auto-approve", "true"],
+        # A positional prompt without -i/--tui is Cline's one-shot mode. Without
+        # an explicit mode flag it reuses the plan/act mode last chosen in the
+        # TUI, so --act keeps a task from silently running read-only in plan mode.
+        headless_prefix=["--act"],
+        # Built-in Agent Client Protocol server over stdio.
+        acp_command=["cline", "--acp"],
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}
