@@ -48,7 +48,14 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install test dependencies
         run: python -m pip install -e '.[dev]'
+      # Image builds download agent releases from GitHub and npm, which time out now and then.
       - name: Build real agent image
-        run: docker build -t vp-provider-test-${{ matrix.agent }} agent-images/docker/${{ matrix.agent }}
+        run: |
+          for attempt in 1 2 3; do
+            docker build -t vp-provider-test-${{ matrix.agent }} agent-images/docker/${{ matrix.agent }} && exit 0
+            echo "::warning title=Image build::attempt $attempt failed"
+            sleep 15
+          done
+          exit 1
       - name: Run native agent against local fake API
         run: python -m pytest -m integration tests/integration/test_provider_smoke.py -v
