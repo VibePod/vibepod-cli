@@ -84,7 +84,7 @@ def run_command(
         typer.Option(
             "-v",
             "--volume",
-            help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+            help="Mount as SOURCE:TARGET[:ro|rw] or an absolute host path at the same path; "
             "added to configured agents.<agent>.volumes (same TARGET replaces)",
             show_default=False,
         ),
@@ -211,7 +211,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             typer.Option(
                 "-v",
                 "--volume",
-                help="Mount a host path or named volume as SOURCE:TARGET[:ro|rw]; "
+                help="Mount as SOURCE:TARGET[:ro|rw] or an absolute host path at the same path; "
                 "added to configured agents.<agent>.volumes (same TARGET replaces)",
                 show_default=False,
             ),
