@@ -105,6 +105,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "qwen",
         "dsh",
         "cline",
+        "junie",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -333,6 +334,29 @@ def test_skills_mounts_for_jcode_use_agents_skills_path(
 
     assert run_cmd._skills_mounts_for_agent("jcode", tmp_path) == [
         (str(skill_dir.resolve()), "/config/.agents/skills/example", "ro"),
+    ]
+
+
+def test_skills_mounts_for_junie_use_junie_home_skills_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    local_root = tmp_path / "local-skills"
+    user_root = tmp_path / "user-skills"
+    skill_dir = local_root / "installed" / "example"
+    skill_dir.mkdir(parents=True)
+    user_root.mkdir()
+    (local_root / "skills-lock.json").write_text(
+        json.dumps({"skills": {"example": {"path": "installed/example"}}}),
+        encoding="utf-8",
+    )
+    (user_root / "skills-lock.json").write_text(json.dumps({"skills": {}}), encoding="utf-8")
+
+    monkeypatch.setattr(skills_engine, "local_skills_dir", lambda workspace: local_root)
+    monkeypatch.setattr(skills_engine, "user_skills_dir", lambda: user_root)
+
+    assert run_cmd._skills_mounts_for_agent("junie", tmp_path) == [
+        (str(skill_dir.resolve()), "/config/.junie/skills/example", "ro"),
     ]
 
 
@@ -3711,6 +3735,20 @@ def test_hermes_acp_rejects_installation_overlap(workspace: str) -> None:
         run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("hermes"))
 
 
+@pytest.mark.parametrize(
+    ("agent", "workspace"),
+    [
+        ("claude", "/opt/junie/project"),
+        ("claude", "/opt/hermes/project"),
+        ("junie", "/opt/hermes"),
+        ("hermes", "/opt/junie"),
+    ],
+)
+def test_acp_reserves_install_roots_only_for_their_agent(agent: str, workspace: str) -> None:
+    path = PurePosixPath(workspace)
+    assert run_cmd._acp_workspace_mount_path(path, get_agent_spec(agent)) == workspace
+
+
 @pytest.mark.parametrize("agent", ["hermes", "claude"])
 def test_acp_allows_unrelated_opt_workspace(agent: str) -> None:
     workspace = PurePosixPath("/opt/hermes-project")
@@ -3875,6 +3913,73 @@ def test_cline_skill_paths_use_shared_agents_dir() -> None:
     from vibepod.commands.run import _agent_skill_paths
 
     assert _agent_skill_paths("cline") == ["/config/.agents/skills"]
+
+
+def test_junie_skill_paths_use_junie_home() -> None:
+    """Junie reads user skills only from $JUNIE_HOME/skills, not ~/.agents/skills."""
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("junie") == ["/config/.junie/skills"]
+    assert _agent_skill_paths("junie", {"JUNIE_HOME": "/data/junie/"}) == ["/data/junie/skills"]
+    # A relative JUNIE_HOME has no fixed container location; keep the default.
+    assert _agent_skill_paths("junie", {"JUNIE_HOME": "junie"}) == ["/config/.junie/skills"]
+
+
+def test_junie_skills_follow_junie_home_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stub = _StubDockerManager()
+    config = _make_config()
+    config["agents"]["junie"] = {"env": {"JUNIE_HOME": "/data/junie"}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    skill_dir = tmp_path / "skill"
+    monkeypatch.setattr(
+        run_cmd.skills_engine,
+        "installed_skills",
+        lambda workspace: {"review": type("Skill", (), {"path": skill_dir})()},
+    )
+
+    run_cmd.run(agent="junie", workspace=tmp_path, detach=True)
+
+    assert stub.run_kwargs is not None
+    assert (str(skill_dir), "/data/junie/skills/review", "ro") in stub.run_kwargs["extra_volumes"]
+
+
+def test_junie_skills_are_not_mounted_inside_the_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stub = _StubDockerManager()
+    config = _make_config()
+    config["agents"]["junie"] = {"env": {"JUNIE_HOME": "/workspace/.junie"}, "init": []}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    skill_dir = tmp_path / "skill"
+    monkeypatch.setattr(
+        run_cmd.skills_engine,
+        "installed_skills",
+        lambda workspace: {"review": type("Skill", (), {"path": skill_dir})()},
+    )
+
+    run_cmd.run(agent="junie", workspace=tmp_path, detach=True)
+
+    assert stub.run_kwargs is not None
+    targets = [target for _, target, _ in stub.run_kwargs["extra_volumes"]]
+    assert not [target for target in targets if target.startswith("/workspace/")]
+
+
+@pytest.mark.parametrize("workspace", ["/opt/junie", "/opt/junie/project"])
+def test_junie_acp_rejects_installation_overlap(workspace: str) -> None:
+    with pytest.raises(typer.Exit):
+        run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("junie"))
+
+
+@pytest.mark.parametrize("workspace", ["/opt/jcode", "/opt/jcode/project", "/opt"])
+def test_jcode_acp_rejects_installation_overlap(workspace: str) -> None:
+    with pytest.raises(typer.Exit):
+        run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("jcode"))
 
 
 def test_hermes_skill_paths_use_shared_agents_dir() -> None:

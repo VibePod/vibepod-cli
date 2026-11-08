@@ -6,6 +6,7 @@ import os
 import shlex
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path, PurePath
 from typing import Annotated, Any
 
@@ -144,13 +145,21 @@ _ACP_RESERVED_CONTAINER_PATHS = (
     "/config",
     "/claude",
     "/qwen",
-    # Hermes's install root on the hermes agent image: binding a workspace
-    # over it hides the entrypoint, virtualenv and hermes-acp binary.
-    "/opt/hermes",
     "/etc",
     "/usr",
     "/tmp/.X11-unix",
 )
+
+# Install roots that exist only on one agent's image, reserved for that agent.
+_ACP_RESERVED_AGENT_PATHS: dict[str, tuple[str, ...]] = {
+    # Binding a workspace over it hides the entrypoint, virtualenv and
+    # hermes-acp binary.
+    "hermes": ("/opt/hermes",),
+    # Junie's app bundle (launcher, JetBrains Runtime, jar).
+    "junie": ("/opt/junie",),
+    # The jcode binaries, which /usr/local/bin/jcode links into.
+    "jcode": ("/opt/jcode",),
+}
 
 
 def _resolve_acp_command(spec: AgentSpec, agent_cfg: dict[str, Any]) -> list[str] | None:
@@ -198,7 +207,11 @@ def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
         )
         raise typer.Exit(1)
 
-    reserved = {*_ACP_RESERVED_CONTAINER_PATHS, spec.config_mount_path}
+    reserved = {
+        *_ACP_RESERVED_CONTAINER_PATHS,
+        *_ACP_RESERVED_AGENT_PATHS.get(spec.id, ()),
+        spec.config_mount_path,
+    }
     for reserved_path in sorted(reserved):
         shadows_reserved = host_path == reserved_path or host_path.startswith(
             reserved_path + "/",
@@ -266,7 +279,7 @@ def _is_codex_oauth_login(agent: str, passthrough_args: list[str]) -> bool:
     )
 
 
-def _agent_skill_paths(agent: str) -> list[str]:
+def _agent_skill_paths(agent: str, env: Mapping[str, str] | None = None) -> list[str]:
     """Container paths where each agent auto-discovers SKILL.md folders.
 
     All paths assume the in-container HOME or CONFIG_DIR conventions wired by
@@ -290,6 +303,9 @@ def _agent_skill_paths(agent: str) -> list[str]:
         image's /opt/data, not /config  → /opt/data/.agents/skills/
       - qwen     reads ~/.qwen/skills/, which the image symlinks to /qwen/skills
         (also <project>/.qwen/skills/ in the workspace)
+      - junie    reads $JUNIE_HOME/skills/          → /config/.junie/skills/ unless
+        the agent env sets another absolute JUNIE_HOME
+        (~/.agents/skills/ only at project level, as <project>/.agents/skills/)
 
     Gemini wraps skills inside an extension manifest and would need a generated
     gemini-extension.json — handled separately when we add that support.
@@ -303,14 +319,23 @@ def _agent_skill_paths(agent: str) -> list[str]:
         return ["/qwen/skills"]
     if agent == "hermes":
         return ["/opt/data/.agents/skills"]
+    if agent == "junie":
+        junie_home = (env or {}).get("JUNIE_HOME", "").strip().rstrip("/")
+        if not junie_home.startswith("/"):
+            junie_home = "/config/.junie"
+        return [f"{junie_home}/skills"]
     if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh", "cline"):
         return ["/config/.agents/skills"]
     return []
 
 
-def _skills_mounts_for_agent(agent: str, workspace: Path) -> list[tuple[str, str, str]]:
+def _skills_mounts_for_agent(
+    agent: str,
+    workspace: Path,
+    env: Mapping[str, str] | None = None,
+) -> list[tuple[str, str, str]]:
     """One bind-mount per resolved skill into the agent's discovery path(s)."""
-    targets = _agent_skill_paths(agent)
+    targets = _agent_skill_paths(agent, env)
     if not targets:
         return []
     mounts: list[tuple[str, str, str]] = []
@@ -957,7 +982,22 @@ def run(
     for host_path, _, _ in extra_volumes:
         Path(host_path).mkdir(parents=True, exist_ok=True)
 
-    extra_volumes.extend(_skills_mounts_for_agent(selected_agent, workspace_path))
+    skill_mounts = _skills_mounts_for_agent(selected_agent, workspace_path, merged_env)
+    # Junie's skills path follows JUNIE_HOME, which can point into the workspace;
+    # mounts nested there would leave their mount points in the host project.
+    workspace_targets = [
+        "/workspace",
+        *(p for p in (acp_workspace_mount, acp_workspace_alias) if p),
+    ]
+    if any(
+        target.startswith(f"{base}/") for _, target, _ in skill_mounts for base in workspace_targets
+    ):
+        warning(
+            f"Installed skills are not mounted: the {selected_agent} skills directory is inside "
+            "the workspace. Set JUNIE_HOME outside the workspace to use them.",
+        )
+    else:
+        extra_volumes.extend(skill_mounts)
     if acp_workspace_alias is not None:
         extra_volumes.append((str(workspace_path), acp_workspace_alias, "rw"))
 
