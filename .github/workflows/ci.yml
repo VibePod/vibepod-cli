@@ -78,6 +78,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
+      # On Ubuntu runners pasta, Podman's default rootless network helper, cannot be stopped when
+      # the last container leaves a network ("rootless netns: kill network process: permission
+      # denied"), so the rootless network namespace runs on slirp4netns instead.
+      - name: Use slirp4netns for rootless Podman networking
+        if: matrix.runtime == 'podman'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q slirp4netns
+          mkdir -p ~/.config/containers
+          printf '[network]\ndefault_rootless_network_cmd = "slirp4netns"\n' > ~/.config/containers/containers.conf
+          echo "::notice title=Podman::$(podman version --format '{{.Client.Version}}'), network helper $(podman info --format '{{.Host.RootlessNetworkCmd}}')"
+
       - name: Start Podman API socket
         if: matrix.runtime == 'podman'
         run: |
@@ -91,7 +103,17 @@ jobs:
           echo "daemon OK on ${SOCKET}"
 
       - name: Run integration tests
-        run: python -m pytest -m integration -v
+        run: |
+          set -o pipefail
+          python -m pytest -m integration -v 2>&1 | tee "$RUNNER_TEMP/integration.log"
+
+      - name: Annotate integration failures
+        if: failure() && matrix.runtime == 'podman'
+        run: |
+          grep -E '^(FAILED|E +[A-Za-z.]*(Error|Exception))' "$RUNNER_TEMP/integration.log" | head -n 5 \
+            | while IFS= read -r line; do echo "::error title=Integration::$line"; done || true
+          sudo journalctl -k --no-pager | grep 'apparmor="DENIED"' | tail -n 5 \
+            | while IFS= read -r line; do echo "::error title=AppArmor::$line"; done || true
 
   integration-macos:
     runs-on: macos-26-intel
