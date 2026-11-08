@@ -178,6 +178,25 @@ The dashboard shows per-agent HTTP traffic, usage over time, and Claude token
 metrics. It also lets you compare agents side-by-side. All data stays on your
 machine.
 
+### Subscription allowances
+
+`vp usage` shows remaining Codex, Claude, and Antigravity subscription allowances,
+separately from token totals and API cost estimates:
+
+```bash
+vp usage setup-claude  # once per profile; preserves your existing status line
+vp usage refresh      # Codex/agy use existing signed-in containers
+vp usage show --json
+vp usage dashboard    # read-only view at http://127.0.0.1:8002
+```
+
+Run `vp usage watch` in another terminal for periodic collection. The dashboard
+only reads a dedicated store of sanitized quota snapshots; it does not read
+credentials, traffic captures, or transcripts. Claude collection is passive and
+updates after normal responses. Codex/agy probes refuse VibePod's capturing proxy;
+use containers started with `proxy.enabled: false` for those checks.
+See [Subscription usage](docs/subscription-usage.md) for profiles, freshness, and limitations.
+
 ## Image Namespace
 
 All agent images are published under the [`vibepod` namespace on Docker Hub](https://hub.docker.com/u/vibepod). Source Dockerfiles are in [VibePod/vibepod-agents](https://github.com/VibePod/vibepod-agents/tree/main/docker).
