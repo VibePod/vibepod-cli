@@ -105,7 +105,21 @@ jobs:
       - name: Run integration tests
         run: |
           set -o pipefail
-          python -m pytest -m integration -v 2>&1 | tee "$RUNNER_TEMP/integration.log"
+          log="$RUNNER_TEMP/integration.log"
+          if python -m pytest -m integration -v 2>&1 | tee "$log"; then
+            exit 0
+          fi
+          # Until the Ubuntu runners can stop pasta again, the known rootless netns stop error in
+          # test_pull_run_mount_stop is reported as a warning; any other failure fails the job.
+          failed="$(grep '^FAILED ' "$log" || true)"
+          if [ "$VIBEPOD_TEST_RUNTIME" = podman ] \
+            && [ "$(printf '%s\n' "$failed" | grep -c .)" -eq 1 ] \
+            && printf '%s\n' "$failed" | grep -q '::test_pull_run_mount_stop ' \
+            && grep -q 'rootless netns: kill network process: permission denied' "$log"; then
+            echo "::warning title=Podman::test_pull_run_mount_stop hit the known rootless netns stop error"
+            exit 0
+          fi
+          exit 1
 
       - name: Annotate integration failures
         if: failure() && matrix.runtime == 'podman'
