@@ -63,7 +63,11 @@ def show(
                 remaining = "Unavailable"
             state = row["error"] or ("stale" if window.get("stale", row["stale"]) else "observed")
             table.add_row(
-                row["provider"], row["profile"], window.get("bucket", "—"), remaining, state
+                row["provider"],
+                row["profile"],
+                window.get("bucket", "—"),
+                remaining,
+                state,
             )
     console.print(table)
     if not snapshot["providers"]:
@@ -124,14 +128,15 @@ def setup_claude_usage(
         "Claude quota capture disabled."
         if disable
         else "Claude quota capture enabled. Use vp run claude normally; "
-        "no extra model calls are made."
+        "no extra model calls are made.",
     )
 
 
 @app.command()
 def dashboard(
     port: Annotated[
-        int, typer.Option(min=1024, max=65535, help="Loopback-only dashboard port")
+        int,
+        typer.Option(min=1024, max=65535, help="Loopback-only dashboard port"),
     ] = 8002,
     no_open: Annotated[bool, typer.Option(help="Do not open the browser")] = False,
 ) -> None:

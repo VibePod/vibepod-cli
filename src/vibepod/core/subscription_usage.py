@@ -235,7 +235,7 @@ class UsageStore:
                 ).fetchone():
                     db.row_factory = sqlite3.Row
                     for record in db.execute(
-                        "SELECT * FROM subscriptions ORDER BY profile, provider"
+                        "SELECT * FROM subscriptions ORDER BY profile, provider",
                     ):
                         row = dict(record)
                         row["windows"] = json.loads(row["windows"])

@@ -59,7 +59,7 @@ def agy_payload():
                         ],
                     },
                     {"name": SECRET, "buckets": [{"window": "weekly", "remaining_fraction": 1}]},
-                ]
+                ],
             },
         },
     }
@@ -74,7 +74,7 @@ def test_only_allowlisted_quota_fields_reach_disk(tmp_path):
             "claude",
             {
                 "rate_limits": {
-                    "five_hour": {"used_percentage": 12, "resets_at": 2000000000, "token": SECRET}
+                    "five_hour": {"used_percentage": 12, "resets_at": 2000000000, "token": SECRET},
                 },
                 "email": SECRET,
             },
@@ -202,7 +202,8 @@ def test_capture_proxy_refuses_authentication_probe_without_bypassing_policy(mon
 
 
 @pytest.mark.parametrize(
-    "name", ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
+    "name",
+    ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"],
 )
 def test_unlabeled_and_custom_proxies_also_refuse_authentication_probe(monkeypatch, name):
     target = container()
@@ -326,7 +327,9 @@ def test_claude_wrapper_is_passive_sanitized_and_does_not_refresh_on_idle(tmp_pa
     assert SECRET not in initial.decode()
     store = usage.UsageStore(tmp_path / "data/usage.db")
     monkeypatch.setattr(
-        usage, "DockerManager", lambda: pytest.fail("passive Claude needs no Docker")
+        usage,
+        "DockerManager",
+        lambda: pytest.fail("passive Claude needs no Docker"),
     )
     usage.refresh("default", ("claude",), store=store)
     assert store.snapshot()["providers"][0]["windows"][0]["used_percent"] == 25
