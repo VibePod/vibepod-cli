@@ -221,8 +221,13 @@ VP_IMAGE_HERMES=vibepod/hermes:latest vp run hermes
 VP_IMAGE_CLINE=vibepod/cline:latest vp run cline
 VP_IMAGE_JUNIE=vibepod/junie:latest vp run junie
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
+VP_PROXY_IMAGE=vibepod/proxy:latest vp proxy start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list
 ```
+
+`VP_PROXY_IMAGE` applies everywhere the proxy is started (`vp run`, `vp task`, `vp proxy start`).
+A custom proxy image must carry the label `io.vibepod.proxy.policy-schema="2"`; VibePod refuses
+incompatible images ([docs](https://vibepod.dev/docs/configuration/#the-built-in-proxy)).
 
 ## License
 
