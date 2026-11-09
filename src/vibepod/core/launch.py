@@ -534,7 +534,7 @@ def provision_proxy(
     """
     if _is_latest_tag(image):
         if manager.pull_if_newer(image, auto_clean=False):
-            manager.require_proxy_policy_schema(image, policy_schema)
+            manager.require_proxy_image(image, policy_schema)
             existing = manager.find_proxy()
             if existing:
                 # Including a *running* proxy: ensure_proxy returns one as-is,
