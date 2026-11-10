@@ -65,7 +65,17 @@ only when the profile is active. Where the directory lives depends on the
 platform; see [Layout](#layout).
 
 For example, to point Claude at a custom endpoint and models, create
-`<base>/profiles/<name>/agents/claude/settings.json`:
+`<base>/profiles/<name>/agents/claude/settings.json`. The file holds a token,
+so make it readable only by you before adding the content:
+
+```bash
+mkdir -p <base>/profiles/<name>/agents/claude
+cd <base>/profiles/<name>/agents/claude
+touch settings.json
+chmod 600 settings.json
+```
+
+Then add the settings to the file:
 
 ```json
 {
@@ -83,8 +93,7 @@ For example, to point Claude at a custom endpoint and models, create
 ```
 
 Then `vp run claude --profile <name>` starts Claude with these settings, while
-other profiles keep their own. The agent directory is created on the first run
-with the profile; create it yourself if you add the file before that.
+other profiles keep their own.
 
 To set environment variables without a profile, use `agents.<agent>.env` (see
 [Passing environment variables](agents/index.md#passing-environment-variables)).
