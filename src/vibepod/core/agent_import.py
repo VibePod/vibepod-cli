@@ -273,7 +273,9 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
     # BYOK keys to secure_credentials.json.
     "junie": (
         ImportEntry(
-            ".junie/secure_credentials.json", ".junie/secure_credentials.json", "credentials"
+            ".junie/secure_credentials.json",
+            ".junie/secure_credentials.json",
+            "credentials",
         ),
         ImportEntry(".junie/mcp", ".junie/mcp", "mcp"),
         ImportEntry(".junie/skills", ".junie/skills", "skills"),
