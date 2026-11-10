@@ -45,6 +45,12 @@ install root is under `/usr`, already reserved for ACP binds. Tasks pass
 mode; `--ikwid` adds `--auto-approve true` (not `--yolo`, which switches to a
 restricted single-turn mode).
 
+Cursor's image contract is `HOME=/config` with `cursor-agent` under
+`/opt/cursor-agent`, which is reserved for Cursor's ACP workspace binds (see
+`_ACP_RESERVED_AGENT_PATHS`).
+Detached Cursor tasks always pass `--trust` to avoid an interactive workspace
+prompt; only `--ikwid` adds `--force` to bypass command approvals.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

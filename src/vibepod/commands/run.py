@@ -159,6 +159,8 @@ _ACP_RESERVED_AGENT_PATHS: dict[str, tuple[str, ...]] = {
     "junie": ("/opt/junie",),
     # The jcode binaries, which /usr/local/bin/jcode links into.
     "jcode": ("/opt/jcode",),
+    # Cursor CLI's bash launcher, bundled node runtime and native modules.
+    "cursor": ("/opt/cursor-agent",),
 }
 
 
@@ -297,6 +299,7 @@ def _agent_skill_paths(agent: str, env: Mapping[str, str] | None = None) -> list
       - freebuff reads ~/.agents/skills/ (also ~/.freebuff/skills/)
       - dsh      reads ~/.agents/skills/            → /config/.agents/skills/
       - cline    reads ~/.agents/skills/ (also ~/.cline/skills/)
+      - cursor   reads ~/.agents/skills/ (also ~/.cursor/skills/, ~/.claude/skills/)
       - hermes   reads ~/.agents/skills/ once the image seeds it into
         skills.external_dirs in $HERMES_HOME/config.yaml (Hermes has no
         env-var override for that key). Its state volume is the official
@@ -324,7 +327,17 @@ def _agent_skill_paths(agent: str, env: Mapping[str, str] | None = None) -> list
         if not junie_home.startswith("/"):
             junie_home = "/config/.junie"
         return [f"{junie_home}/skills"]
-    if agent in ("codex", "opencode", "auggie", "tau", "jcode", "freebuff", "dsh", "cline"):
+    if agent in (
+        "codex",
+        "opencode",
+        "auggie",
+        "tau",
+        "jcode",
+        "freebuff",
+        "dsh",
+        "cline",
+        "cursor",
+    ):
         return ["/config/.agents/skills"]
     return []
 

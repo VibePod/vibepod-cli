@@ -279,8 +279,8 @@ cannot take `--provider` in task mode; the same applies to Pi. Hermes is deliber
 this feature: its runtime prioritizes saved provider settings, ignores
 `OPENAI_BASE_URL`, and restricts keys by endpoint host, so use `hermes setup`
 inside the container (see the [Hermes notes](agents/index.md#hermes-agent-hermes-developer-preview)).
-Gemini, Copilot, Auggie, Agy, Freebuff, Vibe, dsh, Cline, and Junie have no
-verified custom-endpoint mechanism and are rejected as well.
+Gemini, Copilot, Auggie, Agy, Freebuff, Vibe, dsh, Cline, Junie, and Cursor have
+no verified custom-endpoint mechanism and are rejected as well.
 
 Qwen, Tau, Jcode, and OpenCode follow the same temporary-launch rules as the
 first three agents: saved credentials and native configuration are never

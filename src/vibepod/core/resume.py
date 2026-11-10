@@ -131,6 +131,15 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
     # Cline ends a session with a summary whose "Continue" row reads
     # "cline --id <sessionId>".
     "cline": ((re.compile(rf"{_BOUNDARY}cline[ \t]+--id[ \t]+({_TOKEN})"), _with_id("--id")),),
+    # Cursor prints "To resume this session: cursor-agent --resume=<chatId>" on
+    # exit, and "agent --resume <chatId>" after forking a chat. The command name
+    # follows how it was invoked (`agent` is upstream's primary symlink).
+    "cursor": (
+        (
+            re.compile(rf"{_BOUNDARY}(?:cursor-)?agent[ \t]+--resume(?:=|[ \t]+)({_TOKEN})"),
+            _with_id("--resume"),
+        ),
+    ),
     # Hermes prints both forms on exit (hermes_cli/cli.py):
     #   hermes --resume <session_id>
     #   hermes -c "<session title>"
