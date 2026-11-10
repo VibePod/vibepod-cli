@@ -72,10 +72,10 @@ For example, to point Claude at a custom endpoint and models, create
 so make it readable only by you before adding the content:
 
 ```bash
-mkdir -p <base>/profiles/<name>/agents/claude
-cd <base>/profiles/<name>/agents/claude
-touch settings.json
-chmod 600 settings.json
+profile_dir="/path/printed/by/vp-profile-create"
+mkdir -p "$profile_dir/agents/claude"
+touch "$profile_dir/agents/claude/settings.json"
+chmod 600 "$profile_dir/agents/claude/settings.json"
 ```
 
 Then add the settings to the file:
