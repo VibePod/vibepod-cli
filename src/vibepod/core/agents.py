@@ -54,9 +54,10 @@ class AgentSpec:
     # as namespace root instead of as the host UID. None keeps plain keep-id.
     rootless_runtime_ids: str | None = None
     # rootless_runtime_id_env names the env vars through which the image's
-    # init overrides its runtime (uid, gid). On rootless Podman any explicit
-    # value must equal rootless_runtime_ids, or the init would drop to a UID
-    # the keep-id mapping does not cover.
+    # init overrides its runtime (uid, gid), highest precedence first; an
+    # empty value falls through to the next name, like `${A:-${B:-}}`. On
+    # rootless Podman the effective value must equal rootless_runtime_ids, or
+    # the init would drop to a UID the keep-id mapping does not cover.
     rootless_runtime_id_env: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())
 
 
@@ -469,10 +470,12 @@ def rootless_podman_identity(agent: str, env: dict[str, str]) -> tuple[str, str 
     user and start as namespace root, so their init can bootstrap before
     dropping privileges to a UID that is the host user on the host side.
 
-    Raises ``ValueError`` when ``env`` explicitly sets the image's runtime
+    Raises ``ValueError`` when ``env`` sets the image's effective runtime
     UID/GID to anything other than ``rootless_runtime_ids``: the init would
     then drop to an ID outside the keep-id mapping and lose access to the
-    workspace and config mounts.
+    workspace and config mounts. The effective value is the first non-empty
+    name in ``rootless_runtime_id_env``, as the image's init resolves it, so
+    an empty override or an alias shadowed by a matching one is accepted.
     """
     spec = get_agent_spec(agent)
     ids = spec.rootless_runtime_ids
@@ -480,12 +483,11 @@ def rootless_podman_identity(agent: str, env: dict[str, str]) -> tuple[str, str 
         return "keep-id", None
     uid, gid = ids.split(":")
     uid_names, gid_names = spec.rootless_runtime_id_env
-    conflicts = [
-        f"{name}={env[name]}"
-        for names, expected in ((uid_names, uid), (gid_names, gid))
-        for name in names
-        if name in env and env[name].strip() != expected
-    ]
+    conflicts: list[str] = []
+    for names, expected in ((uid_names, uid), (gid_names, gid)):
+        name = next((n for n in names if env.get(n)), None)
+        if name is not None and env[name] != expected:
+            conflicts.append(f"{name}={env[name]}")
     if conflicts:
         raise ValueError(
             f"{agent} on rootless Podman must run as its image user {ids}; "

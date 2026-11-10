@@ -21,7 +21,7 @@ from vibepod.constants import EXIT_DOCKER_NOT_RUNNING, SUPPORTED_AGENTS
 from vibepod.core import acp as acp_mod
 from vibepod.core import launch, skills_engine
 from vibepod.core.acp import AcpClientChannel
-from vibepod.core.agents import get_agent_spec
+from vibepod.core.agents import get_agent_spec, rootless_podman_identity
 from vibepod.core.docker import DockerClientError, DockerManager
 
 # ---------------------------------------------------------------------------
@@ -1921,6 +1921,31 @@ def test_hermes_rejects_conflicting_runtime_id_on_rootless_podman(
     assert stub.run_kwargs is None
     output = capsys.readouterr()
     assert override in output.out + output.err
+
+
+@pytest.mark.parametrize(
+    ("env", "conflicts"),
+    [
+        ({"HERMES_UID": ""}, []),
+        ({"HERMES_UID": "", "PGID": ""}, []),
+        ({"HERMES_UID": "10000", "PUID": "1000"}, []),
+        ({"HERMES_UID": "", "PUID": "1000"}, ["PUID=1000"]),
+        ({"HERMES_UID": "1000", "PUID": "10000"}, ["HERMES_UID=1000"]),
+        ({"HERMES_UID": "1000", "HERMES_GID": "1000"}, ["HERMES_UID=1000", "HERMES_GID=1000"]),
+    ],
+)
+def test_rootless_podman_identity_resolves_aliases_like_the_image(
+    env: dict[str, str],
+    conflicts: list[str],
+) -> None:
+    """The first non-empty of HERMES_UID/PUID (and HERMES_GID/PGID) wins, as in stage2-hook."""
+    if not conflicts:
+        assert rootless_podman_identity("hermes", env) == ("keep-id:uid=10000,gid=10000", "0:0")
+        return
+    with pytest.raises(ValueError) as exc:
+        rootless_podman_identity("hermes", env)
+    message = str(exc.value)
+    assert all(conflict in message for conflict in conflicts)
 
 
 def test_hermes_accepts_matching_runtime_id_on_rootless_podman(
