@@ -3278,7 +3278,7 @@ def test_run_recreates_proxy_when_image_updated(monkeypatch, tmp_path: Path) -> 
             events.append("pull_if_newer")
             return True
 
-        def require_proxy_policy_schema(self, image: object, required: str = "2") -> None:
+        def require_proxy_image(self, image: object, required: str = "2") -> None:
             pass
 
         def clean_untagged_images(self) -> int:

@@ -27,8 +27,8 @@ class _FakeManager:
         self._events.append(f"pull_if_newer(auto_clean={auto_clean})")
         return self._updated
 
-    def require_proxy_policy_schema(self, image: object, required: str = "2") -> None:
-        self._events.append("require_proxy_policy_schema")
+    def require_proxy_image(self, image: object, required: str = "2") -> None:
+        self._events.append("require_proxy_image")
 
     def find_proxy(self):
         return self._container
@@ -65,7 +65,7 @@ def test_proxy_start_recreates_container_before_cleanup(monkeypatch) -> None:
         "ensure_network",
         "materialize_policy_bases",
         "pull_if_newer(auto_clean=False)",
-        "require_proxy_policy_schema",
+        "require_proxy_image",
         "container.remove",
         "ensure_proxy",
         "clean_untagged_images",
@@ -97,7 +97,7 @@ def test_proxy_start_validates_new_image_before_removing_running_proxy(monkeypat
         "ensure_network",
         "materialize_policy_bases",
         "pull_if_newer(auto_clean=False)",
-        "require_proxy_policy_schema",
+        "require_proxy_image",
         "container.remove",
         "ensure_proxy",
     ]

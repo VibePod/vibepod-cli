@@ -534,16 +534,18 @@ with its own `filter.yaml`, only `VP_PROXY_FILTER_MODE` still overrides the
 mode). Project and environment overrides are launch-specific and never replace
 the shared global fallback.
 
-Custom proxy images must implement per-source policies and expose this exact
-OCI image label:
+Custom proxy images must implement per-source policies, stream gRPC/Connect
+bodies like VibePod proxy 0.6.0, and expose these OCI image labels:
 
 ```dockerfile
 LABEL io.vibepod.proxy.policy-schema="2"
+LABEL io.vibepod.proxy.version="0.6.0"
 ```
 
 VibePod checks the configured image—and an already-running proxy—before
-launching a proxied agent. An image with a missing or different schema label is
-rejected with an upgrade error.
+launching a proxied agent. An image with a missing or different schema label,
+or a missing version label or one below 0.6.0, is rejected with an upgrade
+error.
 
 !!! warning "Filtering is not a network sandbox"
     The filter controls requests that use the injected proxy. A container can

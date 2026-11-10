@@ -793,32 +793,58 @@ def test_ensure_proxy_pulls_image_when_missing(mock_docker, tmp_path: Path) -> N
     mock_client.containers.run.assert_called_once()
 
 
+def _proxy_labels(schema: str | None = "2", version: str | None = "0.6.0") -> dict[str, str]:
+    labels: dict[str, str] = {}
+    if schema is not None:
+        labels["io.vibepod.proxy.policy-schema"] = schema
+    if version is not None:
+        labels["io.vibepod.proxy.version"] = version
+    return labels
+
+
 @pytest.mark.parametrize("label", [None, "", "two", "3"])
 @patch("vibepod.core.docker.docker")
-def test_require_proxy_policy_schema_rejects_incompatible_image(
+def test_require_proxy_image_rejects_incompatible_schema(
     mock_docker,
     label: str | None,
 ) -> None:
     mock_client = MagicMock()
     mock_docker.from_env.return_value = mock_client
-    labels = {} if label is None else {"io.vibepod.proxy.policy-schema": label}
-    mock_client.images.get.return_value.attrs = {"Config": {"Labels": labels}}
+    mock_client.images.get.return_value.attrs = {"Config": {"Labels": _proxy_labels(label)}}
 
     manager = DockerManager()
     with pytest.raises(DockerClientError, match="policy schema 2"):
-        manager.require_proxy_policy_schema("example/proxy:custom", "2")
+        manager.require_proxy_image("example/proxy:custom", "2")
 
 
+@pytest.mark.parametrize("version", [None, "", "latest", "0.5.0", "0.5.9", "0.6"])
 @patch("vibepod.core.docker.docker")
-def test_require_proxy_policy_schema_accepts_exact_label(mock_docker) -> None:
+def test_require_proxy_image_rejects_old_or_unlabelled_version(
+    mock_docker,
+    version: str | None,
+) -> None:
     mock_client = MagicMock()
     mock_docker.from_env.return_value = mock_client
     mock_client.images.get.return_value.attrs = {
-        "Config": {"Labels": {"io.vibepod.proxy.policy-schema": "2"}},
+        "Config": {"Labels": _proxy_labels(version=version)},
     }
 
     manager = DockerManager()
-    manager.require_proxy_policy_schema("example/proxy:custom", "2")
+    with pytest.raises(DockerClientError, match="required version 0.6.0 or newer"):
+        manager.require_proxy_image("example/proxy:custom", "2")
+
+
+@pytest.mark.parametrize("version", ["0.6.0", "0.6.1", "0.10.0", "1.0.0", "0.7.0rc1"])
+@patch("vibepod.core.docker.docker")
+def test_require_proxy_image_accepts_compatible_labels(mock_docker, version: str) -> None:
+    mock_client = MagicMock()
+    mock_docker.from_env.return_value = mock_client
+    mock_client.images.get.return_value.attrs = {
+        "Config": {"Labels": _proxy_labels(version=version)},
+    }
+
+    manager = DockerManager()
+    manager.require_proxy_image("example/proxy:custom", "2")
 
 
 @patch("vibepod.core.docker.docker")

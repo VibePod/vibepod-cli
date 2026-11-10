@@ -229,8 +229,8 @@ VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list
 ```
 
 `VP_PROXY_IMAGE` applies everywhere the proxy is started (`vp run`, `vp task`, `vp proxy start`).
-A custom proxy image must carry the label `io.vibepod.proxy.policy-schema="2"`; VibePod refuses
-incompatible images ([docs](https://vibepod.dev/docs/configuration/#the-built-in-proxy)).
+A custom proxy image must carry the labels `io.vibepod.proxy.policy-schema="2"` and
+`io.vibepod.proxy.version` (0.6.0 or newer); VibePod refuses incompatible images ([docs](https://vibepod.dev/docs/configuration/#the-built-in-proxy)).
 
 ## License
 

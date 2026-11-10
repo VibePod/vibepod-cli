@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import select
 import shutil
 import signal
@@ -82,6 +83,22 @@ PROXY_POLICY_SCHEMA_LABEL = "io.vibepod.proxy.policy-schema"
 # The per-source policy schema this CLI speaks; a proxy image must carry the
 # matching PROXY_POLICY_SCHEMA_LABEL value.
 PROXY_POLICY_SCHEMA = "2"
+PROXY_VERSION_LABEL = "io.vibepod.proxy.version"
+# The oldest proxy release this CLI works with (streamed gRPC/Connect bodies);
+# a proxy image must carry a PROXY_VERSION_LABEL value at least this high.
+PROXY_MIN_VERSION = "0.6.0"
+_VERSION_PREFIX = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def _parse_version(value: object) -> tuple[int, int, int] | None:
+    """Return the leading ``major.minor.patch`` of *value*, or None if absent."""
+    if not isinstance(value, str):
+        return None
+    match = _VERSION_PREFIX.match(value.strip())
+    if match is None:
+        return None
+    major, minor, patch = (int(part) for part in match.groups())
+    return major, minor, patch
 
 
 def _run_podman(podman: str, args: list[str]) -> str | None:
@@ -440,25 +457,46 @@ class DockerManager:
             # missing id as "no confirmed image", never as a failure to report.
             return None
 
-    def require_proxy_policy_schema(self, image: str | Any, required: str = "2") -> None:
-        """Require an exact per-source policy schema label on a proxy image."""
+    def require_proxy_image(
+        self,
+        image: str | Any,
+        policy_schema: str = PROXY_POLICY_SCHEMA,
+        min_version: str = PROXY_MIN_VERSION,
+    ) -> None:
+        """Require a proxy image with an exact policy schema and a minimum version."""
         image_name = image if isinstance(image, str) else "the running proxy image"
         try:
             inspected = self.client.images.get(image) if isinstance(image, str) else image
             attrs = inspected.attrs
             config = attrs.get("Config", {}) if isinstance(attrs, dict) else {}
             labels = config.get("Labels", {}) if isinstance(config, dict) else {}
-            actual = labels.get(PROXY_POLICY_SCHEMA_LABEL) if isinstance(labels, dict) else None
+            if not isinstance(labels, dict):
+                labels = {}
         except (AttributeError, DockerException) as exc:
             raise DockerClientError(
-                f"Proxy image {image_name} could not be inspected for policy schema {required}",
+                f"Proxy image {image_name} could not be inspected for policy schema "
+                f"{policy_schema}",
             ) from exc
-        if actual != required:
-            shown = actual if isinstance(actual, str) and actual else "missing"
+        actual_schema = labels.get(PROXY_POLICY_SCHEMA_LABEL)
+        if actual_schema != policy_schema:
+            shown = actual_schema if isinstance(actual_schema, str) and actual_schema else "missing"
             raise DockerClientError(
-                f"Proxy image {image_name} is incompatible: required policy schema {required}, "
-                f"found {shown}. Use an updated VibePod proxy image or add "
-                f"the label {PROXY_POLICY_SCHEMA_LABEL}={required} to a compatible custom image.",
+                f"Proxy image {image_name} is incompatible: required policy schema "
+                f"{policy_schema}, found {shown}. Use an updated VibePod proxy image or add "
+                f"the label {PROXY_POLICY_SCHEMA_LABEL}={policy_schema} to a compatible "
+                "custom image.",
+            )
+        actual_version = labels.get(PROXY_VERSION_LABEL)
+        parsed = _parse_version(actual_version)
+        required = _parse_version(min_version)
+        if parsed is None or (required is not None and parsed < required):
+            shown = (
+                actual_version if isinstance(actual_version, str) and actual_version else "missing"
+            )
+            raise DockerClientError(
+                f"Proxy image {image_name} is too old: required version {min_version} or "
+                f"newer, found {shown}. Pull an updated VibePod proxy image or add the label "
+                f"{PROXY_VERSION_LABEL}=<version> to a compatible custom image.",
             )
 
     def build_image(
@@ -937,7 +975,7 @@ class DockerManager:
         if existing:
             if existing.status == "running":
                 if policy_schema is not None:
-                    self.require_proxy_policy_schema(existing.image, policy_schema)
+                    self.require_proxy_image(existing.image, policy_schema)
                 return existing
             self.remove_proxy(existing)
 
@@ -948,7 +986,7 @@ class DockerManager:
                 self.pull_image(image)
 
         if policy_schema is not None:
-            self.require_proxy_policy_schema(image, policy_schema)
+            self.require_proxy_image(image, policy_schema)
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         ca_dir.mkdir(parents=True, exist_ok=True)

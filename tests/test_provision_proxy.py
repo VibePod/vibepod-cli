@@ -25,7 +25,7 @@ class _FakeManager:
         self.pull_auto_clean = auto_clean
         return self._pull_updates
 
-    def require_proxy_policy_schema(self, image: str, required: str) -> None:
+    def require_proxy_image(self, image: str, required: str) -> None:
         self.schema_checks.append((image, required))
         if self._bad_new_image:
             raise DockerClientError("incompatible new image")
