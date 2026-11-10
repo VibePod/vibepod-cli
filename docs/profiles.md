@@ -14,14 +14,24 @@ flags — combine them with a profile via a project config (see below).
 ## Layout
 
 ```text
-~/.config/vibepod/
+<base>/                              # see the table below
   agents/<agent>/                    # the built-in "default" profile
   profiles/<name>/agents/<agent>/    # named profiles
   profiles/<name>/filter.yaml        # optional per-profile proxy filter
 ```
 
-Your existing credentials in `~/.config/vibepod/agents/` are the `default`
-profile — nothing moves when you start using profiles.
+The base directory depends on the platform:
+
+| Platform | Base directory                           |
+|----------|------------------------------------------|
+| Linux    | `~/.config/vibepod/`                     |
+| macOS    | `~/Library/Application Support/vibepod/` |
+
+If `VP_CONFIG_DIR` is set, it replaces the base directory on all platforms (see
+[Environment variables](configuration.md#environment-variables)).
+
+Your existing credentials in `<base>/agents/` are the `default` profile —
+nothing moves when you start using profiles.
 
 ## Managing profiles
 
@@ -45,6 +55,41 @@ vp doctor claude --profile work
 
 The first run with a fresh profile starts unauthenticated — log in once and the
 credentials are persisted inside that profile.
+
+## Agent configuration per profile
+
+`vp profile create <name>` prints the path of the new profile directory. Each
+agent's directory inside it is mounted as that agent's config directory (see
+[Agents](agents/index.md)), so any configuration file you place there applies
+only when the profile is active. Where the directory lives depends on the
+platform; see [Layout](#layout).
+
+For example, to point Claude at a custom endpoint and models, create
+`<base>/profiles/<name>/agents/claude/settings.json`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://example.com",
+    "ANTHROPIC_AUTH_TOKEN": "abc",
+    "ANTHROPIC_MODEL": "DeepSeek-V4-Flash-0731",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "Qwen3.6-35B-A3B",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "393216",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+  },
+  "theme": "dark"
+}
+```
+
+Then `vp run claude --profile <name>` starts Claude with these settings, while
+other profiles keep their own. The agent directory is created on the first run
+with the profile; create it yourself if you add the file before that.
+
+To set environment variables without a profile, use `agents.<agent>.env` (see
+[Passing environment variables](agents/index.md#passing-environment-variables)).
+To route an agent to an endpoint without storing a token in the profile, use
+[Global model providers](providers.md).
 
 ## Selecting a profile without the flag
 
