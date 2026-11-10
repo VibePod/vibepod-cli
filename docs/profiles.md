@@ -27,6 +27,9 @@ The base directory depends on the platform:
 | Linux    | `~/.config/vibepod/`                     |
 | macOS    | `~/Library/Application Support/vibepod/` |
 
+On Linux, if `XDG_CONFIG_HOME` is set, the base directory is
+`$XDG_CONFIG_HOME/vibepod/` instead.
+
 If `VP_CONFIG_DIR` is set, it replaces the base directory on all platforms (see
 [Environment variables](configuration.md#environment-variables)).
 
