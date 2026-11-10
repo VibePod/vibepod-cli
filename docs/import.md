@@ -69,8 +69,11 @@ needs `--with-credentials` as well.
 | `qwen`     | `~/.qwen`                                              |
 | `dsh`      | `~/.dsh`                                               |
 | `hermes`   | `~/.hermes`                                            |
+| `cline`    | `~/.cline`                                             |
+| `junie`    | `~/.junie` (or `$JUNIE_HOME`)                          |
+| `cursor`   | `~/.cursor`, `~/.config/cursor`                        |
 
-Codex, opencode, Auggie, Tau, jcode, dsh and Hermes also read skills from the
+Codex, opencode, Auggie, Tau, jcode, dsh, Hermes, Cline and Cursor also read skills from the
 shared `~/.agents/skills` directory, so their import copies it too (category
 `skills`). Freebuff reads that directory as well, but outside its persisted
 config mount, so it is not imported for Freebuff.
@@ -81,6 +84,10 @@ Mistral Vibe honours `VIBE_HOME`; when it is set, `vp import vibe` reads
 from that directory instead of `~/.vibe` (unless `--home` is given). Vibe's git
 worktrees under `~/.vibe/worktrees` are never imported, and MCP OAuth tokens it
 keeps in the OS keyring cannot be copied: log in again inside the pod.
+
+Junie honours `JUNIE_HOME` the same way. `~/.cursor` is shared with the Cursor
+IDE, so `vp import cursor` copies only the CLI's own files and never the IDE's
+`~/.cursor/extensions`.
 
 ## Profiles
 
@@ -143,8 +150,11 @@ token when no system keychain is available), Pi (`~/.pi/agent/auth.json`), Tau
 files under `~/.config/jcode`), Freebuff
 (`~/.config/manicode/credentials.json`), Qwen (`~/.qwen/oauth_creds.json`,
 `.env`), dsh (`~/.dsh/.credentials.yaml`) and Hermes (`~/.hermes/.env`,
-`~/.hermes/auth.json`) do keep credentials on disk, so `--with-credentials`
-works for them.
+`~/.hermes/auth.json`), Cline (`~/.cline/data/settings/providers.json`), Junie
+(`~/.junie/secure_credentials.json`) and the Cursor CLI on Linux
+(`~/.config/cursor/auth.json`) do keep credentials on disk, so
+`--with-credentials` works for them. On macOS the Cursor CLI and Junie may use
+the Keychain instead; log in inside the pod when nothing is copied.
 
 ## Model providers
 

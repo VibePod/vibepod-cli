@@ -151,6 +151,9 @@ _KNOWN_CREDENTIALS: dict[str, tuple[str, ...]] = {
     "qwen": (".qwen/oauth_creds.json", ".qwen/.env"),
     "dsh": (".dsh/.credentials.yaml",),
     "hermes": (".hermes/.env", ".hermes/auth.json"),
+    "cline": (".cline/data/settings/providers.json",),
+    "junie": (".junie/secure_credentials.json",),
+    "cursor": (".config/cursor/auth.json",),
 }
 
 
@@ -226,7 +229,17 @@ def test_jcode_sessions_and_mcp_are_classified(tmp_path: Path) -> None:
 
 
 #: Agents that discover skills in ~/.agents/skills inside their persisted mount.
-_SHARED_SKILLS_AGENTS = {"codex", "opencode", "auggie", "tau", "jcode", "dsh", "hermes"}
+_SHARED_SKILLS_AGENTS = {
+    "codex",
+    "opencode",
+    "auggie",
+    "tau",
+    "jcode",
+    "dsh",
+    "hermes",
+    "cline",
+    "cursor",
+}
 
 
 def test_shared_skills_are_imported_where_the_agent_reads_them() -> None:
@@ -750,6 +763,39 @@ def test_hermes_installer_checkout_is_not_reported(tmp_path: Path) -> None:
     plan = plan_import("hermes", home, dest, DEFAULT_CATEGORIES)
 
     assert plan.unclassified == []
+
+
+def test_cursor_ide_extensions_are_not_reported(tmp_path: Path) -> None:
+    """~/.cursor is shared with the Cursor IDE; its extensions are not CLI state."""
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".cursor" / "cli-config.json", "{}")
+    _write(home / ".cursor" / "mcp.json", "{}")
+    _write(home / ".cursor" / "extensions" / "ms-python" / "package.json", "{}")
+
+    plan = plan_import("cursor", home, dest, DEFAULT_CATEGORIES)
+
+    assert sorted((f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files) == [
+        ("mcp", ".cursor/mcp.json"),
+        ("settings", ".cursor/cli-config.json"),
+    ]
+    assert plan.unclassified == []
+
+
+def test_junie_home_relocates_the_junie_directory(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    custom = tmp_path / "custom-junie"
+    _write(custom / "settings.json", "{}")
+    _write(custom / "mcp" / "mcp.json", "{}")
+    home.mkdir()
+
+    overrides = env_root_overrides("junie", {"JUNIE_HOME": str(custom)})
+    plan = plan_import("junie", home, dest, DEFAULT_CATEGORIES, root_overrides=overrides)
+
+    assert overrides == {".junie": custom.resolve()}
+    assert sorted((f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files) == [
+        ("mcp", ".junie/mcp/mcp.json"),
+        ("settings", ".junie/settings.json"),
+    ]
 
 
 def test_scan_host_ignores_empty_directories(tmp_path: Path) -> None:

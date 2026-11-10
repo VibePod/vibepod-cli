@@ -248,6 +248,57 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ImportEntry(".hermes/.env", ".env", "credentials"),
         ImportEntry(".hermes/auth.json", "auth.json", "credentials"),
     ),
+    # Cline keeps all state under ~/.cline; provider API keys and OAuth tokens
+    # share data/settings/providers.json with the model selection.
+    "cline": (
+        ImportEntry(
+            ".cline/data/settings/providers.json",
+            ".cline/data/settings/providers.json",
+            "credentials",
+        ),
+        ImportEntry(
+            ".cline/data/settings/cline_mcp_settings.json",
+            ".cline/data/settings/cline_mcp_settings.json",
+            "mcp",
+        ),
+        ImportEntry(".cline/data/sessions", ".cline/data/sessions", "sessions"),
+        ImportEntry(".cline/rules", ".cline/rules", "memory"),
+        ImportEntry(".cline/skills", ".cline/skills", "skills"),
+        ImportEntry(".cline/hooks", ".cline/hooks", "hooks"),
+        ImportEntry(".cline", ".cline", "settings"),
+        SHARED_SKILLS,
+    ),
+    # Junie resolves its home from $JUNIE_HOME (default ~/.junie); the pod pins
+    # it to /config/.junie. Without a Secret Service it writes its tokens and
+    # BYOK keys to secure_credentials.json.
+    "junie": (
+        ImportEntry(
+            ".junie/secure_credentials.json", ".junie/secure_credentials.json", "credentials"
+        ),
+        ImportEntry(".junie/mcp", ".junie/mcp", "mcp"),
+        ImportEntry(".junie/skills", ".junie/skills", "skills"),
+        ImportEntry(".junie/sessions", ".junie/sessions", "sessions"),
+        ImportEntry(".junie", ".junie", "settings"),
+    ),
+    # ~/.cursor is shared with the Cursor IDE (extensions, IDE state), so only
+    # the CLI's documented files are listed; the rest is reported as other.
+    "cursor": (
+        ImportEntry(".cursor/cli-config.json", ".cursor/cli-config.json", "settings"),
+        ImportEntry(".cursor/mcp.json", ".cursor/mcp.json", "mcp"),
+        ImportEntry(".cursor/skills", ".cursor/skills", "skills"),
+        SHARED_SKILLS,
+        ImportEntry(".cursor/chats", ".cursor/chats", "sessions"),
+        ImportEntry(".cursor/projects", ".cursor/projects", "sessions"),
+        ImportEntry(
+            ".config/cursor/auth.json",
+            ".config/cursor/auth.json",
+            "credentials",
+            note=(
+                "On macOS the Cursor CLI keeps its login in the Keychain, "
+                "so this file usually does not exist; log in inside the pod."
+            ),
+        ),
+    ),
 }
 
 
@@ -290,6 +341,13 @@ AGENT_ROOTS: dict[str, tuple[AgentRoot, ...]] = {
     "dsh": (AgentRoot(".dsh", ".dsh"),),
     # The installer clones its hermes-agent checkout into ~/.hermes.
     "hermes": (AgentRoot(".hermes", "", exclude=("hermes-agent", "hermes-agent/*")),),
+    "cline": (AgentRoot(".cline", ".cline"),),
+    "junie": (AgentRoot(".junie", ".junie", env="JUNIE_HOME"),),
+    # The Cursor IDE installs its extensions into ~/.cursor/extensions.
+    "cursor": (
+        AgentRoot(".cursor", ".cursor", exclude=("extensions", "extensions/*")),
+        AgentRoot(".config/cursor", ".config/cursor"),
+    ),
 }
 
 
