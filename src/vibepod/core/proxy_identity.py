@@ -10,7 +10,7 @@ _POLICY_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 def validate_policy_id(policy_id: str) -> str:
     """Return a valid policy identifier or raise ``ValueError``."""
-    if not _POLICY_ID_RE.fullmatch(policy_id):
+    if not isinstance(policy_id, str) or not _POLICY_ID_RE.fullmatch(policy_id):
         raise ValueError(f"Invalid proxy policy id '{policy_id}'")
     return policy_id
 
