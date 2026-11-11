@@ -129,6 +129,11 @@ class TaskProblem(Exception):
     with the message as the reason."""
 
 
+class HistoryUnavailable(Exception):
+    """The task history, which holds the answers and review feedback a run must follow,
+    could not be read: the task goes back without running."""
+
+
 class ReviewProblem(Exception):
     """A review that went wrong, such as one whose agent changed the repository; it ends as
     failed, with the message as the reason, and the task stays in Review for others."""
@@ -390,33 +395,65 @@ def _text(value: Any) -> str:
 
 
 def parse_result(logs: str, statuses: Sequence[str] = RESULT_STATUSES) -> AgentResult | None:
-    """The last well-formed result block in the agent's output, or None. The instructions in
-    the prompt may be echoed, but their placeholder status never parses. A question needs
-    its question, and a rework its feedback."""
-    found: AgentResult | None = None
-    for block in RESULT_BLOCK.findall(logs):
-        text = block.strip()
-        if text.startswith("```"):
-            text = text.strip("`").removeprefix("json").strip()
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(data, dict) or data.get("status") not in statuses:
-            continue
-        result = AgentResult(
-            status=str(data["status"]),
-            summary=_text(data.get("summary")),
-            question=_text(data.get("question")),
-            reason=_text(data.get("reason")),
-            feedback=_text(data.get("feedback")),
-        )
-        if result.status == "needs_input" and not result.question:
-            continue
-        if result.status == "rework" and not result.feedback:
-            continue
-        found = result
-    return found
+    """The result block that ends the agent's output, or None. Only the last block counts:
+    the prompt, which ends with the instructions, may be echoed, and a block quoted from the
+    task before them must not stand in for a result the agent never gave; the placeholder
+    status of the instructions never parses. A question needs its question, and a rework
+    its feedback. Agents that log JSON events, such as Pi, have their text decoded first."""
+    blocks = RESULT_BLOCK.findall(_decoded_logs(logs))
+    if not blocks:
+        return None
+    text = blocks[-1].strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or data.get("status") not in statuses:
+        return None
+    result = AgentResult(
+        status=str(data["status"]),
+        summary=_text(data.get("summary")),
+        question=_text(data.get("question")),
+        reason=_text(data.get("reason")),
+        feedback=_text(data.get("feedback")),
+    )
+    if result.status == "needs_input" and not result.question:
+        return None
+    if result.status == "rework" and not result.feedback:
+        return None
+    return result
+
+
+def _decoded_logs(logs: str) -> str:
+    """The logs with each JSON event line that mentions a result block replaced by the
+    texts in it that do, in order, so an escaped block reads as the agent wrote it."""
+    tag = f"<{RESULT_TAG}>"
+    lines: list[str] = []
+    for line in logs.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("{") and tag in stripped.lower():
+            try:
+                event = json.loads(stripped)
+            except json.JSONDecodeError:
+                lines.append(line)
+                continue
+            lines.extend(text for text in _strings(event) if tag in text.lower())
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
 
 
 def conversation(history: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -652,7 +689,11 @@ class BoardWorker:
         # Tasks whose run was cancelled from the board: planned again, but passed over by
         # this worker so it does not restart what it was told to stop.
         self.passed_over: deque[str] = deque(maxlen=PASS_OVER_LIMIT)
-        self.cancelled_reviews: deque[tuple[str, str, str | None]] = deque(maxlen=PASS_OVER_LIMIT)
+        # Reviews cancelled from the board, by task, card, head and review round: passed
+        # over while the card is in Review at that head in that round.
+        self.cancelled_reviews: deque[tuple[str, str, str | None, int]] = deque(
+            maxlen=PASS_OVER_LIMIT,
+        )
         # Board writes that kept failing, tried again on every round of the loop, each with
         # the write that replaces it once the worker was stopped, if any.
         self.undelivered: list[tuple[str, Write, tuple[str, Write] | None]] = []
@@ -795,7 +836,7 @@ class BoardWorker:
 
     def _claim(self) -> dict[str, Any] | None:
         exclude = list(self.passed_over)
-        for task_id, card_id, head_sha in list(self.cancelled_reviews):
+        for task_id, card_id, head_sha, rounds in list(self.cancelled_reviews):
             try:
                 state = self.client.review_state(card_id)
             except BoardApiError as exc:
@@ -804,10 +845,14 @@ class BoardWorker:
                     exclude.append(task_id)
                     continue
                 state = {}
-            if state.get("column") == "review" and state.get("headSha") == head_sha:
+            if (
+                state.get("column") == "review"
+                and state.get("headSha") == head_sha
+                and int(state.get("reviewRounds") or 0) == rounds
+            ):
                 exclude.append(task_id)
             else:
-                self.cancelled_reviews.remove((task_id, card_id, head_sha))
+                self.cancelled_reviews.remove((task_id, card_id, head_sha, rounds))
         try:
             result = self.client.claim(
                 self.options.project,
@@ -1020,10 +1065,10 @@ class BoardWorker:
         # asked a question keeps the branch its draft is on: both continue there, whatever
         # --existing says.
         rework = bool(card.get("branchName"))
-        earlier = self._conversation(task)
-        answered = any(event.get("kind") in {"question", "answer"} for event in earlier)
         try:
             try:
+                earlier = self._conversation(task)
+                answered = any(event.get("kind") in {"question", "answer"} for event in earlier)
                 repo = self._repository(task)
                 result.branch = (
                     str(card["branchName"])
@@ -1055,6 +1100,8 @@ class BoardWorker:
                 raise TaskProblem(str(exc)) from exc
         except TaskProblem as problem:
             result.outcome, result.reason, result.release = "failed", str(problem), "blocked"
+        except HistoryUnavailable as exc:
+            result.outcome, result.reason, result.release = "failed", str(exc), "released"
         except AgentStopError as exc:
             result.outcome, result.reason, result.release = "failed", str(exc), None
             self.stop_requested = True
@@ -1208,6 +1255,15 @@ class BoardWorker:
                 self._failure(),
             )
             return
+        if rework and not result.commits:
+            # The branch holds the work that was sent back: handing it over again unchanged
+            # would ignore the review's feedback.
+            result.outcome, result.reason, result.release = (
+                "failed",
+                "The agent reported the rework done but added no commit",
+                self._failure(),
+            )
+            return
         if self.options.verify:
             self._set("working", step=STEP_VERIFYING)
             result.verify = self._verify(worktree.path, deadline)
@@ -1286,11 +1342,22 @@ class BoardWorker:
         task: dict[str, Any],
         keep: Callable[[Sequence[dict[str, Any]]], list[dict[str, Any]]],
     ) -> list[dict[str, Any]]:
-        try:
-            return keep(self.client.task_history(str(task["id"])))
-        except BoardApiError as exc:
-            self.say("warning", f"Could not read the task history: {exc.message}")
-            return []
+        """The task history, tried again while the board is unreachable or failing. Raises
+        HistoryUnavailable rather than going on without it: it holds the answers to the
+        task's questions and the feedback of its reviews."""
+        delay = 1.0
+        for attempt in range(DELIVERY_ATTEMPTS):
+            try:
+                return keep(self.client.task_history(str(task["id"])))
+            except BoardApiError as exc:
+                if not _transient(exc) or attempt == DELIVERY_ATTEMPTS - 1:
+                    raise HistoryUnavailable(
+                        f"Could not read the task history: {exc.message}",
+                    ) from exc
+                self.say("warning", f"Reading the task history failed ({exc.message}); retrying")
+                self._idle_wait(delay)
+                delay = min(delay * 2, 30.0)
+        raise AssertionError("unreachable")
 
     def _ended_early(self, ended: str, result: TaskResult) -> bool:
         if ended == "stop":
@@ -1586,6 +1653,8 @@ class BoardWorker:
                 "failed",
                 reason,
             )
+        except HistoryUnavailable as exc:
+            result.outcome, result.reason, result.verdict = "failed", str(exc), "released"
         except AgentStopError as exc:
             result.outcome, result.reason, result.verdict = "failed", str(exc), None
             self.stop_requested = True
@@ -1625,15 +1694,20 @@ class BoardWorker:
             raise TaskProblem("The card names no branch to review")
         if not worktrees.branch_exists(repo, branch):
             raise TaskProblem(f"The branch {branch} to review is not in {repo}")
-        if result.head_sha:
-            if not worktrees.commit_exists(repo, result.head_sha):
-                raise TaskProblem(
-                    f"The commit {result.head_sha[:12]} of {branch} to review is not in {repo}",
-                )
-            result.commit = worktrees.git(repo, "rev-parse", f"{result.head_sha}^{{commit}}")
-        else:
-            # Handed over without naming its commit: the branch as it is now.
-            result.commit = worktrees.git(repo, "rev-parse", f"refs/heads/{branch}^{{commit}}")
+        if not result.head_sha:
+            raise TaskProblem(f"The review names no commit of {branch} to review")
+        if not worktrees.commit_exists(repo, result.head_sha):
+            raise TaskProblem(
+                f"The commit {result.head_sha[:12]} of {branch} to review is not in {repo}",
+            )
+        result.commit = worktrees.git(repo, "rev-parse", f"{result.head_sha}^{{commit}}")
+        tip = worktrees.git(repo, "rev-parse", f"refs/heads/{branch}^{{commit}}")
+        if tip != result.commit:
+            # A pull request opened from the branch would hold other work than the approved.
+            raise TaskProblem(
+                f"The branch {branch} is at {tip[:12]}, not at the handed-over "
+                f"{result.commit[:12]}; hand it over again to review it",
+            )
         base = self.options.base or worktrees.current_branch(repo) or "HEAD"
         base_commit = worktrees.resolve_commit(repo, base)
         key = str(task.get("key") or task["id"]).lower()
@@ -1699,6 +1773,11 @@ class BoardWorker:
             return
         if self.options.verify:
             self._set("working", step=STEP_VERIFYING)
+            # The agent may leave ignored files, such as build output or a configuration,
+            # which the check above does not count: the verify command sees the reviewed
+            # commit only.
+            with self._keepalive():
+                worktrees.remove_untracked(path)
             result.verify = self._verify(path, deadline)
             # The verify command ran the code under review, which may have changed what the
             # review must not: checked again before git on the host goes on.
@@ -1779,7 +1858,8 @@ class BoardWorker:
         switched to or left changed in the worktree is thrown away, refs it moved are put
         back, and the review fails. Nothing of git runs in a worktree whose pointers into
         the git directory changed. Checked again after the verify command, which runs the
-        code under review, and may leave files behind, such as caches, but nothing else."""
+        code under review, and may leave new files behind, such as caches, but nothing
+        else."""
         assert result.commit is not None
         try:
             worktrees.verify_pointers(path, pointers)
@@ -1799,6 +1879,10 @@ class BoardWorker:
             changed.append("committed")
         if who == "The agent" and worktrees.has_changes(path):
             changed.append("left uncommitted changes")
+        elif who != "The agent" and worktrees.has_tracked_changes(path):
+            # The checks would have passed on another tree than the reviewed commit's. New
+            # files, such as caches, are fine.
+            changed.append("changed tracked files")
         if changed:
             worktrees.discard_changes(path, result.commit)
             created = f"refs/heads/{on}"
@@ -1831,6 +1915,18 @@ class BoardWorker:
         restored, left = worktrees.restore_refs(repo, refs, "", checked_out)
         if restored:
             raise ReviewProblem(f"{who} moved {', '.join(restored)}; restored them")
+        # Branches checked out somewhere are other workers' tasks, made meanwhile.
+        active = worktrees.checkouts(repo)
+        created = [
+            ref.removeprefix("refs/heads/")
+            for ref in worktrees.branch_refs(repo)
+            if ref not in refs and ref not in active
+        ]
+        if created:
+            raise ReviewProblem(
+                f"{', '.join(created)} appeared during the review; left as they are: check "
+                "whether the review made them",
+            )
         if left:
             raise ReviewProblem(
                 f"{', '.join(left)} moved during the review, in a checkout with changes "
@@ -1961,25 +2057,32 @@ class BoardWorker:
                         reason,
                     ),
                 )
-        if verdict == "approve" and result.verdict is not None:
+        if verdict == "approve" and result.verdict is not None and delivered is True:
             self.summary.approved.append(key)
             self.say("success", f"Approved {key} at {(result.commit or '')[:12]}")
-        elif verdict == "rework" and result.verdict is not None:
+        elif verdict == "rework" and result.verdict is not None and delivered is True:
             self.summary.reworked.append(key)
             self.say("success", f"Sent {key} back for rework")
+        elif delivered is None and result.verdict is not None:
+            # Kept for a later round: not on the board yet, so neither counted nor given up.
+            pass
         else:
             self.summary.returned.append(key)
             self.say("warning", f"{key}: {result.reason or result.note}")
         # Do not restart a board-cancelled review at the same head. Rework and later
         # handovers make it eligible again; stale verdicts (409/404) need no exclusion.
         if self.cancel_reason is not None:
-            self.cancelled_reviews.append((self._task_id(), str(card["id"]), head_sha))
+            self.cancelled_reviews.append(
+                (self._task_id(), str(card["id"]), head_sha, int(card.get("reviewRounds") or 0)),
+            )
         self._report_review(key, result, started_at, started)
         if (
             path is not None
             and repo is not None
             and not self.options.keep_worktree
             and not result.keep_worktree
+            # The agent may still be running in it.
+            and self.stop_failed is None
         ):
             try:
                 worktrees.remove_worktree(repo, self._worktree_dir(repo), path)

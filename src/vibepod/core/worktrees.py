@@ -165,9 +165,14 @@ def review_worktree_folder(name: str) -> str:
 
     Unlike branch folders, review folders must distinguish names that differ only in
     punctuation: replacing punctuation with dashes can replace another reviewer's tree.
-    Percent signs are escaped too, so an already encoded name remains distinct.
+    Percent signs are escaped too, so an already encoded name remains distinct. Capital
+    letters are escaped as well, so names that differ only in case stay apart on a
+    case-insensitive file system: what is left unescaped is lowercase, and the escapes
+    always use uppercase hex digits.
     """
-    return quote(name, safe="-_.")
+    return "".join(
+        f"%{ord(char):02X}" if "A" <= char <= "Z" else quote(char, safe="-_.") for char in name
+    )
 
 
 def _inside(path: Path, folder: Path) -> bool:
@@ -262,15 +267,77 @@ def prepare_review_worktree(repo: Path, worktrees_dir: Path, name: str, commit: 
     path = (worktrees_dir / review_worktree_folder(name)).resolve()
     if path == repo.resolve():
         raise GitError(f"Not replacing {path}: it is the repository's own checkout")
+    # Checked for every path, registered or not: a folder that is a symlink out of the
+    # worktree folder must not get the checkout either.
+    if not _inside(path, worktrees_dir):
+        raise GitError(f"Not using {path}: it is outside {worktrees_dir}")
     if path in worktree_paths(repo):
-        if not _inside(path, worktrees_dir):
-            raise GitError(f"Not replacing {path}: it is outside {worktrees_dir}")
+        if _holds_changes(repo, path):
+            raise GitError(
+                f"Not replacing the review worktree at {path}: it holds changes or needs a "
+                f"look; remove it (git worktree remove --force {path}) to review again",
+            )
         git(repo, "worktree", "remove", "--force", str(path))
     if path.exists() and any(path.iterdir()):
         raise GitError(f"Worktree folder is in use: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     git(repo, "worktree", "add", "--detach", str(path), commit)
     return path
+
+
+def _holds_changes(repo: Path, path: Path) -> bool:
+    """Whether a registered worktree left by an earlier review, such as one kept with
+    `--keep-worktree`, holds changes someone made in it, or has pointers into the git
+    directory that no longer agree, so needs a look. git runs with the worktree's directory
+    inside the git directory named, not through its `.git` file, which an agent could have
+    pointed at a configuration of its own."""
+    admin = _admin_dir_of(repo, path)
+    if admin is None:
+        return True
+    try:
+        if admin_dir(path) != admin:
+            return True
+    except GitError:
+        return True
+    status = git(
+        repo,
+        f"--git-dir={admin}",
+        f"--work-tree={path}",
+        "status",
+        "--porcelain",
+        "--ignore-submodules=dirty",
+    )
+    return bool(status)
+
+
+def _admin_dir_of(repo: Path, path: Path) -> Path | None:
+    """The directory inside the git directory whose `gitdir` file names the worktree."""
+    folder = common_git_dir(repo) / "worktrees"
+    if not folder.is_dir():
+        return None
+    pointer = path / ".git"
+    for admin in folder.iterdir():
+        try:
+            value = Path((admin / "gitdir").read_text(encoding="utf-8").strip())
+        except OSError:
+            continue
+        if (value if value.is_absolute() else admin / value).resolve() == pointer:
+            return admin.resolve()
+    return None
+
+
+def has_tracked_changes(path: Path) -> bool:
+    """Whether files git tracks were changed or removed; new files, such as caches, are not
+    counted."""
+    return bool(
+        git(path, "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=dirty"),
+    )
+
+
+def remove_untracked(path: Path) -> None:
+    """Removes the files git does not track, ignored ones too, so a command run next sees
+    the checked-out commit and nothing else. Nested repositories are left alone."""
+    git(path, "clean", "-fdxq")
 
 
 def discard_changes(worktree: Path, commit: str) -> None:

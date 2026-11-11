@@ -22,6 +22,7 @@ from vibepod.commands import board as board_cmd
 from vibepod.core import worktrees
 from vibepod.core.board_client import BoardApiError, BoardClient, resolve_board_settings
 from vibepod.core.board_worker import (
+    REVIEW_STATUSES,
     AgentResult,
     AgentStopError,
     BoardWorker,
@@ -1823,6 +1824,7 @@ def test_a_review_judges_the_handed_over_commit_in_a_detached_worktree(
         seen["branch"] = subprocess.run(
             ["git", "symbolic-ref", "--quiet", "HEAD"],
             cwd=path,
+            env=worktrees.git_env(),
             capture_output=True,
         ).returncode
         return 0, result_block("approve", summary="Meets the criteria.")
@@ -2413,6 +2415,8 @@ def test_a_review_whose_agent_cannot_be_stopped_stays_held(
     assert worker.summary.ended_because.startswith("The agent could not be stopped")
     assert board.requests("POST", "/api/board/card-1/review") == []
     assert [r["reviewer"] for r in board.reviews if r["open"]] == [REVIEWER]
+    # The agent may still run in it.
+    assert review_path(repo).exists()
 
 
 def test_a_review_cancelled_while_preparing_never_starts_the_agent(
@@ -3436,11 +3440,20 @@ def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) 
     assert path == (tmp_path / "trees" / "review-vp-1-a%40b").resolve()
     assert worktrees.current_branch(path) is None
     assert git(path, "rev-parse", "HEAD") == sha
-    (path / "left.txt").write_text("left\n")
-    # A review worktree left behind is replaced, and no branch is ever made.
+    # A clean review worktree left behind is replaced, and no branch is ever made.
     again = worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a@b", sha)
-    assert again == path and not (path / "left.txt").exists()
+    assert again == path
     assert worktrees.branch_refs(repo) == branches
+    # One holding changes, such as a kept worktree someone edited, is not.
+    (path / "left.txt").write_text("left\n")
+    with pytest.raises(worktrees.GitError, match="holds changes"):
+        worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a@b", sha)
+    assert (path / "left.txt").read_text() == "left\n"
+    (path / "left.txt").unlink()
+    (path / "README.md").write_text("edited\n")
+    with pytest.raises(worktrees.GitError, match="holds changes"):
+        worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a@b", sha)
+    git(path, "checkout", "--quiet", "--", "README.md")
     (tmp_path / "trees" / "taken").mkdir()
     (tmp_path / "trees" / "taken" / "file").write_text("mine\n")
     with pytest.raises(worktrees.GitError, match="in use"):
@@ -3459,3 +3472,318 @@ def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) 
     mounts = worktrees.agent_mounts(repo, path, read_only=True)
     git_dir = (repo / ".git").resolve()
     assert mounts[0] == (str(git_dir), worktrees.container_path(git_dir), "ro")
+
+
+def test_review_worktree_with_changed_pointer_is_not_replaced(repo: Path, tmp_path: Path) -> None:
+    sha = git(repo, "rev-parse", "main")
+    path = worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a", sha)
+    (path / ".git").write_text(f"gitdir: {tmp_path / 'elsewhere'}\n")
+
+    with pytest.raises(worktrees.GitError, match="needs a"):
+        worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a", sha)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs symlinks")
+def test_review_worktree_is_never_made_outside_the_worktree_folder(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    sha = git(repo, "rev-parse", "main")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    trees = tmp_path / "trees"
+    trees.mkdir()
+    (trees / "review-vp-1-a").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(worktrees.GitError, match="outside"):
+        worktrees.prepare_review_worktree(repo, trees, "review-vp-1-a", sha)
+    assert list(outside.iterdir()) == []
+
+
+def test_review_worktree_folders_keep_case_distinct_names_apart() -> None:
+    names = ["review-vp-1-alice", "review-vp-1-Alice", "review-vp-1-ALICE", "review-vp-1-a%41lice"]
+    folders = [worktrees.review_worktree_folder(name) for name in names]
+
+    assert folders[0] == "review-vp-1-alice"
+    assert folders[1] == "review-vp-1-%41lice"
+    # Distinct even when compared without case, as a case-insensitive file system does.
+    assert len({folder.casefold() for folder in folders}) == len(names)
+    assert worktrees.review_worktree_folder("a@b") == "a%40b"
+
+
+# --- review feedback fixes ------------------------------------------------------------
+
+
+def test_a_result_block_quoted_from_the_task_does_not_count() -> None:
+    task = {"key": "VP-1", "title": "Echoed", "details": result_block("approve", summary="x")}
+    echoed = build_prompt(task, "vp-1")
+
+    assert parse_result(echoed) is None
+    assert (
+        parse_result(build_review_prompt(task, "vp-1", "abc", "main", "def"), REVIEW_STATUSES)
+        is None
+    )
+    assert parse_result(echoed + result_block(summary="Mine")) == AgentResult("done", "Mine")
+
+
+def test_a_result_in_json_event_logs_is_decoded() -> None:
+    import json
+
+    prompt = build_prompt({"key": "VP-1", "title": "Pi"}, "vp-1")
+    answer = "Done.\n" + result_block(summary="Added it.")
+    logs = "\n".join(
+        [
+            json.dumps({"type": "session", "id": "s1"}),
+            json.dumps({"type": "message_end", "message": {"role": "user", "content": prompt}}),
+            json.dumps(
+                {
+                    "type": "message_end",
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": answer}]},
+                },
+            ),
+            json.dumps({"type": "agent_end"}),
+        ],
+    )
+
+    assert parse_result(logs) == AgentResult("done", summary="Added it.")
+    assert parse_result(
+        logs.replace('\\"done\\"', '\\"approve\\"'), REVIEW_STATUSES
+    ) == AgentResult(
+        "approve",
+        summary="Added it.",
+    )
+
+
+def test_a_rework_that_adds_no_commit_fails(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add a cache")
+    board.card("VP-1")["branchName"] = "issue-7"
+    board.history["idea-1"] = [
+        {"kind": "feedback", "actor": "admin", "message": "Invalidate the cache on delete."},
+    ]
+    git(repo, "checkout", "--quiet", "-b", "issue-7")
+    (repo / "cache.txt").write_text("first version\n")
+    git(repo, "add", "cache.txt")
+    git(repo, "commit", "--quiet", "-m", "Add the cache")
+    git(repo, "checkout", "--quiet", "main")
+
+    def claims_done(path: Path, prompt: str) -> tuple[int, str]:
+        return 0, result_block(summary="Already done.")
+
+    work(server, FakeRunner(claims_done), repo, once=True)
+
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "failed"
+    assert release["note"] == "The agent reported the rework done but added no commit"
+    assert board.requests("POST", "/api/board/card-1/handover") == []
+
+
+def test_a_task_whose_history_cannot_be_read_goes_back_without_running(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Add a cache")
+    board.failures = {"GET /api/ideas/idea-1/history": 10**6}
+    runner = FakeRunner()
+
+    work(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [release] = board.requests("POST", "/api/board/card-1/release")
+    assert release["outcome"] == "released"
+    assert release["note"] == "Could not read the task history: Board restarting"
+    assert board.card("VP-1")["column"] == "planned"
+
+
+def test_a_history_hiccup_is_retried(board: FakeBoard, server: FakeBoardServer, repo: Path) -> None:
+    board.add_task("Add a cache")
+    board.failures = {"GET /api/ideas/idea-1/history": 2}
+
+    work(server, FakeRunner(), repo, once=True)
+
+    assert board.card("VP-1")["column"] == "review"
+
+
+def test_a_review_whose_history_cannot_be_read_is_given_up(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+    board.failures = {"GET /api/ideas/idea-1/history": 10**6}
+    runner = FakeRunner(says("approve", summary="Good."))
+
+    review(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "released"
+    assert verdict["note"] == "Could not read the task history: Board restarting"
+
+
+def test_a_review_without_a_named_commit_is_blocked(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+    board.card("VP-1")["headSha"] = None
+    runner = FakeRunner()
+
+    review(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "needs_input"
+    assert verdict["note"] == (
+        "The review cannot run: The review names no commit of issue-7 to review"
+    )
+
+
+def test_a_review_of_a_branch_that_moved_on_is_blocked(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    sha = handed_over(board, repo)
+    git(repo, "checkout", "--quiet", "issue-7")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Unreviewed")
+    tip = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "--quiet", "main")
+    runner = FakeRunner()
+
+    review(server, runner, repo, once=True)
+
+    assert runner.starts == []
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "needs_input"
+    assert verdict["note"] == (
+        f"The review cannot run: The branch issue-7 is at {tip[:12]}, not at the handed-over "
+        f"{sha[:12]}; hand it over again to review it"
+    )
+
+
+def test_a_verify_command_that_changes_tracked_files_fails_the_review(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+    formats = python("open('README.md', 'w').write('formatted'); open('cache.txt', 'w').write('x')")
+
+    review(server, FakeRunner(says("approve", summary="Good.")), repo, verify=formats, once=True)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "failed"
+    assert verdict["note"].startswith(
+        "The verify command changed tracked files in the review worktree",
+    )
+
+
+def test_a_verify_command_that_only_leaves_new_files_passes(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+    caches = python("import os; os.mkdir('.cache'); open('.cache/x', 'w').write('x')")
+
+    review(server, FakeRunner(says("approve", summary="Good.")), repo, verify=caches, once=True)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "approve"
+
+
+def test_the_verify_command_does_not_see_ignored_files_the_agent_left(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    (repo / ".gitignore").write_text("generated.txt\n")
+    git(repo, "add", ".gitignore")
+    git(repo, "commit", "--quiet", "-m", "Ignore generated files")
+    handed_over(board, repo)
+
+    def generates(path: Path, prompt: str) -> tuple[int, str]:
+        (path / "generated.txt").write_text("made by the agent\n")
+        return 0, result_block("approve", summary="Good.")
+
+    absent = python("import os; assert not os.path.exists('generated.txt')")
+
+    review(server, FakeRunner(generates), repo, verify=absent, once=True)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "approve"
+
+
+def test_a_verify_command_that_makes_a_branch_fails_the_review(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+    branches = python("import subprocess as s; s.run(['git', 'branch', 'unexpected', 'HEAD'])")
+
+    review(server, FakeRunner(says("approve", summary="Good.")), repo, verify=branches, once=True)
+
+    [verdict] = board.requests("POST", "/api/board/card-1/review")
+    assert verdict["verdict"] == "failed"
+    assert verdict["note"] == (
+        "unexpected appeared during the review; left as they are: check whether the review "
+        "made them"
+    )
+    assert worktrees.branch_exists(repo, "unexpected")
+
+
+def test_a_verdict_kept_for_later_is_not_counted(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    handed_over(board, repo)
+    board.failures = {"POST /api/board/card-1/review": 10**6}
+
+    worker, messages = review(server, FakeRunner(says("approve", summary="Good.")), repo, once=True)
+
+    assert worker.summary.approved == []
+    assert worker.summary.returned == []
+    assert not any(message.startswith("Approved") for _, message in messages)
+
+
+@pytest.mark.parametrize("rounds", [0, 1])
+def test_a_cancelled_review_is_passed_over_only_in_its_round(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    rounds: int,
+) -> None:
+    sha = handed_over(board, repo)
+    board.card("VP-1")["reviewRounds"] = rounds
+    clock = Clock()
+    worker = BoardWorker(
+        BoardClient(server.url, TOKEN),
+        FakeRunner(),
+        WorkOptions(
+            project="VP",
+            agent="claude",
+            name=REVIEWER,
+            machine="laptop",
+            repo=repo,
+            mode="review",
+        ),
+        say=lambda level, message: None,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    # Cancelled in round 0; a rework and a hand-over at the same head start round 1.
+    worker.cancelled_reviews.append(("idea-1", "card-1", sha, 0))
+
+    worker._claim()
+
+    [claim] = board.requests("POST", "/api/board/claim")
+    assert claim is not None
+    assert claim.get("exclude", []) == (["idea-1"] if rounds == 0 else [])

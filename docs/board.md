@@ -121,7 +121,10 @@ The prompt asks the agent to end every run with a result block:
 ```
 
 `status` is `done`, `needs_input` with a `question`, or `failed` with a
-`reason`. A run whose output has no readable result counts as failed.
+`reason`. Only the block that ends the output counts, so a block quoted from
+the task does not stand in for one; agents that log JSON events, such as Pi,
+have their messages decoded first. A run whose output does not end with a
+readable result counts as failed.
 
 - **Needs input.** When the task is unclear, the agent asks instead of
   guessing. The task is blocked on the board with the question on its card,
@@ -130,7 +133,11 @@ The prompt asks the agent to end every run with a result block:
   run gets the question and the answer in its prompt.
 - **Rework.** When a reviewer sends a task back from Review with feedback, the
   next run continues on the branch the task was handed over on and gets the
-  feedback in its prompt, instead of starting from scratch.
+  feedback in its prompt, instead of starting from scratch. A rework run that
+  adds no commit fails rather than handing the same work over again.
+
+A run needs the task's questions, answers and feedback: when the board cannot
+give the task history, after retries, the task goes back without running.
 
 ## Review workers
 
@@ -173,14 +180,21 @@ For each task, a review worker:
    the claim names the commit the hand-over put up for review.
 2. **Checks out** exactly that commit, detached, in a worktree of its own
    (`<worktree-dir>/review-<key>-<worker>`), so reviewers of one task never
-   share one. Punctuation in worker names is percent-escaped in folder names
-   (for example, `@` becomes `%40`) to keep distinct names distinct.
-   No branch is created or moved. A missing branch or commit
-   blocks the task in Review with the reason.
+   share one. Punctuation and capital letters in worker names are
+   percent-escaped in folder names (for example, `@` becomes `%40` and `A`
+   becomes `%41`) to keep distinct names distinct, also on case-insensitive
+   file systems. No branch is created or moved. A claim without a commit, a
+   missing branch or commit, or a branch that moved on since the hand-over
+   blocks the task in Review with the reason. A review worktree left by an
+   earlier run is replaced only when nothing in it changed; one holding
+   changes, such as a kept worktree you edited, blocks the review until you
+   remove it.
 3. **Runs the agent** with a review prompt: the task's title, description and
    acceptance criteria, its history (questions, answers, earlier feedback and
    reviews), and the base to inspect `git diff <base>...HEAD` and the commit
-   log against. The agent only reads: it must not change files or commit.
+   log against. The agent only reads: it must not change files or commit. A
+   task whose history the board cannot give, after retries, is given back
+   without a review.
 4. **Verifies** with the optional `--verify` command. A failing command always
    sends the task back for rework, with its output as the feedback.
 5. **Sends the verdict** from the agent's result block:
@@ -204,16 +218,20 @@ For each task, a review worker:
 A review must leave the repository as it found it. The agent gets the git
 directory read-only, and if it committed, switched branches, moved refs or
 left changes in its worktree anyway, all of it is thrown away and the review
-fails with that reason. The same check runs again after `--verify`, which runs
-the code under review; files it leaves behind, such as caches, are fine.
+fails with that reason. Before `--verify`, files git does not track, ignored ones
+too, are removed, so the command sees only the reviewed commit. The same check
+runs again after `--verify`, which runs the code under review: new files it
+leaves behind, such as caches, are fine, but changed tracked files, such as
+from a formatter, or new branches and tags fail the review.
 
 When the task moved on during the review, because it was handed over again or
 another reviewer sent it back, the review ends without a verdict. Pause, stop,
 cancel, `--parallel`, the profile lock and usage limits work as for
 implementation workers, and a review the board cannot renew is given up before
 its lease runs out. A polling worker skips a board-cancelled review while the
-task remains in Review at the same head. It can review the task again after
-rework or a handover at a new head. `--branch-template`, `--existing`, `--on-fail` and
+task remains in Review at the same head and in the same review round. It can
+review the task again after rework or a handover at a new head. A verdict the
+board cannot take yet is kept and sent again; it is counted once delivered. `--branch-template`, `--existing`, `--on-fail` and
 `--max-attempts` have no meaning for a review and are refused with
 `--mode review`.
 
