@@ -1,0 +1,1068 @@
+"""Tests for the VibePod Dash integration (core/dash.py)."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import threading
+import urllib.error
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from vibepod.core import dash
+
+DASH_CONFIG: dict[str, Any] = {"dash": {"url": "http://dash.local:8765", "token": "t0ken"}}
+
+
+class _Recorder(BaseHTTPRequestHandler):
+    """Collects every POST body in ``server.received``; answers /healthz."""
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self.path != "/healthz":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok": true}')
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length).decode("utf-8")
+        self.server.received.append((json.loads(body), dict(self.headers)))  # type: ignore[attr-defined]
+        self.send_response(202)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"ok": true}')
+
+    def log_message(self, *args: Any) -> None:
+        """Silence the default stderr access log."""
+
+
+@pytest.fixture
+def dash_server() -> Iterator[Any]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Recorder)
+    server.received = []  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def server_url(server: Any) -> str:
+    return f"http://127.0.0.1:{server.server_address[1]}"
+
+
+@pytest.fixture(autouse=True)
+def _clean_dash_state() -> Iterator[None]:
+    """The warn-once and host-URL caches are process-global."""
+    dash.reset_state()
+    yield
+    dash.reset_state()
+
+
+# -- configuration --------------------------------------------------------
+
+
+def test_no_dashboard_configured_is_a_no_op(tmp_path: Path) -> None:
+    target, env = dash.apply_dash_if_enabled(
+        "claude",
+        tmp_path,
+        tmp_path,
+        {},
+        config_mount_path="/claude",
+        no_dash=False,
+    )
+    assert target is None
+    assert env == {}
+
+
+def test_url_and_token_come_from_config() -> None:
+    assert dash.resolve_url(DASH_CONFIG) == "http://dash.local:8765"
+    assert dash.resolve_token(DASH_CONFIG) == "t0ken"
+
+
+def test_env_overrides_config(monkeypatch) -> None:
+    monkeypatch.setenv("VPDASH_URL", "http://other:9000/")
+    monkeypatch.setenv("VPDASH_TOKEN", "env-token")
+    assert dash.resolve_url(DASH_CONFIG) == "http://other:9000"
+    assert dash.resolve_token(DASH_CONFIG) == "env-token"
+
+
+def test_bare_host_gets_a_scheme() -> None:
+    assert dash.resolve_url({"dash": {"url": "dash.local:8765"}}) == "http://dash.local:8765"
+
+
+def test_disabled_by_config() -> None:
+    assert dash.dash_enabled({}) is True
+    assert dash.dash_enabled({"dash": False}) is False
+    assert dash.dash_enabled({"dash": {"enabled": False, "url": "http://x"}}) is False
+
+
+def test_no_dash_flag_wins(tmp_path: Path) -> None:
+    target, env = dash.apply_dash_if_enabled(
+        "claude",
+        tmp_path,
+        tmp_path,
+        DASH_CONFIG,
+        config_mount_path="/claude",
+        no_dash=True,
+    )
+    assert target is None
+    assert env == {}
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        ("http://localhost:8765", "http://host.docker.internal:8765"),
+        ("http://127.0.0.1:8765", "http://host.docker.internal:8765"),
+        ("http://localhost", "http://host.docker.internal"),
+        ("https://dash.example.com", "https://dash.example.com"),
+        ("http://192.168.1.5:8765", "http://192.168.1.5:8765"),
+    ],
+)
+def test_loopback_urls_are_rewritten_for_the_container(configured: str, expected: str) -> None:
+    assert dash.container_url(configured) == expected
+
+
+def test_container_url_can_be_pinned_for_a_shared_network() -> None:
+    """The dash container on vibepod-network is reachable by name — but only
+    from other containers, so the CLI keeps posting to the host URL."""
+    config = {"dash": {"url": "http://localhost:8765", "container_url": "http://vibepod-dash:8765"}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    assert target.host_url == "http://localhost:8765"
+    assert target.container_url == "http://vibepod-dash:8765"
+    assert dash.container_env(target, "/claude")["VPDASH_URL"] == "http://vibepod-dash:8765"
+
+
+def test_container_url_override_from_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("VPDASH_CONTAINER_URL", "vibepod-dash:8765")
+    assert dash.resolve_container_url({}, "http://localhost:8765") == "http://vibepod-dash:8765"
+
+
+def test_container_url_defaults_to_the_gateway_rewrite() -> None:
+    assert (
+        dash.resolve_container_url({}, "http://localhost:8765")
+        == "http://host.docker.internal:8765"
+    )
+
+
+def test_a_container_only_url_falls_back_to_the_published_port(
+    dash_server: Any,
+    capsys,
+) -> None:
+    """`dash.url: http://vibepod-dash:8765` is what people naturally configure
+    once the board is on the VibePod network; the CLI must still be able to
+    report from the host."""
+    port = dash_server.server_address[1]
+    config = {"dash": {"url": f"http://vibepod-dash.invalid:{port}"}}
+
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    # Agents keep the name they can resolve...
+    assert target.container_url == f"http://vibepod-dash.invalid:{port}"
+    # ...the CLI switches to the loopback address that answered.
+    assert target.host_url == f"http://127.0.0.1:{port}"
+    assert "container-only" in capsys.readouterr().out
+
+    assert dash.report(target, "idle") is True
+    assert dash_server.received[0][0]["state"] == "idle"
+
+
+def test_the_fallback_is_only_used_when_something_answers(capsys) -> None:
+    # Nothing is listening on port 1, so the configured URL is kept and the
+    # failure is reported honestly rather than papered over.
+    url = "http://vibepod-dash.invalid:1"
+    assert dash.usable_host_url(url) == url
+    assert "container-only" not in capsys.readouterr().out
+
+
+def test_a_resolvable_url_is_never_probed(monkeypatch) -> None:
+    def fail(*args: Any, **kwargs: Any) -> bool:
+        raise AssertionError("should not probe a URL whose host resolves")
+
+    monkeypatch.setattr(dash, "_answers", fail)
+    assert dash.usable_host_url("http://localhost:8765") == "http://localhost:8765"
+
+
+def test_report_failures_are_only_warned_about_once(capsys) -> None:
+    target = dash.make_target("claude", Path("/work/proj"), {"dash": {"url": "http://127.0.0.1:1"}})
+    assert target is not None
+    dash.report(target, "idle")
+    first = capsys.readouterr().out
+    dash.report(target, "done")
+    assert first != ""
+    assert capsys.readouterr().out == ""
+
+
+def test_name_resolution_errors_are_recognized() -> None:
+    gai = socket.gaierror(-3, "Temporary failure in name resolution")
+    assert dash.is_name_resolution_error(gai) is True
+    assert dash.is_name_resolution_error(urllib.error.URLError(gai)) is True
+    assert dash.is_name_resolution_error(urllib.error.URLError(ConnectionRefusedError())) is False
+
+
+def test_an_unresolvable_host_explains_itself(capsys) -> None:
+    """What `vp run` printed before this hint existed was just errno -3."""
+    failure = urllib.error.URLError(socket.gaierror(-3, "Temporary failure in name resolution"))
+    dash._warn_once("http://vibepod-dash:8765", "idle", failure)
+
+    out = capsys.readouterr().out
+    assert "vibepod-dash" in out
+    assert "does not resolve" in out
+    assert "dash.container_url" in out
+
+
+def test_agent_id_is_derived_from_the_run() -> None:
+    first = dash.agent_id("claude", Path("/work/proj"), "box", "run1")
+    assert first == dash.agent_id("claude", Path("/work/proj"), "box", "run1")
+    assert first != dash.agent_id("claude", Path("/work/proj"), "box", "run2")
+    assert first != dash.agent_id("claude", Path("/work/other"), "box", "run1")
+    assert first != dash.agent_id("codex", Path("/work/proj"), "box", "run1")
+    assert first != dash.agent_id("claude", Path("/work/proj"), "laptop", "run1")
+
+
+def test_each_run_of_the_same_agent_and_checkout_gets_its_own_card() -> None:
+    first = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
+    second = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
+    assert first is not None and second is not None
+    assert first.run_id and second.run_id
+    assert first.run_id != second.run_id
+    assert first.agent_id != second.agent_id
+    # Same title, though: the board still shows which agent and project it is.
+    assert first.name == second.name
+
+
+def test_a_given_run_id_reuses_its_card() -> None:
+    first = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG, run_id="doctor")
+    again = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG, run_id="doctor")
+    assert first is not None and again is not None
+    assert first.agent_id == again.agent_id
+
+
+def test_launch_labels_let_other_commands_find_the_runs_card() -> None:
+    target = dash.make_target("codex", Path("/work/proj"), DASH_CONFIG)
+    assert target is not None
+
+    rebuilt = dash.target_from_labels(dash.launch_labels(target), DASH_CONFIG)
+    assert rebuilt is not None
+    assert (rebuilt.agent, rebuilt.agent_id, rebuilt.run_id) == (
+        target.agent,
+        target.agent_id,
+        target.run_id,
+    )
+
+
+def test_agent_identity_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setenv("VPDASH_AGENT_ID", "mine")
+    monkeypatch.setenv("VPDASH_AGENT_NAME", "my agent")
+    target = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
+    assert target is not None
+    assert (target.agent_id, target.name) == ("mine", "my agent")
+    # Pinned runs still tell themselves apart.
+    again = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
+    assert again is not None
+    assert again.agent_id == "mine"
+    assert again.run_id != target.run_id
+
+
+def test_display_name_marks_vibepod_runs() -> None:
+    assert dash.display_name("claude", Path("/work/vibepod-cli")) == "vp:claude · vibepod-cli"
+
+
+def test_container_env_carries_identity_and_log(monkeypatch) -> None:
+    monkeypatch.setenv("VPDASH_HOST", "box")
+    target = dash.make_target("claude", Path("/work/proj"), DASH_CONFIG)
+    assert target is not None
+    env = dash.container_env(target, "/claude")
+    assert env["VPDASH_URL"] == "http://dash.local:8765"
+    assert env["VPDASH_AGENT"] == "claude"
+    assert env["VPDASH_AGENT_NAME"] == "vp:claude · proj"
+    assert env["VPDASH_HOST"] == "box"
+    assert env["VPDASH_LOG"] == "/claude/dash-hook.log"
+    assert env["VPDASH_TOKEN"] == "t0ken"
+
+
+def test_container_env_omits_an_unset_token() -> None:
+    target = dash.make_target("claude", Path("/work/proj"), {"dash": {"url": "http://d:1"}})
+    assert target is not None
+    assert "VPDASH_TOKEN" not in dash.container_env(target, "/claude")
+
+
+# -- file sync ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("agent", sorted(dash.BUILTIN_INTEGRATIONS))
+def test_builtin_files_are_copied_and_executable(agent: str, tmp_path: Path) -> None:
+    synced = dash.sync_dash_files(agent, tmp_path, {})
+    assert synced == len(dash.BUILTIN_INTEGRATIONS[agent])
+    for _, dest_rel in dash.BUILTIN_INTEGRATIONS[agent]:
+        dest = tmp_path / dest_rel
+        assert dest.is_file()
+        assert os.access(dest, os.X_OK)
+    # The hook always sits next to the reporter it calls.
+    hooks = {(tmp_path / dest).parent for _, dest in dash.BUILTIN_INTEGRATIONS[agent]}
+    assert len(hooks) == 1
+
+
+def test_packaged_resources_exist_for_every_integration() -> None:
+    root = dash.resource_root()
+    for entries in dash.BUILTIN_INTEGRATIONS.values():
+        for resource_rel, _ in entries:
+            assert (root / resource_rel).is_file(), resource_rel
+
+
+def test_codex_uses_vibepod_owned_lifecycle_adapter() -> None:
+    assert dash.BUILTIN_INTEGRATIONS["codex"] == [
+        ("dash/vpdash-report.sh", ".codex/vpdash-report.sh"),
+        ("codex/dash-agent-state.sh", ".codex/dash-agent-state.sh"),
+    ]
+
+
+def test_custom_integration_entries_are_copied(tmp_path: Path) -> None:
+    source = tmp_path / "mine.sh"
+    source.write_text("#!/bin/sh\n", encoding="utf-8")
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    config = {"dash": {"integrations": {"gemini": [{"source": str(source), "dest": "h/mine.sh"}]}}}
+
+    assert dash.sync_dash_files("gemini", config_dir, config) == 1
+    assert (config_dir / "h" / "mine.sh").is_file()
+
+
+def test_integration_dest_cannot_escape_the_config_dir(tmp_path: Path) -> None:
+    source = tmp_path / "mine.sh"
+    source.write_text("#!/bin/sh\n", encoding="utf-8")
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    config = {
+        "dash": {"integrations": {"gemini": [{"source": str(source), "dest": "../escaped.sh"}]}},
+    }
+
+    assert dash.sync_dash_files("gemini", config_dir, config) == 0
+    assert not (tmp_path / "escaped.sh").exists()
+
+
+# -- hook registration ----------------------------------------------------
+
+
+def test_claude_hooks_registered_once(tmp_path: Path) -> None:
+    dash.register_claude_hooks(tmp_path)
+    dash.register_claude_hooks(tmp_path)
+
+    settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    for event in dash._CLAUDE_EVENTS:
+        commands = [
+            hook["command"] for entry in settings["hooks"][event] for hook in entry["hooks"]
+        ]
+        assert commands == ['"$CLAUDE_CONFIG_DIR"/hooks/dash-agent-state.sh']
+
+
+def test_claude_hooks_keep_existing_entries(tmp_path: Path) -> None:
+    existing = {
+        "hooks": {
+            "Stop": [{"hooks": [{"type": "command", "command": "mine.sh"}]}],
+        },
+        "env": {"FOO": "bar"},
+    }
+    (tmp_path / "settings.json").write_text(json.dumps(existing), encoding="utf-8")
+
+    dash.register_claude_hooks(tmp_path)
+
+    settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert settings["env"] == {"FOO": "bar"}
+    stop_commands = [
+        hook["command"] for entry in settings["hooks"]["Stop"] for hook in entry["hooks"]
+    ]
+    assert stop_commands[0] == "mine.sh"
+    assert any("dash-agent-state.sh" in command for command in stop_commands)
+
+
+def test_claude_hooks_survive_unparsable_settings(tmp_path: Path) -> None:
+    (tmp_path / "settings.json").write_text("{not json", encoding="utf-8")
+    dash.register_claude_hooks(tmp_path)
+    assert (tmp_path / "settings.json").read_text(encoding="utf-8") == "{not json"
+
+
+def test_codex_lifecycle_hooks_are_registered_once(tmp_path: Path) -> None:
+    dash.register_codex_hooks(tmp_path)
+    dash.register_codex_hooks(tmp_path)
+
+    data = json.loads((tmp_path / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    for groups in data["hooks"].values():
+        commands = [hook["command"] for group in groups for hook in group["hooks"]]
+        assert commands == [dash.CODEX_HOOK_COMMAND]
+
+
+def test_codex_lifecycle_hooks_coexist_with_herdr(tmp_path: Path) -> None:
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    hooks_path.parent.mkdir(parents=True)
+    hooks_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "/config/.codex/herdr-agent-state.sh",
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    dash.register_codex_hooks(tmp_path)
+
+    data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    commands = [hook["command"] for group in data["hooks"]["Stop"] for hook in group["hooks"]]
+    assert commands == ["/config/.codex/herdr-agent-state.sh", dash.CODEX_HOOK_COMMAND]
+
+
+# -- reporting ------------------------------------------------------------
+
+
+def test_report_posts_the_agent_state(dash_server: Any, monkeypatch) -> None:
+    monkeypatch.setenv("VPDASH_HOST", "box")
+    config = {"dash": {"url": server_url(dash_server), "token": "t0ken"}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+
+    assert dash.report(target, "working", event="run", message="hi", cwd="/work/proj") is True
+
+    payload, headers = dash_server.received[0]
+    assert payload["state"] == "working"
+    assert payload["agent"] == "claude"
+    assert payload["agent_id"] == target.agent_id
+    assert payload["name"] == "vp:claude · proj"
+    assert payload["message"] == "hi"
+    assert payload["host"] == "box"
+    assert headers["Authorization"] == "Bearer t0ken"
+
+
+def test_report_survives_an_unreachable_dashboard(capsys) -> None:
+    # Port 1 refuses connections everywhere; nothing must be raised.
+    target = dash.make_target("claude", Path("/work/proj"), {"dash": {"url": "http://127.0.0.1:1"}})
+    assert target is not None
+    assert dash.report(target, "done") is False
+    assert "dash" in capsys.readouterr().out.lower()
+
+
+def test_report_can_stay_quiet(capsys) -> None:
+    target = dash.make_target("claude", Path("/work/proj"), {"dash": {"url": "http://127.0.0.1:1"}})
+    assert target is not None
+    assert dash.report(target, "done", quiet=True) is False
+    assert capsys.readouterr().out == ""
+
+
+def test_apply_wires_env_and_hooks(dash_server: Any, tmp_path: Path) -> None:
+    config = {"dash": {"url": server_url(dash_server)}}
+    target, env = dash.apply_dash_if_enabled(
+        "claude",
+        tmp_path,
+        Path("/work/proj"),
+        config,
+        config_mount_path="/claude",
+        no_dash=False,
+    )
+    assert target is not None
+    # The CLI keeps the loopback URL; the container gets the gateway one.
+    assert target.host_url == server_url(dash_server)
+    port = dash_server.server_address[1]
+    assert env["VPDASH_URL"] == f"http://host.docker.internal:{port}"
+    assert (tmp_path / "hooks" / "dash-agent-state.sh").is_file()
+    assert (tmp_path / "hooks" / "vpdash-report.sh").is_file()
+    settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert len(settings["hooks"]) == len(dash._CLAUDE_EVENTS)
+
+
+def test_target_from_labels_round_trip(dash_server: Any) -> None:
+    config = {"dash": {"url": server_url(dash_server)}}
+    labels = {dash.AGENT_LABEL: "codex", dash.AGENT_ID_LABEL: "abc123"}
+
+    target = dash.target_from_labels(labels, config)
+    assert target is not None
+    assert (target.agent, target.agent_id) == ("codex", "abc123")
+    # No name: a stop report must not rename the card on the board.
+    assert target.name == ""
+
+
+def test_target_from_labels_needs_both_labels() -> None:
+    assert dash.target_from_labels({dash.AGENT_LABEL: "codex"}, DASH_CONFIG) is None
+    assert dash.target_from_labels({}, DASH_CONFIG) is None
+
+
+def test_stop_reports_done_from_container_labels(dash_server: Any, monkeypatch) -> None:
+    from vibepod.commands import stop as stop_module
+
+    monkeypatch.setattr(
+        stop_module,
+        "get_config",
+        lambda: {"dash": {"url": server_url(dash_server)}},
+    )
+
+    class FakeContainer:
+        labels = {
+            "vibepod.agent": "codex",
+            dash.AGENT_LABEL: "codex",
+            dash.AGENT_ID_LABEL: "abc123",
+        }
+
+    stop_module._release_agent_entries([FakeContainer()])
+
+    payload, _ = dash_server.received[0]
+    assert payload["state"] == "done"
+    assert payload["agent_id"] == "abc123"
+    assert "name" not in payload
+
+
+def test_stop_ignores_containers_without_dash_labels(dash_server: Any, monkeypatch) -> None:
+    from vibepod.commands import stop as stop_module
+
+    monkeypatch.setattr(
+        stop_module,
+        "get_config",
+        lambda: {"dash": {"url": server_url(dash_server)}},
+    )
+
+    class FakeContainer:
+        labels = {"vibepod.agent": "codex"}
+
+    stop_module._release_agent_entries([FakeContainer()])
+    assert dash_server.received == []
+
+
+@pytest.mark.skipif(
+    shutil.which("curl") is None or os.name == "nt",
+    reason="the vendored hooks need POSIX sh and curl",
+)
+def test_vendored_claude_hook_reports_over_http(dash_server: Any, tmp_path: Path) -> None:
+    """Run the injected hook exactly as the container would, minus Docker."""
+    config = {"dash": {"url": server_url(dash_server), "token": "t0ken"}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    dash.sync_dash_files("claude", tmp_path, {})
+
+    env = {
+        **os.environ,
+        # The config dir stands in for the container's config mount, so
+        # VPDASH_LOG lands next to the hooks the same way it does in a run.
+        **dash.container_env(target, str(tmp_path)),
+        # The hook runs on this host, so it needs the host-side URL.
+        "VPDASH_URL": server_url(dash_server),
+    }
+    payload = json.dumps(
+        {
+            "hook_event_name": "Notification",
+            "session_id": "s1",
+            "cwd": "/work/proj",
+            "message": "Claude needs your permission to run Bash",
+        },
+    )
+    subprocess.run(
+        [str(tmp_path / "hooks" / "dash-agent-state.sh")],
+        input=payload,
+        text=True,
+        env=env,
+        check=True,
+        timeout=30,
+    )
+
+    body, headers = dash_server.received[0]
+    assert body["state"] == "blocked"
+    assert body["message"] == "Claude needs your permission to run Bash"
+    assert body["agent"] == "claude"
+    assert body["agent_id"] == target.agent_id
+    assert body["name"] == "vp:claude · proj"
+    assert headers["Authorization"] == "Bearer t0ken"
+    # The trace log `vp doctor dash` reads back.
+    assert "state=blocked" in (tmp_path / "dash-hook.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    shutil.which("curl") is None or os.name == "nt",
+    reason="the lifecycle adapter needs POSIX sh and curl",
+)
+@pytest.mark.parametrize(
+    ("event", "state", "message"),
+    [
+        ("SessionStart", "idle", "session started"),
+        ("UserPromptSubmit", "working", "fix it"),
+        ("PreToolUse", "working", "Bash"),
+        ("PostToolUse", "working", "Bash"),
+        ("PermissionRequest", "blocked", "run the build"),
+        ("Stop", "idle", "finished this turn"),
+        ("Interrupt", "idle", "turn interrupted"),
+        ("SessionEnd", "done", "session ended"),
+    ],
+)
+def test_codex_lifecycle_hook_reports_over_http(
+    event: str,
+    state: str,
+    message: str,
+    dash_server: Any,
+    tmp_path: Path,
+) -> None:
+    config = {"dash": {"url": server_url(dash_server), "token": "t0ken"}}
+    target = dash.make_target("codex", Path("/work/proj"), config)
+    assert target is not None
+    dash.sync_dash_files("codex", tmp_path, {})
+    payload = json.dumps(
+        {
+            "hook_event_name": event,
+            "session_id": "s1",
+            "cwd": "/work/proj",
+            "prompt": "fix it",
+            "tool_name": "Bash",
+            "tool_input": {"description": "run the build"},
+            "last_assistant_message": "finished this turn",
+        },
+    )
+
+    proc = subprocess.run(
+        [str(tmp_path / ".codex" / "dash-agent-state.sh")],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            **dash.container_env(target, str(tmp_path)),
+            "VPDASH_URL": server_url(dash_server),
+        },
+        check=True,
+        timeout=30,
+    )
+
+    assert proc.stdout == ""
+    body, headers = dash_server.received[0]
+    assert body["state"] == state
+    assert body["event"] == event
+    assert body["message"] == message
+    assert body["session_id"] == "s1"
+    assert headers["Authorization"] == "Bearer t0ken"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the lifecycle adapter needs POSIX sh")
+@pytest.mark.parametrize(
+    ("event", "state", "message"),
+    [
+        ("SessionStart", "idle", "session started"),
+        ("UserPromptSubmit", "working", "fix it"),
+        ("PreToolUse", "working", "Bash"),
+        ("PostToolUse", "working", "Bash"),
+        ("PermissionRequest", "blocked", "run the build"),
+        ("Stop", "idle", "finished this turn"),
+        ("Interrupt", "idle", "turn interrupted"),
+        ("SessionEnd", "done", "session ended"),
+    ],
+)
+def test_codex_lifecycle_adapter_maps_reporter_arguments(
+    event: str,
+    state: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    dash.sync_dash_files("codex", tmp_path, {})
+    capture = tmp_path / "args.txt"
+    reporter = tmp_path / ".codex" / "vpdash-report.sh"
+    reporter.write_text(
+        '#!/bin/sh\nfor arg do printf "%s\\n" "$arg"; done >"$CAPTURE"\n',
+        encoding="utf-8",
+    )
+    reporter.chmod(0o755)
+    payload = json.dumps(
+        {
+            "hook_event_name": event,
+            "session_id": "s1",
+            "cwd": "/work/proj",
+            "prompt": "fix it",
+            "tool_name": "Bash",
+            "tool_input": {"description": "run the build"},
+            "last_assistant_message": "finished this turn",
+        },
+    )
+
+    proc = subprocess.run(
+        ["sh", str(tmp_path / ".codex" / "dash-agent-state.sh")],
+        input=payload,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ["PATH"],
+            "CAPTURE": str(capture),
+            "VPDASH_URL": "http://dash.invalid",
+        },
+        check=True,
+        timeout=15,
+    )
+
+    args = capture.read_text(encoding="utf-8").splitlines()
+    values = dict(zip(args[::2], args[1::2], strict=True))
+    assert proc.stdout == ""
+    assert values["--state"] == state
+    assert values["--event"] == event
+    assert values["--message"] == message
+    assert values["--session"] == "s1"
+    assert values["--cwd"] == "/work/proj"
+
+
+# -- doctor ---------------------------------------------------------------
+
+
+def test_doctor_detects_complete_codex_lifecycle_registration(tmp_path: Path) -> None:
+    from vibepod.commands.doctor import _dash_registration
+
+    hooks_path = tmp_path / ".codex" / "hooks.json"
+    assert _dash_registration("codex", tmp_path) == "MISSING hooks.json"
+
+    hooks_path.parent.mkdir(parents=True)
+    hooks_path.write_text("{broken", encoding="utf-8")
+    assert _dash_registration("codex", tmp_path) == "INVALID hooks.json"
+
+    hooks_path.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+    assert _dash_registration("codex", tmp_path) == "MISSING handler"
+
+    dash.register_codex_hooks(tmp_path)
+    assert _dash_registration("codex", tmp_path) == "hooks.json"
+
+
+def test_doctor_dash_needs_a_url(monkeypatch, tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from vibepod.cli import app
+
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    result = CliRunner().invoke(app, ["doctor", "dash"])
+    assert result.exit_code == 1
+    assert "no dashboard URL" in result.output
+
+
+def test_doctor_dash_summarizes_every_agent(monkeypatch, tmp_path: Path, dash_server) -> None:
+    from typer.testing import CliRunner
+
+    from vibepod.cli import app
+    from vibepod.constants import SUPPORTED_AGENTS
+
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VPDASH_URL", server_url(dash_server))
+
+    result = CliRunner().invoke(app, ["doctor", "dash"])
+    output = result.output
+    # The reachability probe hits /healthz, which the recorder does not serve;
+    # the summary must still be printed.
+    for agent in SUPPORTED_AGENTS:
+        assert agent in output
+    assert "dash integration per agent" in output
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("missing", "MISSING hooks.json"),
+        ("malformed", "INVALID hooks.json"),
+        ("handler-absent", "MISSING handler"),
+        ("registered", "hooks.json"),
+    ],
+)
+def test_doctor_dash_summary_distinguishes_codex_hook_states(
+    status: str,
+    expected: str,
+    monkeypatch,
+    tmp_path: Path,
+    dash_server,
+) -> None:
+    from typer.testing import CliRunner
+
+    from vibepod.cli import app
+
+    config_dir = tmp_path / "agents" / "codex"
+    hooks_path = config_dir / ".codex" / "hooks.json"
+    if status != "missing":
+        hooks_path.parent.mkdir(parents=True)
+        content = "{broken" if status == "malformed" else json.dumps({"hooks": {}})
+        hooks_path.write_text(content, encoding="utf-8")
+    if status == "registered":
+        dash.register_codex_hooks(config_dir)
+
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("VPDASH_URL", server_url(dash_server))
+
+    result = CliRunner().invoke(app, ["doctor", "dash"])
+    assert result.exit_code == 0
+    assert expected in result.output
+
+
+def test_run_and_task_expose_the_opt_out() -> None:
+    from typer.testing import CliRunner
+
+    from vibepod.cli import app
+
+    runner = CliRunner()
+    for args in (["run", "--help"], ["task", "create", "--help"]):
+        # Rich colors help on CI (GITHUB_ACTIONS), splitting option names with ANSI codes
+        output = re.sub(r"\x1b\[[0-9;]*m", "", runner.invoke(app, args).output)
+        assert "--no-dash" in output
+
+
+def test_a_rejected_token_says_where_to_find_the_right_one(capsys) -> None:
+    rejection = urllib.error.HTTPError("http://d:8765", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
+    dash._warn_once("http://d:8765", "idle", rejection)
+
+    out = capsys.readouterr().out
+    assert "rejected the token" in out
+    assert "VPDASH_TOKEN" in out
+    assert "ingest token" in out
+
+
+def test_details_drops_unset_fields_and_stringifies() -> None:
+    built = dash.details(
+        workspace=Path("/work/proj"),
+        image="vibepod/claude:latest",
+        profile=None,
+        container="",
+        task=42,
+    )
+    assert built == {
+        "workspace": str(Path("/work/proj")),
+        "image": "vibepod/claude:latest",
+        "task": "42",
+    }
+
+
+def test_report_carries_the_run_details(dash_server: Any) -> None:
+    config = {"dash": {"url": server_url(dash_server)}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+
+    assert dash.report(
+        target,
+        "working",
+        cwd="/work/proj",
+        data=dash.details(
+            workspace=Path("/work/proj"),
+            image="vibepod/claude:latest",
+            profile="work",
+            container="vibepod-claude-ab12cd34",
+            vibepod="0.21.0",
+        ),
+    )
+
+    payload, _ = dash_server.received[0]
+    assert payload["data"]["image"] == "vibepod/claude:latest"
+    assert payload["data"]["profile"] == "work"
+    assert payload["data"]["container"] == "vibepod-claude-ab12cd34"
+    assert payload["data"]["workspace"] == str(Path("/work/proj"))
+
+
+def test_report_omits_an_empty_data_block(dash_server: Any) -> None:
+    config = {"dash": {"url": server_url(dash_server)}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    assert dash.report(target, "idle", data=dash.details(profile=None))
+    assert "data" not in dash_server.received[0][0]
+
+
+# -- finish reported once, when the task ends ----------------------------------
+
+
+def test_a_runs_finish_is_reported_only_once(dash_server: Any) -> None:
+    target = dash.make_target(
+        "claude",
+        Path("/work/proj"),
+        {"dash": {"url": server_url(dash_server)}},
+    )
+    assert target is not None
+
+    assert dash.report_finished(target, "done", event="container.stop") is True
+    assert dash.report_finished(target, "error", event="task.finished") is False
+
+    assert [payload["state"] for payload, _ in dash_server.received] == ["done"]
+
+
+def test_finishes_of_two_runs_sharing_a_pinned_card_both_report(
+    dash_server: Any,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VPDASH_AGENT_ID", "pinned")
+    config = {"dash": {"url": server_url(dash_server)}}
+    first = dash.make_target("claude", Path("/work/proj"), config)
+    second = dash.make_target("claude", Path("/work/proj"), config)
+    assert first is not None and second is not None
+
+    assert dash.report_finished(first, "done") is True
+    assert dash.report_finished(second, "done") is True
+
+
+class _ExitingTaskContainer:
+    """A task container whose `docker wait` returns once the agent exited."""
+
+    def __init__(self, labels: dict[str, str], exit_code: int = 0) -> None:
+        self.labels = labels
+        self.status = "running"
+        self.attrs: dict[str, Any] = {"State": {"Status": "running"}}
+        self.exit_code = exit_code
+        self.waited: list[dict[str, Any]] = []
+
+    def wait(self, **kwargs: Any) -> dict[str, Any]:
+        self.waited.append(kwargs)
+        self.exit()
+        return {"StatusCode": self.exit_code}
+
+    def exit(self) -> None:
+        self.status = "exited"
+        self.attrs = {
+            "State": {
+                "Status": "exited",
+                "ExitCode": self.exit_code,
+                "FinishedAt": "2026-10-03T10:00:00Z",
+            },
+        }
+
+    def reload(self) -> None:
+        pass
+
+    def stop(self, timeout: int = 10) -> None:
+        self.exit_code = 137
+        self.exit()
+
+
+def _task_with_dash_container(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+    exit_code: int = 0,
+) -> tuple[Any, Any, _ExitingTaskContainer]:
+    from vibepod.commands import task as task_cmd
+    from vibepod.core.tasks import TaskStore
+
+    config = {"dash": {"url": server_url(dash_server)}}
+    target = dash.make_target("claude", Path("/work/proj"), config)
+    assert target is not None
+    container = _ExitingTaskContainer(dash.launch_labels(target), exit_code)
+
+    store = TaskStore(tmp_path / "tasks.db")
+    record = store.create(
+        agent="claude",
+        prompt="do it",
+        workspace="/work/proj",
+        container_id="cid",
+        container_name="vibepod-task-cid",
+        image="vibepod/claude:latest",
+        vibepod_version="0.0.0",
+    )
+
+    class _Manager:
+        def get_container(self, name_or_id: str) -> _ExitingTaskContainer:
+            assert name_or_id == "cid"
+            return container
+
+    monkeypatch.setattr(task_cmd, "_task_store", lambda: store)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Manager())
+    monkeypatch.setattr(task_cmd, "get_config", lambda: config)
+    return store, record, container
+
+
+@pytest.mark.parametrize(("exit_code", "state"), [(0, "done"), (3, "error")])
+def test_the_exit_watcher_reports_a_task_when_its_container_exits(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+    exit_code: int,
+    state: str,
+) -> None:
+    from vibepod.commands import task as task_cmd
+
+    store, record, container = _task_with_dash_container(
+        tmp_path,
+        monkeypatch,
+        dash_server,
+        exit_code,
+    )
+
+    task_cmd._watch_task_exit(record.id, sleep=lambda seconds: None)
+
+    assert container.waited == [{"condition": "not-running", "timeout": None}]
+    assert store.get(record.id).status == ("completed" if exit_code == 0 else "failed")
+    [(payload, _)] = dash_server.received
+    assert payload["state"] == state
+    assert payload["event"] == "task.finished"
+
+
+def test_a_watched_task_is_not_reported_again_by_later_syncs_or_stop(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+) -> None:
+    from vibepod.commands import stop as stop_module
+    from vibepod.commands import task as task_cmd
+
+    store, record, container = _task_with_dash_container(tmp_path, monkeypatch, dash_server)
+    monkeypatch.setattr(stop_module, "get_config", task_cmd.get_config)
+    task_cmd._watch_task_exit(record.id, sleep=lambda seconds: None)
+
+    # The lazy path, as `vp task list` runs it on a record it has not seen
+    # finish (e.g. a second, racing watcher), and a later `vp stop`.
+    stale = store.update(record.id, status="running")
+    assert stale is not None
+    task_cmd._record_with_container_state(store, stale, container.attrs["State"], container)
+    stop_module._release_agent_entries([container])
+
+    assert len(dash_server.received) == 1
+
+
+def test_a_timed_out_task_is_reported_as_timed_out_not_as_its_exit(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+) -> None:
+    from vibepod.commands import task as task_cmd
+
+    store, record, container = _task_with_dash_container(tmp_path, monkeypatch, dash_server)
+    container.wait = lambda **kwargs: {"StatusCode": 137}  # type: ignore[method-assign]
+
+    task_cmd._enforce_task_timeout(record.id, 1, sleep=lambda seconds: None)
+    task_cmd._watch_task_exit(record.id, sleep=lambda seconds: None)
+
+    [(payload, _)] = dash_server.received
+    assert payload["state"] == "error"
+    assert payload["message"] == "task timed out"
+
+
+def test_the_exit_watcher_leaves_a_task_without_a_container_to_the_lazy_sync(
+    tmp_path: Path,
+    monkeypatch,
+    dash_server: Any,
+) -> None:
+    from vibepod.commands import task as task_cmd
+    from vibepod.core.docker import DockerClientError
+
+    store, record, _ = _task_with_dash_container(tmp_path, monkeypatch, dash_server)
+
+    class _Gone:
+        def get_container(self, name_or_id: str) -> Any:
+            raise DockerClientError("gone")
+
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: _Gone())
+    task_cmd._watch_task_exit(record.id, sleep=lambda seconds: None)
+
+    assert store.get(record.id).status == "running"
+    assert dash_server.received == []

@@ -169,6 +169,9 @@ class DockerAgentRunner:
                 env=self.env,
                 network=self.network,
                 no_overlay=self.no_overlay,
+                # Dash cards cover `vp run` and `vp task create`: the worker follows its
+                # tasks itself and would leave a card without a finish report.
+                no_dash=True,
                 ikwid=self.ikwid,
                 profile=self.profile,
                 provider_names=self.provider_names,
