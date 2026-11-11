@@ -312,6 +312,27 @@ def test_bind_mode_never_relabels_inside_system_trees(monkeypatch, tmp_path: Pat
 
 
 @posix_paths
+def test_bind_mode_never_relabels_on_a_read_only_filesystem(monkeypatch, tmp_path: Path) -> None:
+    """A read-only share (Lima's host home, say) cannot take a label: `z` would fail the start."""
+    _enforcing_selinux(monkeypatch, tmp_path)
+    share = tmp_path / "share"
+    share.mkdir()
+    real_statvfs = os.statvfs
+
+    def statvfs(path):
+        result = real_statvfs(path)
+        if Path(path) == share:
+            return type("_Stat", (), {"f_flag": result.f_flag | os.ST_RDONLY})()
+        return result
+
+    monkeypatch.setattr(docker_mod.os, "statvfs", statvfs)
+
+    assert bind_mode(share, "ro") == "ro"
+    assert bind_mode(tmp_path) == "rw,z"
+    assert str(share) not in docker_mod._selinux_notices.relabeled
+
+
+@posix_paths
 def test_run_agent_relabels_binds_on_selinux_host(tmp_path: Path, monkeypatch) -> None:
     _enforcing_selinux(monkeypatch, tmp_path)
     client = _AcpLowLevelClient()

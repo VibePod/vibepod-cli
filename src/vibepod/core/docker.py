@@ -141,6 +141,14 @@ def _selinux_enforcing() -> bool:
         return False
 
 
+def _on_read_only_fs(path: Path) -> bool:
+    try:
+        flags = os.statvfs(path).f_flag
+    except (OSError, AttributeError):  # missing path, or no statvfs (Windows)
+        return False
+    return bool(flags & getattr(os, "ST_RDONLY", 1))
+
+
 def selinux_relabel_enabled() -> bool:
     """Whether the user opted into relabeling (`selinux_relabel` / VP_SELINUX_RELABEL)."""
     from vibepod.core.config import get_config
@@ -166,8 +174,9 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
     `selinux_relabel` is enabled; `report_selinux_relabel` tells the user
     either way. Only call this for mounts VibePod owns: relabeling a user's own
     volume (say `~/.ssh`) would break the host services that read it. Named
-    volumes, an explicit `z`/`Z`, the home or system dirs, and anything under
-    system trees such as `/etc` or `/usr` are left as they are.
+    volumes, an explicit `z`/`Z`, the home or system dirs, anything under
+    system trees such as `/etc` or `/usr`, and paths on a read-only filesystem
+    are left as they are.
     """
     if "/" not in str(host_path) or {"z", "Z"} & set(mode.split(",")):
         return mode
@@ -183,6 +192,10 @@ def bind_mode(host_path: str | Path, mode: str = "rw") -> str:
     for candidate in (given, path):
         if any(root in candidate.parents for root in _SELINUX_PROTECTED_TREES):
             return mode
+    if _on_read_only_fs(path):
+        # The engine cannot write the label there (a VM's read-only host share, say) and
+        # refuses to start the container: mount it as it is.
+        return mode
     if str(given) not in _selinux_notices.relabeled:
         _selinux_notices.relabeled.append(str(given))
     return f"{mode},z"
@@ -821,7 +834,7 @@ class DockerManager:
             from vibepod.utils.console import warning
 
             warning(
-                f"Not relabeling {workspace} for SELinux (home or system dir); "
+                f"Not relabeling {workspace} for SELinux (home, system or read-only dir); "
                 "the agent may be unable to access it.",
             )
         volumes: list[str] = [

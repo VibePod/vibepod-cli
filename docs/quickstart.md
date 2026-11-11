@@ -134,7 +134,9 @@ a project you did not write. It still never relabels:
 - anything under system trees such as `/etc` or `/usr`;
 - your own `agents.<agent>.volumes` / `-v` mounts — add `z`/`Z` to their mode
   yourself (see [Mounting volumes](configuration.md#mounting-volumes));
-- host-owned files such as the herdr binary and socket or the X11 socket.
+- host-owned files such as the herdr binary and socket or the X11 socket;
+- anything on a read-only filesystem, such as a VM's read-only share of the
+  host home, where the engine could not write the label anyway.
 
 Detection reads `/sys/fs/selinux/enforce` on the machine running `vp`, so a
 remote `DOCKER_HOST` whose engine runs on a different (SELinux) host is not
