@@ -23,6 +23,7 @@ from vibepod.commands import (
     stop,
     task,
     update,
+    usage,
 )
 from vibepod.compat import install_python314_http_client_flush_patch
 from vibepod.constants import AGENT_SHORTCUTS, LEGACY_AGENT_IDS, SUPPORTED_AGENTS
@@ -175,6 +176,7 @@ app.add_typer(doctor.app, name="doctor")
 app.add_typer(skills.app, name="skills")
 app.add_typer(task.app, name="task")
 app.add_typer(board.app, name="board")
+app.add_typer(usage.app, name="usage")
 
 
 def _register_run_alias(command_name: str, agent_name: str) -> None:
