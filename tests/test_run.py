@@ -4510,7 +4510,11 @@ def test_run_workspace_system_path_rejects_volume_at_same_target(
     )
 
     assert result.exit_code != 0
-    assert "already mounted by VibePod" in result.output
+    # The message embeds the temp path, so Rich wraps the error panel wherever
+    # that path's length puts the 80-column edge (mid-phrase under macOS's
+    # /private/var/folders/...). Match on the de-styled, unwrapped text.
+    plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "already mounted by VibePod" in " ".join(plain_output.replace("│", " ").split())
     assert stub.run_kwargs is None
 
 
