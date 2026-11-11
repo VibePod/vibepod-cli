@@ -918,6 +918,55 @@ vp run codex login --device-auth
 vp run codex login --with-api-key
 ```
 
+#### Remote control (experimental)
+
+`--remote-control` makes the Codex session reachable from the **Codex** tab of
+the ChatGPT app on your phone while it keeps running in the container. It
+wraps Codex's experimental
+[`codex remote-control`](https://learn.chatgpt.com/docs/developer-commands#codex-remote-control)
+command:
+
+```bash
+vp run codex --pair              # first time: also print a pairing code
+vp run codex --remote-control    # later runs
+vp run codex --remote-control -d # in the background; `vp attach` to use it locally
+```
+
+After the container starts, VibePod runs `codex remote-control` inside it as
+the agent user. That starts Codex's background app-server and turns remote
+control on for this container only. Nothing is saved, so other
+`vp run codex` sessions stay local. The connection goes out to OpenAI's relay,
+so no ports are published, and remote control ends when the container stops.
+The container gets the hostname `vibepod-<project>`, which is how the machine
+is listed on the phone.
+
+**Pairing.** Each phone pairs once. `--pair` (which implies
+`--remote-control`) prints a short-lived code. In the ChatGPT app, open
+**Codex**, add a computer, choose to pair manually and enter the code. When
+attached, VibePod waits for Enter before opening Codex, because Codex's
+full-screen interface would cover the code. The pairing is kept in the
+profile's Codex config folder, so later runs only need `--remote-control`.
+
+**Requirements and limits:**
+
+- Sign in with ChatGPT (`vp run codex login`). Codex refuses API-key auth for
+  remote control, so `--provider` and `llm` wiring are rejected with
+  `--remote-control`. In a ChatGPT workspace, an admin may need to allow
+  remote control.
+- Codex's background server must be enabled (`features.daemon_auto_start`,
+  on by default). Without it, `codex remote-control` stays in the foreground
+  and can't create pairing codes; VibePod warns and continues after two
+  minutes.
+- Codex keeps the machine's remote-control identity in its config folder,
+  which every project on the profile shares. Run one remote-controlled Codex
+  container per profile at a time, and use a separate
+  [profile](../profiles.md) for a second one.
+
+Claude Code, Copilot CLI and Antigravity have their own switches, which pass
+through unchanged: `vp run claude -- --remote-control` (needs a full `/login`,
+see [Long-lived token](#long-lived-token-recommended)),
+`vp run copilot -- --remote` and `vp run agy -- --remote-control`.
+
 ### Pi (Earendil)
 
 ```bash

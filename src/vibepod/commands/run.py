@@ -11,6 +11,7 @@ from pathlib import Path, PurePath
 from typing import Annotated, Any
 
 import typer
+from rich.markup import escape
 from rich.prompt import Confirm, Prompt
 
 from vibepod import __version__
@@ -134,6 +135,17 @@ from vibepod.core.provider_runtime import (
     wrap_provider_command as _wrap_provider_command,
 )
 from vibepod.core.proxy_filter import remove_container_policy
+from vibepod.core.remote_control import (
+    REMOTE_CONTROL_AGENTS,
+    RemoteControlError,
+    conflicting_option_message,
+    container_hostname,
+    enable_codex_remote_control,
+    exec_user,
+    remote_control_failure_hint,
+    start_codex_pairing,
+    unsupported_agent_message,
+)
 from vibepod.core.resume import show_resume_hint
 from vibepod.core.session_logger import SessionLogger
 from vibepod.utils.console import error, info, last_error, route_to_stderr, success, warning
@@ -440,6 +452,40 @@ def _web_ui_url(container_port: int | None, ports: dict[str, Any] | None) -> str
     return None
 
 
+def _start_remote_control(
+    container: Any,
+    *,
+    user: str | None,
+    pair: bool,
+    wait_for_enter: bool,
+) -> None:
+    """Turn on Codex remote control in the started container; optionally pair a phone.
+
+    Raises RemoteControlError when remote control or the requested pairing
+    code could not be set up.
+    """
+    info("Turning on Codex remote control (the first start can take a minute)...")
+    status = enable_codex_remote_control(container, user=user)
+    if status.timed_out:
+        warning(escape(status.message))
+        if pair:
+            warning("Skipped pairing: it needs Codex's background server.")
+        return
+    success(escape(status.message))
+    info("Open Codex in the ChatGPT app and pick this machine to steer the session.")
+    if not pair:
+        return
+    code = start_codex_pairing(container, user=user)
+    expiry = f" (valid until {code.expires_at:%H:%M})" if code.expires_at else ""
+    success(f"Pairing code: {escape(code.code)}{expiry}")
+    info(
+        "In the ChatGPT app, open Codex, add a computer, choose to pair manually "
+        "and enter the code. Each phone pairs once.",
+    )
+    if wait_for_enter:
+        Prompt.ask("Press Enter to open Codex", default="", show_default=False)
+
+
 def _compose_file_present(workspace: Path) -> bool:
     return (workspace / "docker-compose.yml").exists() or (workspace / "compose.yml").exists()
 
@@ -655,6 +701,20 @@ def run(
             help="Also mount the workspace at its absolute host path (/workspace stays mounted)",
         ),
     ] = False,
+    remote_control: Annotated[
+        bool,
+        typer.Option(
+            "--remote-control",
+            help="Codex: control this session from the ChatGPT app (experimental)",
+        ),
+    ] = False,
+    pair: Annotated[
+        bool,
+        typer.Option(
+            "--pair",
+            help="Codex: also print a code to pair a new phone (implies --remote-control)",
+        ),
+    ] = False,
     passthrough_args: list[str] | None = None,
     provider_names: list[str] | None = None,
 ) -> None:
@@ -665,6 +725,7 @@ def run(
     be parsed as VibePod flags.
     """
     passthrough_args = passthrough_args or []
+    remote_control = remote_control or pair
     if acp:
         # Must happen before any output, including the --detach conflict
         # below: stdout carries only the ACP JSON-RPC stream, so all console
@@ -690,6 +751,21 @@ def run(
             )
         error(f"Unknown agent '{selected_agent_input}'. Supported: {', '.join(supported_labels)}")
         raise typer.Exit(1)
+
+    if remote_control:
+        # Refused before anything is provisioned or allowed, like the other
+        # unsupported combinations below.
+        if selected_agent not in REMOTE_CONTROL_AGENTS:
+            error(unsupported_agent_message(selected_agent))
+            raise typer.Exit(1)
+        conflict = conflicting_option_message(
+            acp=acp,
+            provider=bool(provider_names),
+            llm_enabled=bool(config.get("llm", {}).get("enabled")),
+        )
+        if conflict is not None:
+            error(conflict)
+            raise typer.Exit(1)
 
     provider_env: dict[str, str] = {}
     provider_launch: ProviderLaunch | None = None
@@ -1217,6 +1293,7 @@ def run(
             workspace_mount_path=acp_workspace_mount,
             start=not acp,
             tty=not acp,
+            hostname=container_hostname(workspace_path) if remote_control else None,
         )
     except Exception:
         if proxy_policy_id is not None:
@@ -1299,6 +1376,35 @@ def run(
             success(f"{selected_agent} Web UI → {web_url}")
             info("Sessions persist in the agent config dir.")
         _wire_started_container()
+
+    if remote_control:
+
+        def _abort_remote_control_launch() -> None:
+            container.stop(timeout=5)
+            if herdr_pane:
+                _release_herdr_agent(selected_agent)
+                _clear_herdr_metadata(selected_agent)
+
+        try:
+            _start_remote_control(
+                container,
+                user=exec_user(merged_env, rootless_podman=rootless_podman),
+                pair=pair,
+                # Codex's full-screen UI would cover the code, so give the user
+                # time to type it on the phone before attaching.
+                wait_for_enter=not detach and sys.stdin.isatty(),
+            )
+        except RemoteControlError as exc:
+            error(escape(str(exc)))
+            hint = remote_control_failure_hint(str(exc))
+            if hint:
+                info(hint)
+            _abort_remote_control_launch()
+            raise typer.Exit(1) from exc
+        except KeyboardInterrupt as exc:
+            info("Stopping container...")
+            _abort_remote_control_launch()
+            raise typer.Exit(130) from exc
 
     if detach:
         if selected_agent == "claude" and "setup-token" in passthrough_args:

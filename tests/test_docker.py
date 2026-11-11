@@ -453,6 +453,46 @@ def test_ensure_proxy_relabels_ca_dir_on_selinux_host(tmp_path: Path, monkeypatc
     assert volumes[str(ca_dir)]["mode"] == "rw,z"
 
 
+def test_run_agent_low_level_branch_sets_hostname(tmp_path: Path) -> None:
+    client = _AcpLowLevelClient()
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "agents" / "claude").mkdir(parents=True)
+
+    _run_acp_agent(manager, tmp_path, userns_mode="keep-id", hostname="vibepod-project")
+
+    assert client.api.create_kwargs is not None
+    assert client.api.create_kwargs["hostname"] == "vibepod-project"
+
+
+@pytest.mark.parametrize("hostname", ["vibepod-project", None])
+def test_run_agent_run_branch_sets_hostname_only_when_given(
+    tmp_path: Path,
+    hostname: str | None,
+) -> None:
+    run_kwargs: dict[str, Any] = {}
+
+    class _Containers:
+        def run(self, **kwargs: Any) -> dict[str, str]:
+            run_kwargs.update(kwargs)
+            return {"id": "agent"}
+
+    manager = object.__new__(DockerManager)
+    manager.client = MagicMock(containers=_Containers())  # type: ignore[assignment]
+
+    (tmp_path / "workspace").mkdir()
+    (tmp_path / "agents" / "claude").mkdir(parents=True)
+
+    _run_acp_agent(manager, tmp_path, hostname=hostname)
+
+    if hostname is None:
+        assert "hostname" not in run_kwargs
+    else:
+        assert run_kwargs["hostname"] == hostname
+
+
 class _FakeStreamSocket:
     def __init__(self, chunks: list[bytes]) -> None:
         self._chunks = list(chunks)
