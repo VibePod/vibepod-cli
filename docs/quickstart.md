@@ -155,6 +155,12 @@ detected.
     pip install vibepod
     ```
 
+=== "uv"
+
+    ```bash
+    uv tool install vibepod
+    ```
+
 === "Homebrew"
 
     ```bash
