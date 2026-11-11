@@ -54,6 +54,7 @@ nav:
   - Agents: agents/index.md
   - Profiles: profiles.md
   - Model providers: providers.md
+  - Importing an existing setup: import.md
   - Skills:
       - Overview: skills/index.md
       - Locator format: skills/locators.md
