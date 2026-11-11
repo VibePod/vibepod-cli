@@ -176,8 +176,8 @@ def _enforcing_selinux(monkeypatch, tmp_path: Path, *, relabel: bool = True) -> 
     enforce = tmp_path / "enforce"
     enforce.write_text("1\n")
     monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
-    if relabel:
-        monkeypatch.setenv("VP_SELINUX_RELABEL", "true")
+    # Set either way: unset, the global config.yaml of the host decides.
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "true" if relabel else "false")
 
 
 def test_bind_mode_follows_enforce_file(monkeypatch, tmp_path: Path) -> None:
@@ -223,6 +223,7 @@ def test_bind_mode_follows_selinux_relabel_config_and_env(monkeypatch, tmp_path:
     monkeypatch.setenv("VP_CONFIG_DIR", str(config_root))
     monkeypatch.chdir(tmp_path)
     _enforcing_selinux(monkeypatch, tmp_path, relabel=False)
+    monkeypatch.delenv("VP_SELINUX_RELABEL")  # config decides; isolated by VP_CONFIG_DIR
 
     (config_root / "config.yaml").write_text("selinux_relabel: true\n")
     assert bind_mode("/home/u/project") == "rw,z"
