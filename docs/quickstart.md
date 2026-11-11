@@ -115,10 +115,18 @@ or for one command with `VP_SELINUX_RELABEL=true vp run …`
     server serving a workspace under `/var/www` — may lose access to them.
     Only enable it when your workspaces are used by you, not by host services.
 
-When enabled, VibePod relabels the workspace, the agent config directories,
-everything else under `~/.config/vibepod` (proxy CA and database, logs,
-skills) and a project's `.vibepod/skills`, and prints the relabeled host paths
-when it starts a container. It still never relabels:
+When enabled, VibePod relabels the bind sources it owns as containers use
+them: the workspace, the agent config directories, the directories of the
+proxy CA (`proxy.ca_dir`) and of the proxy and log databases
+(`proxy.db_path`, `logging.db_path`), installed skills (user and a project's
+`.vibepod/skills`) and, for board tasks, the repository's git directory that a
+worktree points into. By default these live under `~/.config/vibepod` or the
+workspace, but the configured paths can point elsewhere, and are relabeled
+there. VibePod prints the relabeled host paths when it starts a container.
+
+`selinux_relabel` is read like any other key, so a project's
+`.vibepod/config.yaml` can enable it too: review it before running an agent in
+a project you did not write. It still never relabels:
 
 - a workspace that is your home directory, one of its ancestors, or a system
   directory such as `/`, `/tmp`, `/usr`, `/etc` or `/var` — it prints a warning
