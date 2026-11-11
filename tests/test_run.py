@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 import typer
@@ -4359,3 +4359,287 @@ def test_run_does_not_relabel_on_selinux_host_by_default(
     modes = [mode for _, _, mode in stub.run_kwargs["extra_volumes"]]
     assert modes
     assert not any("z" in mode.split(",") for mode in modes)
+
+
+# --workspace-system-path: bind the workspace a second time at its host path.
+
+_requires_posix_host_path = pytest.mark.skipif(
+    os.name == "nt",
+    reason="the host-path mount target must be an absolute POSIX path",
+)
+
+
+def _invoke_system_path_run(monkeypatch, config: dict, args: list[str]):
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: config)
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+    result = CliRunner().invoke(app, ["run", *args, "--detach"])
+    return stub, result
+
+
+def _workspace_binds(run_kwargs: dict, workspace: Path) -> list[tuple[str, str, str]]:
+    return [vol for vol in run_kwargs["extra_volumes"] if vol[0] == str(workspace)]
+
+
+def test_run_without_workspace_system_path_keeps_only_workspace_mount(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "-w", str(workspace)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["workspace"] == workspace
+    assert stub.run_kwargs["workspace_mount_path"] is None
+    assert _workspace_binds(stub.run_kwargs, workspace) == []
+
+
+@_requires_posix_host_path
+def test_run_workspace_system_path_adds_host_path_mount(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "-w", str(workspace), "--workspace-system-path"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    # /workspace stays the primary mount and the working directory.
+    assert stub.run_kwargs["workspace"] == workspace
+    assert stub.run_kwargs["workspace_mount_path"] is None
+    assert _workspace_binds(stub.run_kwargs, workspace) == [
+        (str(workspace), str(workspace), "rw"),
+    ]
+
+
+@_requires_posix_host_path
+def test_run_workspace_system_path_defaults_to_the_cwd(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "--workspace-system-path"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert _workspace_binds(stub.run_kwargs, workspace) == [
+        (str(workspace), str(workspace), "rw"),
+    ]
+
+
+@_requires_posix_host_path
+def test_agent_alias_accepts_workspace_system_path(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _volumes_config(None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        ["claude", "-w", str(workspace), "--workspace-system-path", "--detach"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert (str(workspace), str(workspace), "rw") in stub.run_kwargs["extra_volumes"]
+
+
+@_requires_posix_host_path
+def test_run_workspace_system_path_with_additional_volumes(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    (workspace / "fixtures").mkdir(parents=True)
+    shared = _tmp_config_root / "shared"
+    shared.mkdir()
+    monkeypatch.chdir(_tmp_config_root)
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(["./fixtures:/fixtures:ro"]),
+        [
+            "claude",
+            "-w",
+            str(workspace),
+            "--workspace-system-path",
+            "-v",
+            "./shared:/shared",
+            "-v",
+            str(shared),
+            # Nested under the host-path mount, like /workspace/... nests.
+            "-v",
+            f"cache:{workspace}/node_modules",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    volumes = stub.run_kwargs["extra_volumes"]
+    assert (str(workspace), str(workspace), "rw") in volumes
+    assert (str(workspace / "fixtures"), "/fixtures", "ro") in volumes
+    assert (str(shared), "/shared", "rw") in volumes
+    assert (str(shared), str(shared), "rw") in volumes
+    assert ("cache", f"{workspace}/node_modules", "rw") in volumes
+
+
+@_requires_posix_host_path
+def test_run_workspace_system_path_rejects_volume_at_same_target(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "-w", str(workspace), "--workspace-system-path", "-v", str(workspace)],
+    )
+
+    assert result.exit_code != 0
+    # The message embeds the temp path, so Rich wraps the error panel wherever
+    # that path's length puts the 80-column edge (mid-phrase under macOS's
+    # /private/var/folders/...). Match on the de-styled, unwrapped text.
+    plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "already mounted by VibePod" in " ".join(plain_output.replace("│", " ").split())
+    assert stub.run_kwargs is None
+
+
+@_requires_posix_host_path
+def test_run_workspace_system_path_binds_the_symlinked_spelling_too(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    link = _tmp_config_root / "link"
+    link.symlink_to(workspace, target_is_directory=True)
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "-w", str(link), "--workspace-system-path"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert _workspace_binds(stub.run_kwargs, workspace) == [
+        (str(workspace), str(workspace), "rw"),
+        (str(workspace), str(link), "rw"),
+    ]
+
+
+@_requires_posix_host_path
+def test_run_workspace_system_path_binds_the_shell_cwd_spelling(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    link = _tmp_config_root / "link"
+    link.symlink_to(workspace, target_is_directory=True)
+    # The process cwd is always physical; the shell keeps the symlinked
+    # spelling in $PWD.
+    monkeypatch.chdir(link)
+    monkeypatch.setenv("PWD", str(link))
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "--workspace-system-path"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert _workspace_binds(stub.run_kwargs, workspace) == [
+        (str(workspace), str(workspace), "rw"),
+        (str(workspace), str(link), "rw"),
+    ]
+
+
+@_requires_posix_host_path
+def test_run_workspace_system_path_ignores_a_stale_pwd(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    elsewhere = _tmp_config_root / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("PWD", str(elsewhere))
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "--workspace-system-path"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert _workspace_binds(stub.run_kwargs, workspace) == [
+        (str(workspace), str(workspace), "rw"),
+    ]
+
+
+@_requires_posix_host_path
+@pytest.mark.parametrize(
+    ("agent", "host_path"),
+    [
+        ("claude", "/config/project"),
+        ("claude", "/usr/local/src/project"),
+        ("claude", "/tmp"),
+        ("hermes", "/opt/hermes/project"),
+    ],
+)
+def test_system_workspace_mount_rejects_reserved_paths(agent: str, host_path: str, capsys) -> None:
+    path = Path(host_path)
+
+    with pytest.raises(typer.Exit):
+        run_cmd._system_workspace_mount_paths(path, path, get_agent_spec(agent))
+
+    assert "--workspace-system-path cannot mount the workspace" in capsys.readouterr().out
+
+
+def test_system_workspace_mount_rejects_non_posix_paths(capsys) -> None:
+    path = PureWindowsPath("C:\\projects\\demo")
+
+    with pytest.raises(typer.Exit):
+        run_cmd._acp_workspace_mount_path(
+            path,
+            get_agent_spec("claude"),
+            option="--workspace-system-path",
+        )
+
+    output = capsys.readouterr().out
+    assert "--workspace-system-path requires a POSIX workspace path" in output
+    assert "ACP" not in output
+
+
+@_requires_posix_host_path
+def test_system_workspace_mount_skips_a_workspace_already_at_workspace() -> None:
+    path = Path("/workspace")
+
+    assert run_cmd._system_workspace_mount_paths(path, path, get_agent_spec("claude")) == []
+
+
+@_requires_posix_host_path
+def test_acp_with_workspace_system_path_adds_no_duplicate_mount(monkeypatch, _acp_env) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _make_config())
+    monkeypatch.setattr(run_cmd, "DockerManager", _make_acp_manager(captured))
+
+    run_cmd.run(agent="claude", workspace=_acp_env, acp=True, workspace_system_path=True)
+
+    assert captured["workspace_mount_path"] == str(_acp_env)
+    assert all(bind != str(_acp_env) for _, bind, _ in captured["extra_volumes"])

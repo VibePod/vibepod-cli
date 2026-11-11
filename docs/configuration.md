@@ -436,6 +436,8 @@ vp run claude --volume /my/path
 vp run claude --volume /my/path:/my/path
 ```
 
+To make the workspace itself available at its host path as well as at `/workspace`, use `--workspace-system-path` instead of a volume; see [Workspace at its host path](cli-reference.md#workspace-at-its-host-path).
+
 ### Permissions, security, and platform behavior
 
 - A read-write bind mount lets the agent change or delete host files directly. Prefer `ro` for reference data and grant write access only where needed. Read-only mounts still expose their contents; avoid mounting credentials or other secrets unless required for the task. `ro` applies only to that mount: in the example, `data` is also reachable through the writable `/workspace/data` path. For data that must be protected from writes, use a source outside the workspace and ensure it has no other writable mount.

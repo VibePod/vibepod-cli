@@ -190,8 +190,12 @@ def _remove_container_quietly(container: Any) -> None:
         pass
 
 
-def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
-    """Return the host path the workspace is bound to for ACP path parity.
+def _acp_workspace_mount_path(
+    workspace_path: PurePath,
+    spec: AgentSpec,
+    option: str = "--acp",
+) -> str:
+    """Return the host path the workspace is bound to for host-path parity.
 
     ACP clients (editors like Zed) send absolute host paths (session cwd,
     @-mentions) and expect absolute host paths back in diffs. Binding the
@@ -199,13 +203,14 @@ def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
     sides agree. Aborts when the host path would shadow a container-reserved
     path, or is not a POSIX path: a Linux container's bind target cannot be a
     Windows path, so native Windows hosts run ACP mode from WSL2 instead.
+    *option* names the flag that requested the mount in error messages.
     """
     host_path = str(workspace_path)
     if not host_path.startswith("/"):
         error(
-            f"--acp requires a POSIX workspace path; '{host_path}' cannot be a "
-            "container path. On Windows, run the editor and vp inside WSL2 "
-            "(see the ACP docs).",
+            f"{option} requires a POSIX workspace path; '{host_path}' cannot be a "
+            "container path. On Windows, run vp inside WSL2"
+            + (" with the editor (see the ACP docs)." if option == "--acp" else "."),
         )
         raise typer.Exit(1)
 
@@ -223,12 +228,56 @@ def _acp_workspace_mount_path(workspace_path: PurePath, spec: AgentSpec) -> str:
         shadowed_by_mount = reserved_path.startswith(host_path + "/")
         if shadows_reserved or shadowed_by_mount:
             error(
-                f"--acp cannot mount the workspace at '{host_path}': it collides "
+                f"{option} cannot mount the workspace at '{host_path}': it collides "
                 f"with the container-reserved path '{reserved_path}'. "
                 "Move the project to a non-reserved host path.",
             )
             raise typer.Exit(1)
     return host_path
+
+
+def _logical_absolute(path: Path) -> Path:
+    """Return *path* made absolute without resolving symlinks.
+
+    A relative path is anchored at the shell's ``$PWD`` rather than the process
+    cwd, because the kernel only knows the physical cwd: after ``cd`` through a
+    symlink, ``os.getcwd()`` returns the resolved target while ``$PWD`` keeps the
+    spelling the user typed. ``$PWD`` is trusted only while it still names the
+    process cwd, so a stale value from a parent process is ignored.
+    """
+    path = path.expanduser()
+    if path.is_absolute():
+        return Path(os.path.normpath(path))
+    base = os.getcwd()
+    shell_pwd = os.environ.get("PWD")
+    if shell_pwd and os.path.isabs(shell_pwd):
+        try:
+            if os.path.samefile(shell_pwd, base):
+                base = shell_pwd
+        except OSError:
+            pass
+    return Path(os.path.normpath(os.path.join(base, path)))
+
+
+def _system_workspace_mount_paths(
+    workspace: Path,
+    workspace_path: Path,
+    spec: AgentSpec,
+) -> list[str]:
+    """Return the host paths `--workspace-system-path` binds the workspace to.
+
+    *workspace_path* is the resolved workspace; *workspace* is the path as given
+    (the shell cwd by default), whose symlinked spelling is bound too so scripts
+    using either form work. A host path of exactly /workspace is already where
+    the default mount puts it, so it needs no second bind.
+    """
+    logical = _logical_absolute(workspace)
+    mounts: list[str] = []
+    for path in dict.fromkeys((workspace_path, logical)):
+        if str(path) == "/workspace":
+            continue
+        mounts.append(_acp_workspace_mount_path(path, spec, option="--workspace-system-path"))
+    return mounts
 
 
 # Separator for write-root lists. The variable is parsed by the agent INSIDE
@@ -599,6 +648,13 @@ def run(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    workspace_system_path: Annotated[
+        bool,
+        typer.Option(
+            "--workspace-system-path",
+            help="Also mount the workspace at its absolute host path (/workspace stays mounted)",
+        ),
+    ] = False,
     passthrough_args: list[str] | None = None,
     provider_names: list[str] | None = None,
 ) -> None:
@@ -752,9 +808,14 @@ def run(
         # resolve() above followed symlinks, but the editor keeps sending the
         # path as it was opened (macOS /tmp -> /private/tmp, ~/code -> another
         # volume). Bind that spelling too so either form works in the container.
-        logical_workspace = Path(os.path.normpath(workspace.expanduser().absolute()))
+        logical_workspace = _logical_absolute(workspace)
         if str(logical_workspace) != str(workspace_path):
             acp_workspace_alias = _acp_workspace_mount_path(logical_workspace, spec)
+    # --workspace-system-path: extra CWD:CWD binds. ACP already binds both
+    # spellings (as the working dir), so the flag adds nothing there.
+    system_workspace_mounts: list[str] = []
+    if workspace_system_path and not acp:
+        system_workspace_mounts = _system_workspace_mount_paths(workspace, workspace_path, spec)
     if spec.preview:
         warning(
             f"{selected_agent} is a developer preview; upstream warns of "
@@ -792,6 +853,9 @@ def run(
         ),
         *flag_volumes,
     ]
+    if spec.write_roots_env and system_workspace_mounts:
+        # The agent's file sandbox must allow edits through the host-path spelling.
+        _extend_write_roots(merged_env, spec.write_roots_env, [*system_workspace_mounts])
     if spec.write_roots_env and acp_workspace_mount is not None:
         # In ACP mode the workspace is also bound at its own host path, and the
         # editor sends that spelling, so the agent's file sandbox has to allow
@@ -1002,6 +1066,7 @@ def run(
     workspace_targets = [
         "/workspace",
         *(p for p in (acp_workspace_mount, acp_workspace_alias) if p),
+        *system_workspace_mounts,
     ]
     if any(
         target.startswith(f"{base}/") for _, target, _ in skill_mounts for base in workspace_targets
@@ -1014,6 +1079,10 @@ def run(
         extra_volumes.extend(skill_mounts)
     if acp_workspace_alias is not None:
         extra_volumes.append((str(workspace_path), acp_workspace_alias, bind_mode(workspace_path)))
+    extra_volumes.extend(
+        (str(workspace_path), target, bind_mode(workspace_path))
+        for target in system_workspace_mounts
+    )
 
     herdr_volumes, herdr_env = _apply_herdr_if_enabled(
         selected_agent,
