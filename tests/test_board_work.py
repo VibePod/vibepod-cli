@@ -2253,3 +2253,26 @@ def test_git_on_the_host_does_not_look_into_nested_repositories(repo: Path) -> N
     assert sha == git(repo, "rev-parse", "HEAD")
     assert git(repo, "show", "HEAD:notes.txt") == "left by the agent"
     assert worktrees.commit_all(repo, "Nothing") is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="SELinux relabeling only applies to POSIX host paths")
+def test_worktree_git_mounts_are_relabeled_like_the_workspace_on_selinux(
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from vibepod.core import docker as docker_mod
+
+    task = worktrees.prepare_worktree(repo, tmp_path / "worktrees", "issue-1", "main")
+    enforce = tmp_path / "enforce"
+    enforce.write_text("1\n")
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "false")
+    assert {mode for _, _, mode in worktrees.agent_mounts(repo, task.path)} <= {"rw", "ro"}
+
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "true")
+    mounts = worktrees.agent_mounts(repo, task.path)
+    git_dir = (repo / ".git").resolve()
+    assert (str(git_dir), str(git_dir), "rw,z") in mounts
+    assert all(mode.endswith(",z") for _, _, mode in mounts)
