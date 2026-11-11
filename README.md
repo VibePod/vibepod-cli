@@ -33,14 +33,17 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 - 🐑 **Herdr aware** — `vp run` inside a [herdr](https://herdr.dev/) pane reports agent state automatically
 - ⚖️ **Agent comparison** — benchmark multiple agents against each other in the dashboard
 - 🔒 **Privacy-first** — all metrics collected and stored locally, never sent to the cloud
-- 📦 **Simple install** — via pip, Homebrew, or conda-forge
+- 📦 **Simple install** — via pip, uv, Homebrew, or conda-forge
 
 ## Installation
 
-VibePod is available on [PyPI](https://pypi.org/project/vibepod/):
+VibePod is available on [PyPI](https://pypi.org/project/vibepod/), installable with pip or
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
 pip install vibepod
+# or
+uv tool install vibepod
 ```
 
 with [Homebrew](https://github.com/VibePod/homebrew-vibepod):
