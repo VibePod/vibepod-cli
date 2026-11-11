@@ -20,6 +20,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
+from vibepod.core.docker import bind_mode
+
 # The committer used when the repository has no identity configured.
 FALLBACK_IDENTITY = ("VibePod", "vibepod@users.noreply.github.com")
 # The agent container's `.git` file on a Windows host, kept in the worktree's own directory
@@ -302,7 +304,8 @@ def agent_mounts(
         pointer = admin / CONTAINER_POINTER
         pointer.write_text(f"gitdir: {container_path(admin)}\n", encoding="utf-8")
     mounts.append((str(pointer), f"{workspace_mount}/.git", "ro"))
-    return mounts
+    # The worktree is the relabeled workspace: its git directory needs the same label.
+    return [(host, target, bind_mode(host, mode)) for host, target, mode in mounts]
 
 
 def _worktree_config(common: Path) -> bool:

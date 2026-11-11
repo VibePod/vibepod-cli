@@ -32,6 +32,22 @@ def _reset_console_routing():
 
 
 @pytest.fixture(autouse=True)
+def _no_selinux_relabel(monkeypatch):
+    """Pin bind modes to the plain `rw`/`ro` form so bind assertions are hermetic.
+
+    On an enforcing SELinux host every bind would otherwise gain a `,z`
+    suffix (or print the opt-in hint), which would make the suite pass or fail
+    by host policy and the user's environment. `test_docker.py` points the
+    probe at a real file to cover that path.
+    """
+    from vibepod.core import docker as docker_mod
+
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", "/nonexistent/selinux/enforce")
+    monkeypatch.setattr(docker_mod, "_selinux_notices", docker_mod._SelinuxNotices())
+    monkeypatch.delenv("VP_SELINUX_RELABEL", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_herdr_env(monkeypatch):
     """Strip herdr pane env so tests are hermetic.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -489,3 +490,32 @@ def test_run_engine_checks_updates_when_latest(
 
     assert not pulled_images
     assert ("vibepod/skills-engine:latest", True) in checked_images
+
+
+@pytest.mark.skipif(os.name == "nt", reason="SELinux relabeling only applies to POSIX host paths")
+def test_engine_relabels_skills_dirs_but_not_local_locator_on_selinux_host(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from vibepod.core import docker as docker_mod
+
+    enforce = tmp_path / "enforce"
+    enforce.write_text("1\n")
+    monkeypatch.setattr(docker_mod, "_SELINUX_ENFORCE_PATH", str(enforce))
+    monkeypatch.setenv("VP_SELINUX_RELABEL", "true")
+    cwd = tmp_path / "project"
+    source = cwd / "skills" / "researcher"
+    source.mkdir(parents=True)
+    monkeypatch.setattr(skills_engine, "USER_SKILLS_DIR", tmp_path / "user")
+    monkeypatch.setattr(skills_engine, "SKILLS_CACHE_DIR", tmp_path / "cache")
+
+    captured = _install_fake_engine(monkeypatch, stdout=json.dumps([]))
+
+    skills_engine.add("./skills/researcher", scope="local", cwd=cwd)
+
+    modes = {spec["bind"]: spec["mode"] for spec in captured["kwargs"]["volumes"].values()}
+    assert modes["/vibepod/local-skills"] == "rw,z"
+    assert modes["/vibepod/user-skills"] == "rw,z"
+    assert modes["/vibepod/cache"] == "rw,z"
+    # The user's own source tree is only read; its label is left alone.
+    assert modes[str(source.resolve())] == "ro"
