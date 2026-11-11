@@ -4539,6 +4539,56 @@ def test_run_workspace_system_path_binds_the_symlinked_spelling_too(
 
 
 @_requires_posix_host_path
+def test_run_workspace_system_path_binds_the_shell_cwd_spelling(
+    monkeypatch,
+    _tmp_config_root,
+) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    link = _tmp_config_root / "link"
+    link.symlink_to(workspace, target_is_directory=True)
+    # The process cwd is always physical; the shell keeps the symlinked
+    # spelling in $PWD.
+    monkeypatch.chdir(link)
+    monkeypatch.setenv("PWD", str(link))
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "--workspace-system-path"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert _workspace_binds(stub.run_kwargs, workspace) == [
+        (str(workspace), str(workspace), "rw"),
+        (str(workspace), str(link), "rw"),
+    ]
+
+
+@_requires_posix_host_path
+def test_run_workspace_system_path_ignores_a_stale_pwd(monkeypatch, _tmp_config_root) -> None:
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    elsewhere = _tmp_config_root / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("PWD", str(elsewhere))
+
+    stub, result = _invoke_system_path_run(
+        monkeypatch,
+        _volumes_config(None),
+        ["claude", "--workspace-system-path"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert _workspace_binds(stub.run_kwargs, workspace) == [
+        (str(workspace), str(workspace), "rw"),
+    ]
+
+
+@_requires_posix_host_path
 @pytest.mark.parametrize(
     ("agent", "host_path"),
     [

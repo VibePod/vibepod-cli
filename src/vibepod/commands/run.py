@@ -236,6 +236,29 @@ def _acp_workspace_mount_path(
     return host_path
 
 
+def _logical_absolute(path: Path) -> Path:
+    """Return *path* made absolute without resolving symlinks.
+
+    A relative path is anchored at the shell's ``$PWD`` rather than the process
+    cwd, because the kernel only knows the physical cwd: after ``cd`` through a
+    symlink, ``os.getcwd()`` returns the resolved target while ``$PWD`` keeps the
+    spelling the user typed. ``$PWD`` is trusted only while it still names the
+    process cwd, so a stale value from a parent process is ignored.
+    """
+    path = path.expanduser()
+    if path.is_absolute():
+        return Path(os.path.normpath(path))
+    base = os.getcwd()
+    shell_pwd = os.environ.get("PWD")
+    if shell_pwd and os.path.isabs(shell_pwd):
+        try:
+            if os.path.samefile(shell_pwd, base):
+                base = shell_pwd
+        except OSError:
+            pass
+    return Path(os.path.normpath(os.path.join(base, path)))
+
+
 def _system_workspace_mount_paths(
     workspace: Path,
     workspace_path: Path,
@@ -248,7 +271,7 @@ def _system_workspace_mount_paths(
     using either form work. A host path of exactly /workspace is already where
     the default mount puts it, so it needs no second bind.
     """
-    logical = Path(os.path.normpath(workspace.expanduser().absolute()))
+    logical = _logical_absolute(workspace)
     mounts: list[str] = []
     for path in dict.fromkeys((workspace_path, logical)):
         if str(path) == "/workspace":
@@ -785,7 +808,7 @@ def run(
         # resolve() above followed symlinks, but the editor keeps sending the
         # path as it was opened (macOS /tmp -> /private/tmp, ~/code -> another
         # volume). Bind that spelling too so either form works in the container.
-        logical_workspace = Path(os.path.normpath(workspace.expanduser().absolute()))
+        logical_workspace = _logical_absolute(workspace)
         if str(logical_workspace) != str(workspace_path):
             acp_workspace_alias = _acp_workspace_mount_path(logical_workspace, spec)
     # --workspace-system-path: extra CWD:CWD binds. ACP already binds both
