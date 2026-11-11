@@ -120,6 +120,13 @@ def run_command(
         str | None,
         typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
     ] = None,
+    workspace_system_path: Annotated[
+        bool,
+        typer.Option(
+            "--workspace-system-path",
+            help="Also mount the workspace at its absolute host path (/workspace stays mounted)",
+        ),
+    ] = False,
     provider_names: Annotated[
         list[str] | None,
         typer.Option("--provider", help="Temporarily use a global provider"),
@@ -143,6 +150,7 @@ def run_command(
         ikwid=ikwid,
         acp=acp,
         profile=profile,
+        workspace_system_path=workspace_system_path,
         provider_names=provider_names,
         passthrough_args=_context_args(ctx),
     )
@@ -251,6 +259,14 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             str | None,
             typer.Option("--profile", help="Credential profile to use (see `vp profile list`)"),
         ] = None,
+        workspace_system_path: Annotated[
+            bool,
+            typer.Option(
+                "--workspace-system-path",
+                help="Also mount the workspace at its absolute host path "
+                "(/workspace stays mounted)",
+            ),
+        ] = False,
         provider_names: Annotated[
             list[str] | None,
             typer.Option("--provider", help="Temporarily use a global provider"),
@@ -273,6 +289,7 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             ikwid=ikwid,
             acp=acp,
             profile=profile,
+            workspace_system_path=workspace_system_path,
             provider_names=provider_names,
             passthrough_args=_context_args(ctx),
         )
