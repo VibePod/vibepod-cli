@@ -3549,7 +3549,8 @@ def test_a_result_in_json_event_logs_is_decoded() -> None:
 
     assert parse_result(logs) == AgentResult("done", summary="Added it.")
     assert parse_result(
-        logs.replace('\\"done\\"', '\\"approve\\"'), REVIEW_STATUSES
+        logs.replace('\\"done\\"', '\\"approve\\"'),
+        REVIEW_STATUSES,
     ) == AgentResult(
         "approve",
         summary="Added it.",
