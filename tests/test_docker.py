@@ -459,6 +459,9 @@ class _FakeStreamSocket:
         self.shutdown_calls: list[int] = []
         self.sent: list[bytes] = []
 
+    def fileno(self) -> int:
+        return 99  # select() is faked; only its presence matters
+
     def recv(self, _size: int) -> bytes:
         if self._chunks:
             return self._chunks.pop(0)
@@ -564,6 +567,194 @@ def _run_attach_stdio(
         initial_stdin=initial_stdin,
     )
     return out.getvalue(), err.getvalue(), exit_code
+
+
+class _NpipeStreamSocket:
+    """docker-py's NpipeSocket over Windows named pipes: no fileno()."""
+
+    def __init__(self, chunks: list[bytes], gate: Any = None) -> None:
+        self._chunks = list(chunks)
+        self._gate = gate
+        self.sent: list[bytes] = []
+        self.timeouts: list[float | None] = []
+
+    def settimeout(self, value: float | None) -> None:
+        self.timeouts.append(value)
+
+    def recv_into(self, buf: bytearray) -> int:
+        if self._gate is not None:
+            self._gate()
+        if not self._chunks:
+            return 0
+        chunk = self._chunks.pop(0)
+        buf[: len(chunk)] = chunk
+        return len(chunk)
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def shutdown(self, how: int) -> None:
+        raise AssertionError("NpipeSocket.shutdown closes the whole pipe")
+
+
+def _run_attach_stdio_npipe(
+    monkeypatch,
+    sock: Any,
+    stdin_fd: int | None,
+    container: Any,
+    wait_result: dict | None = None,
+) -> tuple[bytes, bytes, int]:
+    import types
+
+    from vibepod.core import docker as docker_mod
+
+    def _no_select(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("select() rejects named pipes on Windows")
+
+    out, err = io.BytesIO(), io.BytesIO()
+    fake_stdin = types.SimpleNamespace(closed=False)
+    if stdin_fd is None:
+
+        def _no_fileno() -> int:
+            raise ValueError("no fd in test")
+
+        fake_stdin.fileno = _no_fileno
+    else:
+        fake_stdin.fileno = lambda: stdin_fd
+
+    client = _AttachClient([], wait_result=wait_result)
+    client.wrapper = _FakeSocketWrapper(sock)  # type: ignore[arg-type]
+    manager = object.__new__(DockerManager)
+    manager.client = client  # type: ignore[assignment]
+    monkeypatch.setattr(docker_mod.select, "select", _no_select)
+    monkeypatch.setattr(docker_mod.sys, "stdout", types.SimpleNamespace(buffer=out))
+    monkeypatch.setattr(docker_mod.sys, "stderr", types.SimpleNamespace(buffer=err))
+    monkeypatch.setattr(docker_mod.sys, "stdin", fake_stdin)
+    exit_code = manager.attach_stdio(container)
+    return out.getvalue(), err.getvalue(), exit_code
+
+
+def test_attach_stdio_over_named_pipe_forwards_both_directions(monkeypatch) -> None:
+    """#230 for --acp: Windows named pipes cannot be select()ed."""
+    import threading
+
+    frame = b"\x01\x00\x00\x00\x00\x00\x00\x03ok\n"
+    stopped = threading.Event()
+    sent_seen = threading.Event()
+
+    class _Container(_AttachContainer):
+        def stop(self, timeout: int = 0) -> None:
+            stopped.set()
+
+    def _gate() -> None:
+        # Hold the output stream open until stdin was forwarded and hit EOF
+        # (which stops the container, ending the stream).
+        if not sock._chunks:
+            stopped.wait(5)
+        elif len(sock._chunks) == 1:
+            sent_seen.wait(5)
+
+    sock = _NpipeStreamSocket([frame], gate=_gate)
+    orig_sendall = sock.sendall
+
+    def _sendall(data: bytes) -> None:
+        orig_sendall(data)
+        sent_seen.set()
+
+    sock.sendall = _sendall  # type: ignore[method-assign]
+
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'{"method":"initialize"}\n')
+    os.close(write_fd)
+    try:
+        # The stop's SIGTERM is our stand-in for stdin EOF, not a failure.
+        out, _, exit_code = _run_attach_stdio_npipe(
+            monkeypatch, sock, read_fd, _Container(), wait_result={"StatusCode": 143}
+        )
+    finally:
+        os.close(read_fd)
+
+    assert out == b"ok\n"
+    assert sock.sent == [b'{"method":"initialize"}\n']
+    # A named pipe cannot be half-closed: stdin EOF stops the container instead.
+    assert stopped.is_set()
+    assert exit_code == 0
+    assert sock.timeouts == [None]
+
+
+def test_attach_stdio_on_windows_tcp_forwards_stdin_without_select(monkeypatch) -> None:
+    """Windows select() rejects the stdin pipe even when the socket is real."""
+    import threading
+
+    monkeypatch.setattr(docker_mod, "_can_select_stdin", lambda: False)
+    frame = b"\x01\x00\x00\x00\x00\x00\x00\x03ok\n"
+    ours, theirs = socket.socketpair()
+    received: list[bytes] = []
+    stopped: list[int] = []
+
+    class _Container(_AttachContainer):
+        def stop(self, timeout: int = 0) -> None:
+            stopped.append(timeout)
+
+    def _daemon() -> None:
+        got = b""
+        while chunk := theirs.recv(1024):
+            got += chunk
+        # stdin EOF arrived as a half-close; the output still gets through.
+        received.append(got)
+        theirs.sendall(frame)
+        theirs.close()
+
+    daemon = threading.Thread(target=_daemon, daemon=True)
+    daemon.start()
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b'{"method":"initialize"}\n')
+    os.close(write_fd)
+    try:
+        out, _, _ = _run_attach_stdio_npipe(monkeypatch, ours, read_fd, _Container())
+    finally:
+        os.close(read_fd)
+        daemon.join(timeout=5)
+        ours.close()
+
+    assert out == b"ok\n"
+    assert received == [b'{"method":"initialize"}\n']
+    assert stopped == []  # a real socket half-closes; no container stop
+
+
+def test_attach_stdio_over_named_pipe_keeps_a_real_failure_exit_code(monkeypatch) -> None:
+    """Without a stdin-EOF stop, a 143 is the adapter's own and is reported."""
+    frame = b"\x01\x00\x00\x00\x00\x00\x00\x02{}"
+    sock = _NpipeStreamSocket([frame])
+    _, _, exit_code = _run_attach_stdio_npipe(
+        monkeypatch, sock, None, _AttachContainer(), wait_result={"StatusCode": 143}
+    )
+    assert exit_code == 143
+
+
+def test_attach_stdio_over_named_pipe_names_the_silence(monkeypatch) -> None:
+    import time as time_mod
+
+    from vibepod.core import docker as docker_mod
+    from vibepod.utils import console as console_mod
+
+    warnings: list[str] = []
+    monkeypatch.setattr(console_mod, "warning", warnings.append)
+    monkeypatch.setattr(docker_mod, "_ACP_FIRST_OUTPUT_WARN_SECONDS", 0.05)
+    frame = b"\x01\x00\x00\x00\x00\x00\x00\x02{}"
+    first = [True]
+
+    def _gate() -> None:
+        if first[0]:
+            first[0] = False
+            time_mod.sleep(0.3)
+
+    sock = _NpipeStreamSocket([frame], gate=_gate)
+    out, _, _ = _run_attach_stdio_npipe(monkeypatch, sock, None, _AttachContainer())
+
+    assert out == b"{}"
+    assert len(warnings) == 1
+    assert "no output from the adapter" in warnings[0]
 
 
 def test_attach_stdio_replays_initial_stdin_only_after_the_container_starts(

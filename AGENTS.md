@@ -66,6 +66,16 @@ The CLI is interactive only (no one-shot mode, no ACP), so the spec has neither
 `headless_prefix` nor `acp_command`. `vp import warp` must never list
 `~/.local/share/keyrings`: on the host that is the user's whole login keyring.
 
+## Interactive attach
+
+Windows attach is a separate code path that Linux CI only reaches through
+fakes, so read the docstrings in `src/vibepod/core/docker.py` before changing
+it. Two sharp edges: `select()` there accepts only Winsock sockets (not
+docker-py's `NpipeSocket`, not a stdin pipe), so those sessions read on threads
+(`_ThreadedReader`); and console input must stay in legacy key reporting
+(`_RAW_CONSOLE_INPUT_CLEAR` explains why `ENABLE_VIRTUAL_TERMINAL_INPUT` is
+cleared).
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with
