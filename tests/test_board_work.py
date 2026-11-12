@@ -3477,6 +3477,8 @@ def test_review_worktrees_are_detached_and_replaced(repo: Path, tmp_path: Path) 
 def test_review_worktree_with_changed_pointer_is_not_replaced(repo: Path, tmp_path: Path) -> None:
     sha = git(repo, "rev-parse", "main")
     path = worktrees.prepare_review_worktree(repo, tmp_path / "trees", "review-vp-1-a", sha)
+    # Git for Windows hides .git, and Windows refuses to overwrite a hidden file.
+    (path / ".git").unlink()
     (path / ".git").write_text(f"gitdir: {tmp_path / 'elsewhere'}\n")
 
     with pytest.raises(worktrees.GitError, match="needs a"):
