@@ -1562,19 +1562,7 @@ while the image keeps running its own pinned copy.
 vp run warp   # or: vp w
 ```
 
-The default image is `vibepod/warp:latest`. Until it is published, build the
-Warp image from the companion
-[vibepod-agents branch](https://github.com/VibePod/vibepod-agents/tree/warp-agent/docker/warp)
-and select the local image explicitly. From that repository's checkout:
-
-```bash
-docker build -t vibepod/warp:local docker/warp
-VP_IMAGE_WARP=vibepod/warp:local vp run warp
-```
-
-The `:local` tag avoids automatic pulls of `:latest`. The CLI registration
-alone does not install Warp; the image must provide `warp` and the `/config`
-state mount described below.
+![Warp Agent CLI started by `vp run warp`, signed in, with the workspace's `AGENTS.md` and a skill loaded](../assets/warp.png)
 
 The Warp Agent CLI (`warp`) runs the agent from the Warp terminal app in any
 terminal. It is closed source and ships as a single binary from

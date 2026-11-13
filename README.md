@@ -148,6 +148,7 @@ Run `vp config allow-dir /path/to/project` once first (the editor's stdin is a p
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/cline.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/cline.png" alt="Cline" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/junie.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/junie.png" alt="Junie" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/cursor.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/cursor.png" alt="Cursor CLI" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/warp.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/warp.png" alt="Warp Agent CLI" width="180" /></a>
 </p>
 
 ## Current Status
