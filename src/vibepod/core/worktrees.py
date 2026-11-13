@@ -324,7 +324,7 @@ def _reusable(
     """Whether the clone an earlier run left at `path` is worked on as it is: it is on the
     branch, at the commit the repository has it at, and may hold changes left uncommitted. A
     clone that holds nothing the repository lacks is removed instead, and one that holds
-    more is refused."""
+    more, on the task's branch or kept aside on another, a tag or the stash, is refused."""
     if not path.exists() or not any(path.iterdir()):
         return False
     if not is_clone_of(path, repo):
@@ -341,6 +341,7 @@ def _reusable(
     unsaved = [
         sha for sha in dict.fromkeys(filter(None, (head, own))) if not _in_repository(repo, sha)
     ]
+    unsaved += [sha for sha in _kept_aside(repo, path) if sha not in unsaved]
     if unsaved:
         raise GitError(
             f"The clone at {path} holds commits that are not in {repo} "
@@ -350,6 +351,21 @@ def _reusable(
         raise GitError(f"The clone at {path} holds uncommitted changes; {look}")
     remove_clone(worktrees_dir, path)
     return False
+
+
+def _kept_aside(repo: Path, path: Path) -> list[str]:
+    """What the clone's branches, tags and stash hold that the repository does not have at
+    all: someone's work, kept where the task's branch does not show it, which removing the
+    clone would lose. The branch the clone was made with holds nothing of the kind."""
+    kept = git(
+        path,
+        "for-each-ref",
+        "--format=%(objectname)",
+        "refs/heads",
+        "refs/tags",
+        "refs/stash",
+    )
+    return [sha for sha in dict.fromkeys(kept.split()) if not commit_exists(repo, sha)]
 
 
 def _in_repository(repo: Path, sha: str) -> bool:
@@ -454,14 +470,15 @@ def prepare_review_clone(repo: Path, worktrees_dir: Path, name: str, commit: str
 def _holds_changes(repo: Path, path: Path) -> bool:
     """Whether a review clone left by an earlier review, such as one kept with
     `--keep-worktree`, holds what removing it would lose: changes someone made in it, or a
-    commit the repository does not have. A clone whose git directory or configuration is not
-    as the worker made it needs a look as well, and git does not run in it."""
+    commit the repository does not have, checked out or kept aside on a branch, a tag or
+    the stash. A clone whose git directory or configuration is not as the worker made it
+    needs a look as well, and git does not run in it."""
     try:
         _check_settings(path)
     except GitError:
         return True
     head = _run(path, "rev-parse", "--verify", "--quiet", "HEAD^{commit}").stdout.strip()
-    if not head or not commit_exists(repo, head):
+    if not head or not commit_exists(repo, head) or _kept_aside(repo, path):
         return True
     return has_changes(path)
 

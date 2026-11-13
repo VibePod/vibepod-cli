@@ -3798,6 +3798,83 @@ def test_a_clone_left_behind_is_replaced_only_when_nothing_in_it_would_be_lost(
         worktrees.prepare_clone(repo, trees, "vp-8", "main")
 
 
+def _keeps_aside(path: Path, how: str) -> None:
+    """Someone's work in a clone, kept where the task's branch does not show it."""
+    if how == "stash":
+        (path / "README.md").write_text("work in progress\n")
+        git(path, "stash", "--quiet")
+        return
+    git(path, "checkout", "--quiet", "--detach")
+    git(path, "commit", "--quiet", "--allow-empty", "-m", "Kept aside")
+    if how == "branch":
+        git(path, "branch", "saved")
+    else:
+        git(path, "tag", "saved")
+
+
+@pytest.mark.parametrize("how", ["branch", "tag", "stash"])
+def test_a_clone_that_keeps_work_aside_is_not_replaced(
+    repo: Path,
+    tmp_path: Path,
+    how: str,
+) -> None:
+    trees = tmp_path / "trees"
+    clone = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    git(clone.path, "commit", "--quiet", "--allow-empty", "-m", "First")
+    worktrees.write_back(repo, clone)
+    _keeps_aside(clone.path, how)
+    git(clone.path, "checkout", "--quiet", "vp-9")
+    # The branch moved on in the repository: the clone, clean and behind it, would make way.
+    git(repo, "checkout", "--quiet", "vp-9")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Moved on")
+    git(repo, "checkout", "--quiet", "main")
+
+    with pytest.raises(worktrees.GitError, match="holds commits that are not in"):
+        worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    assert (clone.path / ".git").is_dir()
+
+
+def test_a_clone_made_with_a_branch_the_repository_rewrote_since_still_makes_way(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    trees = tmp_path / "trees"
+    git(repo, "checkout", "--quiet", "-b", "mine")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Mine")
+    clone = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+    git(clone.path, "commit", "--quiet", "--allow-empty", "-m", "First")
+    worktrees.write_back(repo, clone)
+    # git made the clone with the branch that was checked out; the repository rewrote it.
+    old = worktrees.branch_commit(clone.path, "mine")
+    git(repo, "commit", "--quiet", "--amend", "--allow-empty", "-m", "Mine, reworded")
+    assert old is not None and old != git(repo, "rev-parse", "mine")
+    git(repo, "checkout", "--quiet", "vp-9")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Moved on")
+    git(repo, "checkout", "--quiet", "mine")
+
+    # Nothing of anyone's is only in the clone: it is replaced as any clean one behind.
+    replaced = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+
+    assert replaced.start == git(repo, "rev-parse", "vp-9")
+
+
+@pytest.mark.parametrize("how", ["branch", "tag", "stash"])
+def test_a_review_clone_that_keeps_work_aside_is_not_replaced(
+    repo: Path,
+    tmp_path: Path,
+    how: str,
+) -> None:
+    trees = tmp_path / "trees"
+    sha = git(repo, "rev-parse", "main")
+    path = worktrees.prepare_review_clone(repo, trees, "review-vp-1-a", sha)
+    _keeps_aside(path, how)
+    git(path, "checkout", "--quiet", "--detach", sha)
+
+    with pytest.raises(worktrees.GitError, match="holds changes"):
+        worktrees.prepare_review_clone(repo, trees, "review-vp-1-a", sha)
+    assert (path / ".git").is_dir()
+
+
 def test_a_worktree_of_an_earlier_version_is_retired_when_it_holds_no_changes(
     board: FakeBoard,
     server: FakeBoardServer,
