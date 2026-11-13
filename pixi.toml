@@ -1,0 +1,57 @@
+[workspace]
+name = "vibepod"
+description = "VibePod CLI with all dependencies from conda-forge"
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64", "linux-aarch64", "osx-64", "osx-arm64"]
+
+# Default environment: this checkout, installed editable on top of conda-forge
+# packages. Only vibepod itself comes through the PyPI installer; every
+# dependency, the build backend included, is a conda-forge binary.
+[dependencies]
+python = "3.13.*"
+typer = ">=0.12.0"
+click = ">=8.0.0"
+rich = ">=13.0.0"
+docker-py = ">=7.0.0" # pulls in pywin32 on Windows (npipe:// transport)
+pyyaml = ">=6.0.0"
+"ruamel.yaml" = ">=0.18.0"
+platformdirs = ">=4.0.0"
+hatchling = ">=1.24.0"
+editables = "*"
+
+[pypi-dependencies]
+vibepod = { path = ".", editable = true }
+
+[pypi-options]
+# Build with the conda-forge hatchling above instead of fetching it from PyPI.
+no-build-isolation = ["vibepod"]
+
+[tasks]
+vp = { cmd = "vp", description = "Run the CLI: `pixi run vp run claude`" }
+
+[feature.dev.dependencies]
+pytest = ">=8.0.0"
+ruff = ">=0.6.0"
+mypy = ">=1.11.0"
+types-docker = "*"
+types-pyyaml = "*"
+tomli = ">=2.0.1"
+
+[feature.dev.tasks]
+# A throwaway config dir keeps the suite from reading ~/.config/vibepod.
+test = { cmd = "python -m pytest", env = { VP_CONFIG_DIR = "$PIXI_PROJECT_ROOT/.pixi/test-config" } }
+lint = "ruff check src tests && ruff format --check src tests"
+typecheck = "mypy src"
+
+# The released conda-forge package, without this checkout.
+[feature.release.dependencies]
+python = "3.13.*"
+vibepod = "*"
+
+[feature.release.tasks]
+vp-release = { cmd = "vp", description = "Run the released conda-forge build" }
+
+[environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+release = { features = ["release"], no-default-feature = true }
