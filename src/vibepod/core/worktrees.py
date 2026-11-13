@@ -299,12 +299,13 @@ def _check_place(repo: Path, path: Path) -> None:
 def _retire_worktree(repo: Path, path: Path) -> None:
     """Removes the linked worktree an earlier version of the worker made at `path`, if any:
     its branch and commits stay in the repository. Git refuses where the worktree holds
-    changes, and so does this."""
+    changes, and so does this. One whose folder was removed holds nothing, and is only
+    forgotten."""
     if path not in worktree_paths(repo):
         return
     # Checked here rather than by `git worktree remove`, which looks into nested
     # repositories for changes, with a configuration the agent may have written.
-    if has_changes(path):
+    if path.exists() and has_changes(path):
         raise GitError(
             f"{path} is a worktree an earlier version of vp board work left, and it holds "
             f"changes; keep what you need, then remove it with "

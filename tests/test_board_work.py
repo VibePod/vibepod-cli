@@ -4,6 +4,7 @@ HTTP. No agent subscription and no container runtime are involved."""
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -3773,6 +3774,27 @@ def test_a_worktree_of_an_earlier_version_is_retired_when_it_holds_no_changes(
     assert "a worktree an earlier version of vp board work left" in release["note"]
     assert (trees / "vp-2" / "wip.txt").read_text() == "work in progress\n"
     assert worktrees.worktree_paths(repo) == [repo.resolve(), (trees / "vp-2").resolve()]
+
+
+def test_a_worktree_of_an_earlier_version_whose_folder_is_gone_is_forgotten(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    trees = tmp_path / "trees"
+    sha = git(repo, "rev-parse", "main")
+    git(repo, "worktree", "add", "--quiet", "-b", "vp-9", str(trees / "vp-9"))
+    git(trees / "vp-9", "commit", "--quiet", "--allow-empty", "-m", "Earlier work")
+    git(repo, "worktree", "add", "--quiet", "--detach", str(trees / "review-vp-9-a"), sha)
+    shutil.rmtree(trees / "vp-9")
+    shutil.rmtree(trees / "review-vp-9-a")
+
+    # Still registered, with nothing in it to look at: forgotten, the branch continued.
+    clone = worktrees.prepare_clone(repo, trees, "vp-9", "main")
+
+    assert clone.continued
+    assert git(clone.path, "log", "-1", "--format=%s") == "Earlier work"
+    assert worktrees.prepare_review_clone(repo, trees, "review-vp-9-a", sha).is_dir()
+    assert worktrees.worktree_paths(repo) == [repo.resolve()]
 
 
 def test_review_clones_are_detached_and_replaced(repo: Path, tmp_path: Path) -> None:
