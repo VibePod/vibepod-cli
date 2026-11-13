@@ -537,14 +537,49 @@ def _raw_console_input_mode(old_mode: int) -> int:
     return (old_mode & ~_RAW_CONSOLE_INPUT_CLEAR) | _ENABLE_EXTENDED_FLAGS
 
 
+def _declare_kernel32_prototypes(kernel32: Any) -> Any:
+    """Give the console functions we call their real C signatures.
+
+    Without ``restype`` ctypes reads every result as a C ``int``, which cuts a
+    64-bit ``HANDLE`` from ``GetStdHandle`` down to 32 bits, and without
+    ``argtypes`` a Python int is passed as an ``int`` too. Console handles are
+    small in practice, so this has not bitten yet, but it is undefined behaviour.
+    """
+    assert ctypes is not None
+    handle = ctypes.c_void_p
+    dword = ctypes.c_uint32
+    bool_ = ctypes.c_int
+    prototypes: dict[str, tuple[Any, list[Any]]] = {
+        "GetStdHandle": (handle, [dword]),
+        "GetConsoleMode": (bool_, [handle, ctypes.POINTER(dword)]),
+        "SetConsoleMode": (bool_, [handle, dword]),
+    }
+    for name, (restype, argtypes) in prototypes.items():
+        function = getattr(kernel32, name)
+        function.restype = restype
+        function.argtypes = argtypes
+    return kernel32
+
+
+_KERNEL32: Any | None = None
+
+
 def _kernel32() -> Any | None:
-    """``ctypes.windll.kernel32`` on Windows, ``None`` everywhere else."""
+    """A private, prototyped ``kernel32`` on Windows, ``None`` everywhere else.
+
+    Its own ``WinDLL`` instance rather than the shared ``ctypes.windll.kernel32``,
+    so the prototypes set here cannot clash with what other code in the process
+    expects of that shared object.
+    """
+    global _KERNEL32
     if ctypes is None or sys.platform != "win32":
         return None
-    try:
-        return ctypes.windll.kernel32
-    except Exception:  # pragma: no cover - exotic CPython builds
-        return None
+    if _KERNEL32 is None:
+        try:
+            _KERNEL32 = _declare_kernel32_prototypes(ctypes.WinDLL("kernel32"))
+        except Exception:  # pragma: no cover - exotic CPython builds
+            return None
+    return _KERNEL32
 
 
 def _get_console_input_mode(kernel32: Any) -> int | None:
@@ -552,15 +587,20 @@ def _get_console_input_mode(kernel32: Any) -> int | None:
     if ctypes is None:
         return None
     mode = ctypes.c_uint32()
-    if not kernel32.GetConsoleMode(kernel32.GetStdHandle(_STD_INPUT_HANDLE), ctypes.pointer(mode)):
+    if not kernel32.GetConsoleMode(_console_input_handle(kernel32), ctypes.pointer(mode)):
         return None
     return int(mode.value)
+
+
+def _console_input_handle(kernel32: Any) -> Any:
+    """``GetStdHandle(STD_INPUT_HANDLE)``; the constant is a DWORD, i.e. unsigned."""
+    return kernel32.GetStdHandle(_STD_INPUT_HANDLE & 0xFFFFFFFF)
 
 
 def _set_console_input_mode(kernel32: Any, mode: int) -> bool:
     if ctypes is None:
         return False
-    handle = kernel32.GetStdHandle(_STD_INPUT_HANDLE)
+    handle = _console_input_handle(kernel32)
     # SetConsoleMode takes the mode by value (DWORD), unlike GetConsoleMode's
     # LPDWORD; a pointer here is read as mode bits and the call fails.
     return bool(kernel32.SetConsoleMode(handle, ctypes.c_uint32(mode)))

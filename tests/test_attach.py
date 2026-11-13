@@ -449,7 +449,7 @@ class _FakeKernel32:
         self.set_modes: list[int] = []
 
     def GetStdHandle(self, which: int) -> int:
-        assert which == docker_mod._STD_INPUT_HANDLE
+        assert which == docker_mod._STD_INPUT_HANDLE & 0xFFFFFFFF  # a DWORD
         return 7
 
     def GetConsoleMode(self, handle: int, mode_ptr: Any) -> int:
