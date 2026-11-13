@@ -684,14 +684,22 @@ def test_forward_windows_console_input_drops_key_release_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One typed ``a`` arriving as ``a`` + ``ESC[97;1:3u`` forwards just ``a``."""
-    monkeypatch.setattr(docker_mod, "msvcrt", _FakeConsole(list("a\x1b[97;1:3u\x1b[A")))
+    stop = threading.Event()
+
+    class _Console(_FakeConsole):
+        def kbhit(self) -> bool:
+            if not self._keys:
+                stop.set()  # all keys typed: the session ends
+            return super().kbhit()
+
+    monkeypatch.setattr(docker_mod, "msvcrt", _Console(list("a\x1b[97;1:3u\x1b[A")))
     sent = bytearray()
 
     class _Sock:
         def sendall(self, data: bytes) -> None:
             sent.extend(data)
 
-    docker_mod._forward_windows_console_input(_Sock(), None, threading.Event())
+    docker_mod._forward_windows_console_input(_Sock(), None, stop)
 
     assert sent == b"a\x1b[A"
 
@@ -764,6 +772,53 @@ def test_forward_windows_console_input_stops_quietly_on_send_failure(
     monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch))
     docker_mod._forward_windows_console_input(_Sock(), None, threading.Event())
     assert _Sock.calls == 1
+
+
+def test_forward_windows_console_input_never_blocks_after_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a queued key the thread must not sit in getwch(): it would steal
+    the next keystroke and re-apply raw mode after the session restored it."""
+    stop = threading.Event()
+
+    def getwch() -> str:
+        raise AssertionError("getwch() called without a queued key")
+
+    def kbhit() -> bool:
+        stop.set()  # the session ends while the thread is idle
+        return False
+
+    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch, kbhit=kbhit))
+    thread = threading.Thread(
+        target=docker_mod._forward_windows_console_input, args=(object(), None, stop)
+    )
+    thread.start()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
+def test_threaded_reader_buffers_a_bounded_amount_and_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow consumer must apply back-pressure, not grow the queue without end."""
+    monkeypatch.setattr(docker_mod, "_READER_QUEUE_CHUNKS", 4)
+    reads = 0
+
+    class _Firehose(_NpipeLikeSocket):
+        def recv_into(self, buf: bytearray) -> int:
+            nonlocal reads
+            reads += 1
+            buf[:1] = b"x"
+            return 1
+
+    reader = docker_mod._ThreadedReader(_Firehose([]), 16)
+    time.sleep(0.3)
+    # Four queued chunks plus the one the reader holds while waiting for room.
+    assert reads <= 5
+    assert reader.get(0.1) == b"x"
+    reader.close()
+    reader._thread.join(timeout=2)
+    assert not reader._thread.is_alive()
 
 
 def test_attach_interactive_non_tty_outlives_the_socket_timeout(

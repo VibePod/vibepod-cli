@@ -722,6 +722,38 @@ def test_attach_stdio_on_windows_tcp_forwards_stdin_without_select(monkeypatch) 
     assert stopped == []  # a real socket half-closes; no container stop
 
 
+def test_attach_stdio_over_named_pipe_ends_when_the_eof_stop_fails(monkeypatch) -> None:
+    """A failed stop must not leave the session waiting on a stream that stays open."""
+    import threading
+
+    from vibepod.utils import console as console_mod
+
+    warnings: list[str] = []
+    monkeypatch.setattr(console_mod, "warning", warnings.append)
+    release = threading.Event()
+
+    class _Container(_AttachContainer):
+        name = "vibepod-claude-acp"
+
+        def stop(self, timeout: int = 0) -> None:
+            raise RuntimeError("daemon unreachable")
+
+    # The stream never ends on its own: the adapter got no EOF.
+    sock = _NpipeStreamSocket([], gate=lambda: release.wait(5))
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)  # the ACP client went away at once
+    try:
+        _, _, exit_code = _run_attach_stdio_npipe(monkeypatch, sock, read_fd, _Container())
+    finally:
+        release.set()
+        os.close(read_fd)
+
+    assert exit_code == 1
+    assert len(warnings) == 1
+    assert "daemon unreachable" in warnings[0]
+    assert "vp stop vibepod-claude-acp" in warnings[0]
+
+
 def test_attach_stdio_over_named_pipe_keeps_a_real_failure_exit_code(monkeypatch) -> None:
     """Without a stdin-EOF stop, a 143 is the adapter's own and is reported."""
     frame = b"\x01\x00\x00\x00\x00\x00\x00\x02{}"

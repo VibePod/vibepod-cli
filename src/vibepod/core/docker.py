@@ -405,6 +405,9 @@ _MAX_ESCAPE_SEQUENCE_CHARS = 32
 #: burst trickling, and stays far below anything a user would notice.
 _ESCAPE_SEQUENCE_GRACE_SECONDS = 0.05
 _KEY_POLL_INTERVAL = 0.002
+#: How often the console input thread checks for a key while idle. It bounds
+#: both the typing latency and how long the thread outlives the session.
+_KEY_WAIT_POLL_SECONDS = 0.01
 
 
 def _console_key_available(deadline: float | None = None) -> bool:
@@ -569,7 +572,18 @@ def _leave_console_raw_input(old_mode: int) -> None:
 def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading.Event) -> None:
     if msvcrt is None:
         return
+    kbhit = getattr(msvcrt, "kbhit", None)
     while not stop_event.is_set():
+        if kbhit is not None:
+            # Only read once a key is queued: a getwch() left blocked after the
+            # session ended would steal the next keystroke, and on return the
+            # CRT puts back the raw console mode we have already restored.
+            try:
+                if not kbhit():
+                    time.sleep(_KEY_WAIT_POLL_SECONDS)
+                    continue
+            except OSError:
+                return
         try:
             data = _console_key_bytes(msvcrt.getwch())
         except (EOFError, KeyboardInterrupt, OSError):
@@ -604,6 +618,11 @@ _STOP_EXIT_CODES = frozenset({137, 143})
 #: How often the main thread wakes while a :class:`_ThreadedReader` is waiting, so
 #: Ctrl+C and signal handlers still run promptly.
 _PIPE_POLL_SECONDS = 0.1
+
+#: Chunks a :class:`_ThreadedReader` buffers ahead of a slow consumer (a busy
+#: terminal or ACP client) before it stops reading: back-pressure, as the
+#: select() loop gets for free, instead of unbounded memory.
+_READER_QUEUE_CHUNKS = 64
 
 
 def _is_selectable(sock: Any) -> bool:
@@ -654,7 +673,8 @@ class _ThreadedReader:
 
     The main thread collects chunks with :meth:`get`, which returns after at
     most *timeout* seconds, so it keeps handling Ctrl+C, signals and its own
-    deadlines while the read blocks.
+    deadlines while the read blocks. The queue is bounded; :meth:`close` lets a
+    reader waiting for room exit.
     """
 
     def __init__(self, sock: Any, bufsize: int) -> None:
@@ -668,20 +688,34 @@ class _ThreadedReader:
         self._sock = sock
         self._buf = bytearray(bufsize)
         self._pipe = not _is_selectable(sock)
-        self._chunks: queue.Queue[bytes | BaseException] = queue.Queue()
+        self._closed = threading.Event()
+        self._chunks: queue.Queue[bytes | BaseException] = queue.Queue(maxsize=_READER_QUEUE_CHUNKS)
         self._thread = threading.Thread(target=self._run, name="vibepod-attach-output", daemon=True)
         self._thread.start()
 
+    def _put(self, item: bytes | BaseException) -> bool:
+        """Queue *item*, waiting for room; False once the reader was closed."""
+        while not self._closed.is_set():
+            try:
+                self._chunks.put(item, timeout=_PIPE_POLL_SECONDS)
+            except queue.Full:
+                continue
+            return True
+        return False
+
     def _run(self) -> None:
-        while True:
+        while not self._closed.is_set():
             try:
                 data = _recv_chunk(self._sock, self._buf, self._pipe)
             except BaseException as exc:
-                self._chunks.put(exc)
+                self._put(exc)
                 return
-            self._chunks.put(data)
-            if not data:
+            if not self._put(data) or not data:
                 return
+
+    def close(self) -> None:
+        """Stop the reader once its current read returns; queued data is dropped."""
+        self._closed.set()
 
     def get(self, timeout: float) -> bytes | None:
         """Next chunk, ``b""`` at EOF, ``None`` when *timeout* passed first.
@@ -697,7 +731,13 @@ class _ThreadedReader:
         return item
 
 
-def _forward_stdin(stdin_fd: int, sock: Any, container: Any, eof_stop: threading.Event) -> None:
+def _forward_stdin(
+    stdin_fd: int,
+    sock: Any,
+    container: Any,
+    eof_stop: threading.Event,
+    stop_failures: list[BaseException],
+) -> None:
     """Copy ACP client input from *stdin_fd* to the attach socket on a thread.
 
     On stdin EOF a real socket is half-closed so the adapter sees EOF and exits
@@ -705,7 +745,9 @@ def _forward_stdin(stdin_fd: int, sock: Any, container: Any, eof_stop: threading
     (``NpipeSocket.shutdown`` closes the whole handle, cutting off the output
     still to come), so the container is stopped instead, which ends the stream;
     *eof_stop* records that, so the caller does not report the resulting
-    SIGTERM exit as a failure.
+    SIGTERM exit as a failure. A stop that fails is appended to
+    *stop_failures*, so the caller ends the session instead of waiting on a
+    container that never sees EOF.
     """
     while True:
         try:
@@ -713,14 +755,17 @@ def _forward_stdin(stdin_fd: int, sock: Any, container: Any, eof_stop: threading
         except OSError:
             data = b""
         if not data:
-            try:
-                if _is_selectable(sock):
+            if _is_selectable(sock):
+                try:
                     sock.shutdown(socket.SHUT_WR)
-                else:
-                    eof_stop.set()
-                    container.stop(timeout=5)
-            except Exception:  # pragma: no cover - best effort
-                pass
+                except OSError:  # pragma: no cover - already closed
+                    pass
+                return
+            eof_stop.set()
+            try:
+                container.stop(timeout=5)
+            except Exception as exc:
+                stop_failures.append(exc)
             return
         try:
             sock.sendall(data)
@@ -1609,6 +1654,7 @@ class DockerManager:
         old_winch_handler = None
         input_stop_event: threading.Event | None = None
         input_thread: threading.Thread | None = None
+        interactive_reader: _ThreadedReader | None = None
         sigwinch = getattr(signal, "SIGWINCH", None)
         try:
             if sys.stdin.isatty() and termios is not None and tty is not None:
@@ -1645,7 +1691,7 @@ class DockerManager:
             if not _is_selectable(sock):
                 # Windows named pipe: no select(). Only reachable on Windows,
                 # where console input is forwarded by its own thread above.
-                reader = _ThreadedReader(sock, 8192)
+                interactive_reader = reader = _ThreadedReader(sock, 8192)
                 while True:
                     data = reader.get(_PIPE_POLL_SECONDS)
                     if data is None:
@@ -1676,6 +1722,8 @@ class DockerManager:
                         logger.log_input(user_data)
                     sock.sendall(user_data)
         finally:
+            if interactive_reader is not None:
+                interactive_reader.close()
             try:
                 sock_wrapper.close()
             except Exception:
@@ -1827,21 +1875,23 @@ class DockerManager:
         # cause on stderr (the editor's ACP log) once.
         first_output_deadline: float | None = time.monotonic() + _ACP_FIRST_OUTPUT_WARN_SECONDS
         eof_stop = threading.Event()
+        stop_failures: list[BaseException] = []
+        stdio_reader: _ThreadedReader | None = None
         try:
             if not _is_selectable(sock) or (stdin_fd is not None and not _can_select_stdin()):
                 # Windows: select() rejects named pipes and stdin pipes alike
                 # (it takes only Winsock sockets), so on npipe:// -- and with
                 # stdin to forward, on tcp:// or ssh:// too -- both directions
                 # get a thread.
-                reader = _ThreadedReader(sock, 65536)
+                stdio_reader = reader = _ThreadedReader(sock, 65536)
                 if stdin_fd is not None:
                     threading.Thread(
                         target=_forward_stdin,
-                        args=(stdin_fd, sock, container, eof_stop),
+                        args=(stdin_fd, sock, container, eof_stop, stop_failures),
                         name="vibepod-acp-stdin",
                         daemon=True,
                     ).start()
-                while not stop_requested:
+                while not stop_requested and not stop_failures:
                     wait = _PIPE_POLL_SECONDS
                     if first_output_deadline is not None:
                         wait = min(wait, max(0.0, first_output_deadline - time.monotonic()))
@@ -1903,6 +1953,8 @@ class DockerManager:
                             except OSError:
                                 stdin_fd = None
         finally:
+            if stdio_reader is not None:
+                stdio_reader.close()
             try:
                 sock_wrapper.close()
             except Exception:  # pragma: no cover - best effort
@@ -1912,6 +1964,15 @@ class DockerManager:
             if old_sigint is not None:
                 signal.signal(signal.SIGINT, old_sigint)
 
+        if stop_failures:
+            # The ACP client is gone but the adapter never got its EOF stand-in;
+            # the container would keep running, so say which one and fail.
+            name = getattr(container, "name", container.id)
+            warning(
+                f"ACP: the client closed stdin but stopping {name} failed: "
+                f"{stop_failures[0]}; stop it with `vp stop {name}`.",
+            )
+            return 1
         waiter.join(timeout=10)
         status = wait_result.get("StatusCode")
         if status is None:
