@@ -205,6 +205,14 @@ agents:
     ports: []
     init: []
 
+  warp:
+    enabled: true
+    image: vibepod/warp:latest
+    env: {}
+    volumes: []
+    ports: []
+    init: []
+
 # Connect agents to a local or remote LLM server (Ollama, vLLM, etc.)
 llm:
   enabled: false
@@ -290,6 +298,7 @@ Each agent image can be overridden individually:
 | `VP_IMAGE_CLINE`         | cline                               |
 | `VP_IMAGE_JUNIE`         | junie                               |
 | `VP_IMAGE_CURSOR`        | cursor                              |
+| `VP_IMAGE_WARP`          | warp                                |
 | `VP_DATASETTE_IMAGE`     | datasette (logs UI)                 |
 | `VP_PROXY_IMAGE`         | proxy                               |
 | `VP_SKILLS_ENGINE_IMAGE` | skills-engine (used by `vp skills`) |

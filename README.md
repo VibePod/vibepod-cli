@@ -23,7 +23,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Mistral Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes, Cline, Junie, Cursor & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Mistral Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes, Cline, Junie, Cursor, Warp & more
 - 🔌 **Model providers** — register any OpenAI- or Anthropic-compatible endpoint or local model server once with `vp provider add`, then route supported agents to it with `vp run --provider` ([docs and supported agents](https://vibepod.dev/docs/providers/))
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
@@ -102,6 +102,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `cline`             | `--auto-approve true`                        |
 | `junie`             | `--brave`                                    |
 | `cursor`            | `--force`                                    |
+| `warp`              | `--auto-approve`                             |
 
 ## Editor integration (`--acp`)
 
@@ -147,6 +148,7 @@ Run `vp config allow-dir /path/to/project` once first (the editor's stdin is a p
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/cline.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/cline.png" alt="Cline" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/junie.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/junie.png" alt="Junie" width="180" /></a>
   <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/cursor.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/cursor.png" alt="Cursor CLI" width="180" /></a>
+  <a href="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/warp.png"><img src="https://raw.githubusercontent.com/VibePod/vibepod-cli/main/docs/assets/warp.png" alt="Warp Agent CLI" width="180" /></a>
 </p>
 
 ## Current Status
@@ -202,6 +204,7 @@ Current defaults:
 - `cline` -> `vibepod/cline:latest`
 - `junie` -> `vibepod/junie:latest`
 - `cursor` -> `vibepod/cursor:latest`
+- `warp` -> `vibepod/warp:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
@@ -229,6 +232,7 @@ VP_IMAGE_HERMES=vibepod/hermes:latest vp run hermes
 VP_IMAGE_CLINE=vibepod/cline:latest vp run cline
 VP_IMAGE_JUNIE=vibepod/junie:latest vp run junie
 VP_IMAGE_CURSOR=vibepod/cursor:latest vp run cursor
+VP_IMAGE_WARP=vibepod/warp:latest vp run warp
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 VP_PROXY_IMAGE=vibepod/proxy:latest vp proxy start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list

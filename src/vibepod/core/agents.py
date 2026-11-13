@@ -423,6 +423,31 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # server over stdio).
         acp_command=["cursor-agent", "acp"],
     ),
+    "warp": AgentSpec(
+        "warp",
+        "warp",
+        DEFAULT_IMAGES["warp"],
+        "warp",
+        ["warp"],
+        "/config",
+        # Warp derives all user state from HOME: ~/.config/warp-terminal
+        # (settings), ~/.local/state/warp-terminal (conversation database) and
+        # ~/.local/share/keyrings. The login lives in the Secret Service, which
+        # the image provides with a private session bus and keyring so that it
+        # persists on this mount.
+        # WARP_TUI_DISABLE_AUTOUPDATE: the background self-update would stage
+        # a full build under ~/.warp/tui on the persisted mount, while the
+        # image keeps running its baked-in binary. Set here as well as in the
+        # image so an image override cannot bring it back.
+        # No llm_env_map: inference goes through Warp's own service, and its
+        # bring-your-own-key support takes provider keys but no base URL.
+        # HTTP(S)_PROXY and SSL_CERT_FILE are honoured natively.
+        {"HOME": "/config", "WARP_TUI_DISABLE_AUTOUPDATE": "1"},
+        ikwid_args=["--auto-approve"],
+        # No headless_prefix and no acp_command: the CLI is interactive only.
+        # It takes no prompt argument, has no print mode and ships no Agent
+        # Client Protocol server.
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

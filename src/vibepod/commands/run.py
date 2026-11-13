@@ -349,6 +349,7 @@ def _agent_skill_paths(agent: str, env: Mapping[str, str] | None = None) -> list
       - dsh      reads ~/.agents/skills/            → /config/.agents/skills/
       - cline    reads ~/.agents/skills/ (also ~/.cline/skills/)
       - cursor   reads ~/.agents/skills/ (also ~/.cursor/skills/, ~/.claude/skills/)
+      - warp     reads ~/.agents/skills/            → /config/.agents/skills/
       - hermes   reads ~/.agents/skills/ once the image seeds it into
         skills.external_dirs in $HERMES_HOME/config.yaml (Hermes has no
         env-var override for that key). Its state volume is the official
@@ -386,6 +387,7 @@ def _agent_skill_paths(agent: str, env: Mapping[str, str] | None = None) -> list
         "dsh",
         "cline",
         "cursor",
+        "warp",
     ):
         return ["/config/.agents/skills"]
     return []

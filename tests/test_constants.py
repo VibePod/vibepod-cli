@@ -27,6 +27,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_CLINE",
         "VP_IMAGE_JUNIE",
         "VP_IMAGE_CURSOR",
+        "VP_IMAGE_WARP",
         "VP_DATASETTE_IMAGE",
         "VP_PROXY_IMAGE",
     ):
@@ -52,6 +53,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["cline"] == "vibepod/cline:latest"
     assert images["junie"] == "vibepod/junie:latest"
     assert images["cursor"] == "vibepod/cursor:latest"
+    assert images["warp"] == "vibepod/warp:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -161,3 +163,11 @@ def test_cursor_image_override(monkeypatch) -> None:
     images = get_default_images()
 
     assert images["cursor"] == "example/cursor:dev"
+
+
+def test_warp_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_WARP", "example/warp:dev")
+
+    images = get_default_images()
+
+    assert images["warp"] == "example/warp:dev"

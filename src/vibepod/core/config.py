@@ -205,6 +205,15 @@ def _default_config() -> dict[str, Any]:
                 "ports": [],
                 "init": [],
             },
+            "warp": {
+                "enabled": True,
+                "image": DEFAULT_IMAGES["warp"],
+                "auto_pull": None,
+                "env": {},
+                "volumes": [],
+                "ports": [],
+                "init": [],
+            },
         },
         "logging": {
             "enabled": True,

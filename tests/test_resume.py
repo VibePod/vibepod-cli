@@ -102,6 +102,27 @@ def test_cursor_hint_ignores_agent_inside_paths() -> None:
     assert build_resume_hint("cursor", "/opt/cursor-agent --resume=abc\n") is None
 
 
+def test_detects_warp_exit_resume_hint() -> None:
+    output = (
+        "To continue this conversation, run:\r\n"
+        "\x1b[1mwarp --resume 6f1c2a9e-3b4d-4e5f-8a7b-9c0d1e2f3a4b\x1b[0m\r\n"
+    )
+    assert (
+        build_resume_hint("warp", output)
+        == "vp run warp -- --resume 6f1c2a9e-3b4d-4e5f-8a7b-9c0d1e2f3a4b"
+    )
+
+
+def test_detects_warp_resume_hint_on_one_line() -> None:
+    output = "To continue this conversation, run: `warp --resume abc_123`\n"
+    assert build_resume_hint("warp", output) == "vp run warp -- --resume abc_123"
+
+
+def test_warp_hint_ignores_binary_inside_paths() -> None:
+    assert build_resume_hint("warp", "/opt/warp --resume abc\n") is None
+    assert build_resume_hint("warp", "vp run warp -- --resume abc\n") is None
+
+
 def test_detects_freebuff_continue_hint() -> None:
     output = "freebuff --continue conv-42\n"
     assert build_resume_hint("freebuff", output) == "vp run freebuff -- --continue conv-42"

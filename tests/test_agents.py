@@ -169,6 +169,25 @@ def test_cursor_spec_matches_container_contract() -> None:
     assert spec.preview is False
 
 
+def test_warp_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("warp")
+    assert spec.id == "warp"
+    assert spec.provider == "warp"
+    assert spec.image == DEFAULT_IMAGES["warp"]
+    assert spec.config_subdir == "warp"
+    assert spec.command == ["warp"]
+    assert spec.config_mount_path == "/config"
+    assert spec.extra_env == {"HOME": "/config", "WARP_TUI_DISABLE_AUTOUPDATE": "1"}
+    assert spec.ikwid_args == ["--auto-approve"]
+    # The Warp Agent CLI is interactive only: no one-shot mode, no ACP server.
+    assert spec.headless_prefix is None
+    assert spec.headless_command is None
+    assert spec.acp_command is None
+    assert spec.llm_env_map is None
+    assert spec.llm_model_args is None
+    assert spec.preview is False
+
+
 def test_dsh_spec_matches_container_contract() -> None:
     spec = get_agent_spec("dsh")
     assert spec.id == "dsh"
@@ -339,6 +358,7 @@ def test_agents_without_llm_env_map() -> None:
         "cline",
         "junie",
         "cursor",
+        "warp",
     ):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"

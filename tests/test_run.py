@@ -107,6 +107,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "cline",
         "junie",
         "cursor",
+        "warp",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -883,6 +884,65 @@ def test_cursor_launch_preserves_state_and_forwards_arguments(
     assert Path(stub.run_kwargs["config_dir"]) == _tmp_config_root / "config" / "agents" / "cursor"
     assert stub.run_kwargs["env"]["HOME"] == "/config"
     assert stub.run_kwargs["env"]["NODE_USE_ENV_PROXY"] == "1"
+
+
+@pytest.mark.parametrize("invocation", [["run", "warp"], ["w"]])
+@pytest.mark.parametrize("ikwid", [False, True])
+def test_warp_launch_preserves_state_and_forwards_arguments(
+    monkeypatch,
+    _tmp_config_root,
+    invocation,
+    ikwid,
+) -> None:
+    """Both entry points launch Warp with persisted HOME and intact arguments."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("warp", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            *invocation,
+            "-w",
+            str(workspace),
+            "--detach",
+            *(["--ikwid"] if ikwid else []),
+            "--",
+            "--resume",
+            "conversation-123",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["command"] == [
+        "warp",
+        *(["--auto-approve"] if ikwid else []),
+        "--resume",
+        "conversation-123",
+    ]
+    assert stub.run_kwargs["config_mount_path"] == "/config"
+    assert Path(stub.run_kwargs["config_dir"]) == _tmp_config_root / "config" / "agents" / "warp"
+    assert stub.run_kwargs["env"]["HOME"] == "/config"
+    # The image's baked-in build must not be shadowed by a self-update staged
+    # on the persisted mount.
+    assert stub.run_kwargs["env"]["WARP_TUI_DISABLE_AUTOUPDATE"] == "1"
+
+
+def test_warp_acp_is_rejected(monkeypatch, _tmp_config_root) -> None:
+    """Warp ships no Agent Client Protocol server, so --acp must abort."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("warp", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "warp", "-w", str(workspace), "--acp"])
+
+    assert result.exit_code != 0
+    assert stub.run_kwargs is None
 
 
 def test_run_codex_oauth_ports_merge_with_configured_ports(monkeypatch, _tmp_config_root) -> None:
@@ -4148,6 +4208,13 @@ def test_cursor_skill_paths_use_shared_agents_dir() -> None:
 def test_cursor_acp_rejects_installation_overlap(workspace: str) -> None:
     with pytest.raises(typer.Exit):
         run_cmd._acp_workspace_mount_path(PurePosixPath(workspace), get_agent_spec("cursor"))
+
+
+def test_warp_skill_paths_use_shared_agents_dir() -> None:
+    """Warp reads ~/.agents/skills, and the image sets HOME to /config."""
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("warp") == ["/config/.agents/skills"]
 
 
 def test_hermes_skill_paths_use_shared_agents_dir() -> None:

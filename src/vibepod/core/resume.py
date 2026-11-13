@@ -140,6 +140,14 @@ _HINT_PATTERNS: dict[str, tuple[tuple[re.Pattern[str], Callable[[re.Match[str]],
             _with_id("--resume"),
         ),
     ),
+    # Warp prints "To continue this conversation, run:" followed by
+    # "warp --resume <conversation token>" on exit.
+    "warp": (
+        (
+            re.compile(rf"{_BOUNDARY}warp[ \t]+--resume[ \t]+({_TOKEN})"),
+            _with_id("--resume"),
+        ),
+    ),
     # Hermes prints both forms on exit (hermes_cli/cli.py):
     #   hermes --resume <session_id>
     #   hermes -c "<session title>"
