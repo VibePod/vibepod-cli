@@ -1068,8 +1068,9 @@ class BoardWorker:
                     return None, ended
                 self._heartbeat()
                 # The agent or command works in its own clone meanwhile; the push is from the
-                # repository, with heartbeats going on.
-                self._serve_pushes()
+                # repository, with heartbeats going on. One a round: a push can take as long
+                # as its time limit, and the process is looked after again before the next.
+                self._serve_pushes(limit=1)
                 # Quick commands finish without a full poll interval of waiting.
                 self.sleep(min(self.poll_seconds, 0.1 * 2 ** min(waited, 5)))
                 waited += 1
@@ -2306,17 +2307,20 @@ class BoardWorker:
         finally:
             self._pushing = False
 
-    def _serve_pushes(self) -> None:
+    def _serve_pushes(self, limit: int | None = None) -> None:
         """Serves the push requests the last heartbeat brought, one at a time: those for a
-        repository this worker has and may work in, with the commit to push."""
+        repository this worker has and may work in, with the commit to push. No more than
+        `limit` of them now, when given; the others wait for the next call."""
         if not self.options.push or self._pushing:
             return
         self._pushing = True
         try:
-            while self.push_queue and not self.stop_requested:
+            served = 0
+            while self.push_queue and not self.stop_requested and (limit is None or served < limit):
                 request = self.push_queue.pop(0)
                 if request.get("status") in {None, "pending"}:
                     self._serve_push(request)
+                    served += 1
         finally:
             self._pushing = False
 

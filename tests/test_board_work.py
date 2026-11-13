@@ -4523,6 +4523,45 @@ def test_a_push_request_is_served_while_the_agent_works(
     assert pushed_at < handed_at
 
 
+def test_the_agent_is_looked_after_between_two_pushes(
+    monkeypatch: pytest.MonkeyPatch,
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+    github: Path,
+) -> None:
+    git(repo, "remote", "add", "origin", str(github))
+    handed_over(board, repo, title="Earlier work")
+    handed_over(board, repo, title="More earlier work")
+    board.card("VP-1")["column"] = board.card("VP-2")["column"] = "pr_ready"
+    board.add_task("New work")
+
+    def requested(beat: dict[str, Any]) -> list[dict[str, Any]]:
+        if beat.get("step") == "agent_running" and not board.push_requests:
+            board.request_push("VP-1")
+            board.request_push("VP-2")
+        return []
+
+    board.on_heartbeat = requested
+    runner = FakeRunner(polls=400)
+    polled: list[int] = []
+    push_branch = worktrees.push_branch
+
+    def pushing(*args: Any, **kwargs: Any) -> str:
+        polled.append(runner.runs[0].polled)
+        return push_branch(*args, **kwargs)
+
+    monkeypatch.setattr(worktrees, "push_branch", pushing)
+
+    worker, _ = work(server, runner, repo, once=True)
+
+    assert [board.push_request(f"push-{n}")["status"] for n in (1, 2)] == ["pushed", "pushed"]
+    assert worker.summary.handed_over == ["VP-3"]
+    # A push can take as long as its time limit: the agent is not left alone for two.
+    first, second = polled
+    assert first < second
+
+
 def test_push_requests_the_worker_cannot_serve_are_passed_over(
     board: FakeBoard,
     server: FakeBoardServer,

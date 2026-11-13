@@ -319,8 +319,9 @@ Review ──approve──▶ PR ready ──push──▶ on GitHub ──▶ O
   task's repository (the same `--repo`, or the task's local path on the
   allowed directories list) and the commit to push. It claims the request,
   pushes, reports, and the board opens the pull request. Workers serve one
-  request at a time, also while an agent runs; their heartbeats go on while
-  they push, and a request another worker claimed first is left to it.
+  request at a time, also while an agent runs, and check on the agent between
+  two pushes; their heartbeats go on while they push, and a request another
+  worker claimed first is left to it.
 
 A push goes from the repository itself, not from a task's clone:
 `git push <remote> <commit>:refs/heads/<branch>`, to the remote whose URL is
