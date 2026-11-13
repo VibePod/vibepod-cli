@@ -2,7 +2,8 @@
 
 The agent works in the worktree while the repository's own checkout stays untouched. A branch
 or worktree left by an earlier run of the same task is continued, or refused on request. Only
-worktrees in the worker's own folder are ever reused or removed.
+worktrees in the worker's own folder are ever reused or removed. A review gets a worktree of
+its own with the reviewed commit checked out detached, so it never creates or moves a branch.
 
 Git runs here on the host, in repositories an agent has worked in, so it never runs code from
 the repository: hooks and fsmonitors are off for every call, nested repositories are never
@@ -19,6 +20,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
+from urllib.parse import quote
 
 from vibepod.core.docker import bind_mode
 
@@ -116,6 +118,10 @@ def resolve_commit(repo: Path, ref: str) -> str:
         raise GitError(f"Base not found: {ref}") from exc
 
 
+def commit_exists(repo: Path, sha: str) -> bool:
+    return _run(repo, "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0
+
+
 def branch_exists(repo: Path, branch: str) -> bool:
     return _run(repo, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0
 
@@ -136,6 +142,15 @@ def checkouts(repo: Path) -> dict[str, Path]:
     return found
 
 
+def worktree_paths(repo: Path) -> list[Path]:
+    """Where the repository's worktrees are, its own checkout first."""
+    return [
+        Path(line[len("worktree ") :]).resolve()
+        for line in git(repo, "worktree", "list", "--porcelain").splitlines()
+        if line.startswith("worktree ")
+    ]
+
+
 def worktree_of_branch(repo: Path, branch: str) -> Path | None:
     """Where the branch is checked out as a worktree, if anywhere."""
     return checkouts(repo).get(f"refs/heads/{branch}")
@@ -143,6 +158,21 @@ def worktree_of_branch(repo: Path, branch: str) -> Path | None:
 
 def worktree_folder(branch: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "worktree"
+
+
+def review_worktree_folder(name: str) -> str:
+    """Preserve reviewer identity when making a portable folder name.
+
+    Unlike branch folders, review folders must distinguish names that differ only in
+    punctuation: replacing punctuation with dashes can replace another reviewer's tree.
+    Percent signs are escaped too, so an already encoded name remains distinct. Capital
+    letters are escaped as well, so names that differ only in case stay apart on a
+    case-insensitive file system: what is left unescaped is lowercase, and the escapes
+    always use uppercase hex digits.
+    """
+    return "".join(
+        f"%{ord(char):02X}" if "A" <= char <= "Z" else quote(char, safe="-_.") for char in name
+    )
 
 
 def _inside(path: Path, folder: Path) -> bool:
@@ -230,6 +260,93 @@ def _add(repo: Path, worktrees_dir: Path, branch: str, start: str | None = None)
     return path
 
 
+def prepare_review_worktree(repo: Path, worktrees_dir: Path, name: str, commit: str) -> Path:
+    """Checks `commit` out, detached, in a worktree of its own for a review: no branch is
+    created, checked out or moved, so several reviewers of one task each get one. A review
+    worktree an earlier run left at the same place in the worktree folder is replaced."""
+    path = (worktrees_dir / review_worktree_folder(name)).resolve()
+    if path == repo.resolve():
+        raise GitError(f"Not replacing {path}: it is the repository's own checkout")
+    # Checked for every path, registered or not: a folder that is a symlink out of the
+    # worktree folder must not get the checkout either.
+    if not _inside(path, worktrees_dir):
+        raise GitError(f"Not using {path}: it is outside {worktrees_dir}")
+    if path in worktree_paths(repo):
+        if _holds_changes(repo, path):
+            raise GitError(
+                f"Not replacing the review worktree at {path}: it holds changes or needs a "
+                f"look; remove it (git worktree remove --force {path}) to review again",
+            )
+        git(repo, "worktree", "remove", "--force", str(path))
+    if path.exists() and any(path.iterdir()):
+        raise GitError(f"Worktree folder is in use: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    git(repo, "worktree", "add", "--detach", str(path), commit)
+    return path
+
+
+def _holds_changes(repo: Path, path: Path) -> bool:
+    """Whether a registered worktree left by an earlier review, such as one kept with
+    `--keep-worktree`, holds changes someone made in it, or has pointers into the git
+    directory that no longer agree, so needs a look. git runs with the worktree's directory
+    inside the git directory named, not through its `.git` file, which an agent could have
+    pointed at a configuration of its own."""
+    admin = _admin_dir_of(repo, path)
+    if admin is None:
+        return True
+    try:
+        if admin_dir(path) != admin:
+            return True
+    except GitError:
+        return True
+    status = git(
+        repo,
+        f"--git-dir={admin}",
+        f"--work-tree={path}",
+        "status",
+        "--porcelain",
+        "--ignore-submodules=dirty",
+    )
+    return bool(status)
+
+
+def _admin_dir_of(repo: Path, path: Path) -> Path | None:
+    """The directory inside the git directory whose `gitdir` file names the worktree."""
+    folder = common_git_dir(repo) / "worktrees"
+    if not folder.is_dir():
+        return None
+    pointer = path / ".git"
+    for admin in folder.iterdir():
+        try:
+            value = Path((admin / "gitdir").read_text(encoding="utf-8").strip())
+        except OSError:
+            continue
+        if (value if value.is_absolute() else admin / value).resolve() == pointer:
+            return admin.resolve()
+    return None
+
+
+def has_tracked_changes(path: Path) -> bool:
+    """Whether files git tracks were changed or removed; new files, such as caches, are not
+    counted."""
+    return bool(
+        git(path, "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=dirty"),
+    )
+
+
+def remove_untracked(path: Path) -> None:
+    """Removes the files git does not track, ignored ones too, so a command run next sees
+    the checked-out commit and nothing else. Nested repositories are left alone."""
+    git(path, "clean", "-fdxq")
+
+
+def discard_changes(worktree: Path, commit: str) -> None:
+    """Puts a review worktree back at `commit`, detached, without what was changed in it: a
+    branch checked out there is left where it is, not reset."""
+    git(worktree, "checkout", "--quiet", "--force", "--detach", commit)
+    git(worktree, "clean", "-fdq")
+
+
 def admin_dir(worktree: Path) -> Path:
     """The worktree's own directory inside the git directory, named by its `.git` file."""
     pointer = worktree / ".git"
@@ -260,6 +377,7 @@ def agent_mounts(
     repo: Path,
     worktree: Path,
     workspace_mount: str = "/workspace",
+    read_only: bool = False,
 ) -> list[tuple[str, str, str]]:
     """The volumes the agent container needs besides the worktree: the git directory the
     worktree points into, at the same path so git works in the container. It stays writable
@@ -269,9 +387,10 @@ def agent_mounts(
     the other checkouts, such as the user's own, which the agent has no business switching
     or staging in, and the other worktrees' pointers and locks, which git on the host goes
     by to find them and to keep them. Of these, a file that does not exist, such as most
-    `locked`, cannot be mounted: `pointers` tells after the run whether one was made."""
+    `locked`, cannot be mounted: `pointers` tells after the run whether one was made. A
+    reviewing agent, which must not commit, gets all of the git directory read-only."""
     common = common_git_dir(repo)
-    mounts = [(str(common), container_path(common), "rw")]
+    mounts = [(str(common), container_path(common), "ro" if read_only else "rw")]
     for name in ("hooks", "info"):
         (common / name).mkdir(exist_ok=True)
         mounts.append((str(common / name), container_path(common / name), "ro"))
