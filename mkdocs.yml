@@ -51,6 +51,7 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Development: development.md
+  - Adding an agent: adding-an-agent.md
   - Agents: agents/index.md
   - Profiles: profiles.md
   - Model providers: providers.md

@@ -22,6 +22,9 @@ must match the same mount contract, and `scripts/check_import_docs.py` gates
 `tests/test_{agents,cli,constants,run,task_cmd,agent_import}.py`).
 The local-image fallback (`VP_IMAGE_<AGENT>` override + pull-failure fallback
 in `run.py`/`task.py`) is how an unreleased image is exercised locally.
+`docs/adding-an-agent.md` is the contributor walkthrough: the image half in
+vibepod-agents, the local build-and-run test loop, and the order of the pull
+requests.
 
 Hermes is the exception to the `~/.agents/skills` convention: it reads that
 directory only via the `skills.external_dirs` key in its own `config.yaml` and

@@ -1,6 +1,7 @@
 # Development
 
 This page covers local setup and common commands for contributing to VibePod.
+To add support for a new agent, see [Adding an agent](adding-an-agent.md).
 
 ## Prerequisites
 
