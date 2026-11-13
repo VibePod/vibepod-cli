@@ -797,9 +797,13 @@ def test_forward_windows_console_input_never_blocks_after_stop(
     """Without a queued key the thread must not sit in getwch(): it would steal
     the next keystroke and re-apply raw mode after the session restored it."""
     stop = threading.Event()
+    # Recorded here and asserted on the test thread: an exception raised in the
+    # worker would only end it, and pytest reports that as a warning.
+    blocking_read = threading.Event()
 
     def getwch() -> str:
-        raise AssertionError("getwch() called without a queued key")
+        blocking_read.set()
+        raise EOFError  # end the worker if the guard is missing
 
     def kbhit() -> bool:
         stop.set()  # the session ends while the thread is idle
@@ -812,6 +816,7 @@ def test_forward_windows_console_input_never_blocks_after_stop(
     thread.start()
     thread.join(timeout=2)
     assert not thread.is_alive()
+    assert not blocking_read.is_set(), "getwch() called without a queued key"
 
 
 def test_threaded_reader_buffers_a_bounded_amount_and_closes(
