@@ -154,6 +154,18 @@ default `npipe://` connection). Use Windows Terminal or the console host; the
 console is switched to raw input while an agent is attached and restored
 afterwards.
 
+Without `DOCKER_HOST`, `vp` connects to the default pipe
+`npipe:////./pipe/docker_engine`. Podman serves that pipe only while Docker
+Desktop does not hold it; with both installed and Docker Desktop running, `vp`
+uses Docker. Podman's socket auto-discovery does not apply on Windows. To use
+Podman then, point `DOCKER_HOST` at the machine's own pipe:
+
+```powershell
+podman machine inspect --format '{{.ConnectionInfo.PodmanPipe.Path}}'
+# \\.\pipe\podman-machine-default  ->  in DOCKER_HOST form:
+$env:DOCKER_HOST = "npipe:////./pipe/podman-machine-default"
+```
+
 !!! warning "Known keyboard limitations on native Windows"
     Console input is still read key by key and translated to terminal
     sequences, so a few keys do not reach the agent correctly yet: `à` can
