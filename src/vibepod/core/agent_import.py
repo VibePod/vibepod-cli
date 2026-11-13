@@ -301,6 +301,16 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
             ),
         ),
     ),
+    # ~/.config/warp-terminal and ~/.local/state/warp-terminal are shared with
+    # the Warp terminal app, so only the CLI's own settings directory is
+    # listed. The login lives in the OS keychain / Secret Service: there is no
+    # credential file, and ~/.local/share/keyrings (where the pod's keyring
+    # lives) is the host user's whole login keyring and is never touched.
+    "warp": (
+        ImportEntry(".config/warp-terminal/cli", ".config/warp-terminal/cli", "settings"),
+        ImportEntry(".warp/custom_model_routers", ".warp/custom_model_routers", "models"),
+        SHARED_SKILLS,
+    ),
 }
 
 
@@ -349,6 +359,12 @@ AGENT_ROOTS: dict[str, tuple[AgentRoot, ...]] = {
     "cursor": (
         AgentRoot(".cursor", ".cursor", exclude=("extensions", "extensions/*")),
         AgentRoot(".config/cursor", ".config/cursor"),
+    ),
+    # Only the CLI's own subdirectories: ~/.config/warp-terminal and ~/.warp
+    # belong to the Warp terminal app (preferences, themes, launch configs).
+    "warp": (
+        AgentRoot(".config/warp-terminal/cli", ".config/warp-terminal/cli"),
+        AgentRoot(".warp/custom_model_routers", ".warp/custom_model_routers"),
     ),
 }
 

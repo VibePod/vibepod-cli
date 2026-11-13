@@ -156,9 +156,14 @@ _KNOWN_CREDENTIALS: dict[str, tuple[str, ...]] = {
     "cursor": (".config/cursor/auth.json",),
 }
 
+#: Agents that keep no credential file at all: Warp stores its login only in
+#: the OS keychain / Secret Service, so there is nothing on disk to opt into.
+_KEYCHAIN_ONLY_AGENTS = {"warp"}
+
 
 def test_known_credentials_cover_every_agent() -> None:
-    assert set(_KNOWN_CREDENTIALS) == set(IMPORT_SPECS)
+    assert not set(_KNOWN_CREDENTIALS) & _KEYCHAIN_ONLY_AGENTS
+    assert set(_KNOWN_CREDENTIALS) | _KEYCHAIN_ONLY_AGENTS == set(IMPORT_SPECS)
 
 
 @pytest.mark.parametrize(
@@ -239,6 +244,7 @@ _SHARED_SKILLS_AGENTS = {
     "hermes",
     "cline",
     "cursor",
+    "warp",
 }
 
 
@@ -762,6 +768,38 @@ def test_hermes_installer_checkout_is_not_reported(tmp_path: Path) -> None:
 
     plan = plan_import("hermes", home, dest, DEFAULT_CATEGORIES)
 
+    assert plan.unclassified == []
+
+
+def test_warp_import_takes_only_the_cli_settings(tmp_path: Path) -> None:
+    """~/.config/warp-terminal is shared with the Warp terminal app."""
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".config" / "warp-terminal" / "cli" / "settings.toml", "[agents]\n")
+    _write(home / ".config" / "warp-terminal" / "user_preferences.json", "{}")
+    _write(home / ".local" / "state" / "warp-terminal" / "tui" / "warp.sqlite", "db")
+    _write(home / ".warp" / "custom_model_routers" / "cheap.yaml", "name: cheap\n")
+    _write(home / ".warp" / "themes" / "mine.yaml", "accent: red\n")
+
+    plan = plan_import("warp", home, dest, DEFAULT_CATEGORIES)
+
+    # HOME is the mount, so every file keeps its home-relative path.
+    assert sorted((f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files) == [
+        ("models", ".warp/custom_model_routers/cheap.yaml"),
+        ("settings", ".config/warp-terminal/cli/settings.toml"),
+    ]
+    # The terminal app's preferences, themes and database are neither copied
+    # nor reported as leftovers of the CLI.
+    assert plan.unclassified == []
+
+
+def test_warp_import_never_takes_the_host_keyring(tmp_path: Path) -> None:
+    """The pod's keyring path is the host user's whole login keyring."""
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    _write(home / ".local" / "share" / "keyrings" / "login.keyring", "secrets")
+
+    plan = plan_import("warp", home, dest, DEFAULT_CATEGORIES | {"credentials", "sessions"})
+
+    assert plan.files == []
     assert plan.unclassified == []
 
 

@@ -467,3 +467,22 @@ def test_default_config_includes_cursor_agent(monkeypatch, tmp_path: Path) -> No
     # Unlike dsh, this integration publishes nothing.
     assert cursor["ports"] == []
     assert cursor["init"] == []
+
+
+def test_default_config_includes_warp_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    # Default images are resolved at import time, so VP_IMAGE_* in the test
+    # environment would leak in; pin the entry the config must pick up.
+    monkeypatch.setitem(DEFAULT_IMAGES, "warp", "example/warp:default")
+    config = get_config()
+
+    warp = config["agents"]["warp"]
+
+    assert warp["enabled"] is True
+    assert warp["image"] == "example/warp:default"
+    assert warp["auto_pull"] is None
+    assert warp["env"] == {}
+    assert warp["volumes"] == []
+    # Unlike dsh, this integration publishes nothing.
+    assert warp["ports"] == []
+    assert warp["init"] == []

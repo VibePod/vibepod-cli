@@ -72,8 +72,9 @@ needs `--with-credentials` as well.
 | `cline`    | `~/.cline`                                             |
 | `junie`    | `~/.junie` (or `$JUNIE_HOME`)                          |
 | `cursor`   | `~/.cursor`, `~/.config/cursor`                        |
+| `warp`     | `~/.config/warp-terminal/cli`, `~/.warp/custom_model_routers` |
 
-Codex, opencode, Auggie, Tau, jcode, dsh, Hermes, Cline and Cursor also read skills from the
+Codex, opencode, Auggie, Tau, jcode, dsh, Hermes, Cline, Cursor and Warp also read skills from the
 shared `~/.agents/skills` directory, so their import copies it too (category
 `skills`). Freebuff reads that directory as well, but outside its persisted
 config mount, so it is not imported for Freebuff.
@@ -87,7 +88,10 @@ keeps in the OS keyring cannot be copied: log in again inside the pod.
 
 Junie honours `JUNIE_HOME` the same way. `~/.cursor` is shared with the Cursor
 IDE, so `vp import cursor` copies only the CLI's own files and never the IDE's
-`~/.cursor/extensions`.
+`~/.cursor/extensions`. `~/.config/warp-terminal` is likewise shared with the
+Warp terminal app, so `vp import warp` copies only the Agent CLI's `cli`
+subdirectory and the custom model routers. On macOS the Agent CLI keeps its
+settings in `~/.warp_cli` instead, which is not imported.
 
 ## Profiles
 
@@ -154,7 +158,10 @@ files under `~/.config/jcode`), Freebuff
 (`~/.junie/secure_credentials.json`) and the Cursor CLI on Linux
 (`~/.config/cursor/auth.json`) do keep credentials on disk, so
 `--with-credentials` works for them. On macOS the Cursor CLI and Junie may use
-the Keychain instead; log in inside the pod when nothing is copied.
+the Keychain instead; log in inside the pod when nothing is copied. The Warp
+Agent CLI keeps its login only in the system keychain (Secret Service on Linux,
+Keychain on macOS) on every platform, so there is never a credential file to
+copy: log in inside the pod.
 
 ## Model providers
 
