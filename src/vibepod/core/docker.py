@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import queue
 import re
@@ -9,6 +10,7 @@ import select
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -67,6 +69,32 @@ else:
     APIError = _APIError
     DockerException = _DockerException
     NotFound = _NotFound
+
+#: docker-py's stream ids of the multiplexed (no-TTY) attach protocol, and the
+#: Win32 "pipe ended" code it maps to EOF itself.
+_STREAM_STDOUT, _STREAM_STDERR, _NPIPE_ENDED = 1, 2, 109
+if docker is not None:
+    from docker.utils import socket as _docker_socket
+
+    _STREAM_STDOUT = _docker_socket.STDOUT
+    _STREAM_STDERR = _docker_socket.STDERR
+    _NPIPE_ENDED = _docker_socket.NPIPE_ENDED
+
+#: docker-py's named-pipe socket class; ``docker.transport`` only defines it on
+#: Windows (it needs pywin32). Elsewhere nothing is an instance of the stand-in,
+#: the same fallback ``docker.utils.socket`` uses.
+_NpipeSocket: Any
+try:
+    from docker.transport import NpipeSocket as _NpipeSocket
+except ImportError:
+    _NpipeSocket = type(None)
+
+#: pywin32's Win32 error-code names, installed with docker-py on Windows.
+_winerror: Any
+try:
+    _winerror = importlib.import_module("winerror")
+except ImportError:
+    _winerror = None
 
 
 class DockerClientError(RuntimeError):
@@ -313,6 +341,9 @@ _ENABLE_WINDOW_INPUT = 0x0008
 _ENABLE_MOUSE_INPUT = 0x0010
 _ENABLE_INSERT_MODE = 0x0020
 _ENABLE_QUICK_EDIT_MODE = 0x0040
+#: Must accompany any SetConsoleMode call meant to change the quick-edit or
+#: insert bits; without it the console ignores those two bits entirely.
+_ENABLE_EXTENDED_FLAGS = 0x0080
 _ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
 
 #: Console input flags cleared while attached. ``ENABLE_ECHO_INPUT`` is the one
@@ -500,8 +531,10 @@ def _raw_console_input_mode(old_mode: int) -> int:
     Only ``_RAW_CONSOLE_INPUT_CLEAR`` bits are touched, so anything the console
     was configured with beyond raw input (and the mode the caller restores) is
     preserved; see that constant for why VT input mode is cleared, not enabled.
+    ``ENABLE_EXTENDED_FLAGS`` is set so clearing quick-edit takes effect;
+    otherwise a mouse click starts a selection that freezes the agent's output.
     """
-    return old_mode & ~_RAW_CONSOLE_INPUT_CLEAR
+    return (old_mode & ~_RAW_CONSOLE_INPUT_CLEAR) | _ENABLE_EXTENDED_FLAGS
 
 
 def _kernel32() -> Any | None:
@@ -564,7 +597,9 @@ def _leave_console_raw_input(old_mode: int) -> None:
     if kernel32 is None:
         return
     try:
-        _set_console_input_mode(kernel32, old_mode)
+        # With ENABLE_EXTENDED_FLAGS, so the saved quick-edit/insert bits are
+        # applied too and the user's quick-edit setting comes back.
+        _set_console_input_mode(kernel32, old_mode | _ENABLE_EXTENDED_FLAGS)
     except Exception:  # pragma: no cover - console API failure
         pass
 
@@ -609,7 +644,19 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
 #: (232, pipe being closed), ``ERROR_PIPE_NOT_CONNECTED`` (233, the server
 #: disconnected) and ``ERROR_OPERATION_ABORTED`` (995, the read was cancelled
 #: because the handle was closed).
-_NPIPE_EOF_ERRORS = frozenset({109, 232, 233, 995})
+_NPIPE_EOF_ERRORS = (
+    frozenset(
+        {
+            _winerror.ERROR_BROKEN_PIPE,
+            _winerror.ERROR_NO_DATA,
+            _winerror.ERROR_PIPE_NOT_CONNECTED,
+            _winerror.ERROR_OPERATION_ABORTED,
+        }
+    )
+    if _winerror is not None
+    # Off Windows only tests reach the named-pipe path.
+    else frozenset({_NPIPE_ENDED, 232, 233, 995})
+)
 
 #: Exit codes of a container ended by ``container.stop()``: SIGTERM (143), or
 #: SIGKILL (137) once the stop timeout ran out.
@@ -631,15 +678,10 @@ def _is_selectable(sock: Any) -> bool:
     On Windows over ``npipe://`` (Docker Desktop, Podman Desktop) the attach
     socket is a docker-py ``NpipeSocket``, which has no ``fileno()``, and
     Windows ``select()`` only takes Winsock sockets anyway. TCP and SSH
-    connections hand back real sockets, also on Windows.
+    connections hand back real sockets, also on Windows. Checked by type, as
+    ``docker.utils.socket`` does.
     """
-    fileno = getattr(sock, "fileno", None)
-    if not callable(fileno):
-        return False
-    try:
-        return isinstance(fileno(), int)
-    except Exception:
-        return False
+    return not isinstance(sock, _NpipeSocket)
 
 
 def _recv_chunk(sock: Any, buf: bytearray, pipe: bool) -> bytes:
@@ -1847,16 +1889,15 @@ class DockerManager:
             # Frames can split across recv() bounds, so buffer until header
             # and payload are complete.
             while len(buffer) >= 8:
-                stream_type = buffer[0]
-                length = int.from_bytes(buffer[4:8], "big")
+                stream_type, length = struct.unpack(">BxxxL", buffer[:8])
                 if len(buffer) < 8 + length:
                     break
                 payload = buffer[8 : 8 + length]
                 buffer = buffer[8 + length :]
-                if stream_type == 1:
+                if stream_type == _STREAM_STDOUT:
                     sys.stdout.buffer.write(payload)
                     sys.stdout.buffer.flush()
-                elif stream_type == 2:
+                elif stream_type == _STREAM_STDERR:
                     sys.stderr.buffer.write(payload)
                     sys.stderr.buffer.flush()
                 if logger is not None:

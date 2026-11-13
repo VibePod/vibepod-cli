@@ -288,6 +288,12 @@ class _NpipeLikeSocket:
         self.sent.extend(data)
 
 
+@pytest.fixture(autouse=True)
+def _fake_npipe_socket_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """docker-py defines NpipeSocket only on Windows; stand in the fake for it."""
+    monkeypatch.setattr(docker_mod, "_NpipeSocket", _NpipeLikeSocket)
+
+
 class _PyWinTypesError(Exception):
     """pywintypes.error is not an OSError subclass."""
 
@@ -498,7 +504,17 @@ def test_raw_console_input_mode_keeps_console_key_reporting_legacy() -> None:
         )
 
     # Anything outside the raw-input bits survives, to be restored verbatim.
-    assert docker_mod._raw_console_input_mode(0x8000 | _DEFAULT_CONSOLE_MODE) == 0x8000
+    assert docker_mod._raw_console_input_mode(0x8000 | _DEFAULT_CONSOLE_MODE) == (
+        0x8000 | docker_mod._ENABLE_EXTENDED_FLAGS
+    )
+
+
+def test_raw_console_input_mode_sets_extended_flags_so_quick_edit_turns_off() -> None:
+    """SetConsoleMode ignores the quick-edit bit unless ENABLE_EXTENDED_FLAGS is set;
+    with quick-edit left on, a mouse click freezes the agent's output."""
+    mode = docker_mod._raw_console_input_mode(_DEFAULT_CONSOLE_MODE)
+    assert mode & docker_mod._ENABLE_EXTENDED_FLAGS
+    assert not mode & docker_mod._ENABLE_QUICK_EDIT_MODE
 
 
 def test_enter_console_raw_input_applies_mode_and_leave_restores_it(
@@ -514,7 +530,8 @@ def test_enter_console_raw_input_applies_mode_and_leave_restores_it(
 
     docker_mod._leave_console_raw_input(old_mode or 0)
 
-    assert kernel32.set_modes[-1] == _DEFAULT_CONSOLE_MODE
+    # Restored with ENABLE_EXTENDED_FLAGS, or the saved quick-edit bit is ignored.
+    assert kernel32.set_modes[-1] == _DEFAULT_CONSOLE_MODE | docker_mod._ENABLE_EXTENDED_FLAGS
 
 
 def test_enter_console_raw_input_is_noop_without_console_window(

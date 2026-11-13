@@ -459,9 +459,6 @@ class _FakeStreamSocket:
         self.shutdown_calls: list[int] = []
         self.sent: list[bytes] = []
 
-    def fileno(self) -> int:
-        return 99  # select() is faked; only its presence matters
-
     def recv(self, _size: int) -> bytes:
         if self._chunks:
             return self._chunks.pop(0)
@@ -626,6 +623,8 @@ def _run_attach_stdio_npipe(
     client.wrapper = _FakeSocketWrapper(sock)  # type: ignore[arg-type]
     manager = object.__new__(DockerManager)
     manager.client = client  # type: ignore[assignment]
+    # docker-py defines NpipeSocket only on Windows; stand in the fake for it.
+    monkeypatch.setattr(docker_mod, "_NpipeSocket", _NpipeStreamSocket)
     monkeypatch.setattr(docker_mod.select, "select", _no_select)
     monkeypatch.setattr(docker_mod.sys, "stdout", types.SimpleNamespace(buffer=out))
     monkeypatch.setattr(docker_mod.sys, "stderr", types.SimpleNamespace(buffer=err))
