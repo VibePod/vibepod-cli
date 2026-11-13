@@ -662,6 +662,9 @@ _NPIPE_EOF_ERRORS = (
 #: SIGKILL (137) once the stop timeout ran out.
 _STOP_EXIT_CODES = frozenset({137, 143})
 
+#: Grace period of the stop that stands in for stdin EOF on a named pipe.
+_EOF_STOP_GRACE_SECONDS = 5
+
 #: How often the main thread wakes while a :class:`_ThreadedReader` is waiting, so
 #: Ctrl+C and signal handlers still run promptly.
 _PIPE_POLL_SECONDS = 0.1
@@ -773,24 +776,34 @@ class _ThreadedReader:
         return item
 
 
-def _forward_stdin(
-    stdin_fd: int,
-    sock: Any,
-    container: Any,
-    eof_stop: threading.Event,
-    stop_failures: list[BaseException],
-) -> None:
+class _EofStop:
+    """Outcome of the container stop that stands in for stdin EOF on a named pipe.
+
+    Written by the stdin thread, read by ``attach_stdio``. ``stopped`` is set
+    only when *our* stop ended a running container, so only then may a
+    SIGTERM/SIGKILL status be reported as a clean exit. A container that had
+    already exited (removed, or stopped but not yet removed: the stop would
+    succeed with HTTP 304 there) or a stop that failed leaves the adapter's own
+    exit status alone.
+    """
+
+    def __init__(self) -> None:
+        self.attempted = threading.Event()
+        self.done = threading.Event()
+        self.stopped = False
+        self.failure: BaseException | None = None
+
+
+def _forward_stdin(stdin_fd: int, sock: Any, container: Any, eof: _EofStop) -> None:
     """Copy ACP client input from *stdin_fd* to the attach socket on a thread.
 
     On stdin EOF a real socket is half-closed so the adapter sees EOF and exits
     while its output keeps draining. A named pipe cannot be half-closed
     (``NpipeSocket.shutdown`` closes the whole handle, cutting off the output
     still to come), so the container is stopped instead, which ends the stream;
-    *eof_stop* records that, so the caller does not report the resulting
-    SIGTERM exit as a failure. A stop that fails is appended to
-    *stop_failures*, so the caller ends the session instead of waiting on a
-    container that never sees EOF; a container that is already gone (it
-    exited and was auto-removed meanwhile) needs no stop and is no failure.
+    *eof* records how that went (see :class:`_EofStop`). A container that is
+    already gone (it exited and was auto-removed meanwhile) needs no stop and
+    is no failure.
     """
     while True:
         try:
@@ -804,13 +817,20 @@ def _forward_stdin(
                 except OSError:  # pragma: no cover - already closed
                     pass
                 return
-            eof_stop.set()
+            eof.attempted.set()
             try:
-                container.stop(timeout=5)
+                # An exited container stops "successfully" (HTTP 304) without
+                # our stop having ended it, so only stop one that still runs.
+                container.reload()
+                if container.attrs.get("State", {}).get("Running", True):
+                    container.stop(timeout=_EOF_STOP_GRACE_SECONDS)
+                    eof.stopped = True
             except NotFound:
-                pass
+                pass  # already exited and auto-removed
             except Exception as exc:
-                stop_failures.append(exc)
+                eof.failure = exc
+            finally:
+                eof.done.set()
             return
         try:
             sock.sendall(data)
@@ -1918,8 +1938,7 @@ class DockerManager:
         # initialize with no visible reason; after a while, name the usual
         # cause on stderr (the editor's ACP log) once.
         first_output_deadline: float | None = time.monotonic() + _ACP_FIRST_OUTPUT_WARN_SECONDS
-        eof_stop = threading.Event()
-        stop_failures: list[BaseException] = []
+        eof = _EofStop()
         stream_ended = False
         stdio_reader: _ThreadedReader | None = None
         try:
@@ -1932,7 +1951,7 @@ class DockerManager:
                 if stdin_fd is not None:
                     threading.Thread(
                         target=_forward_stdin,
-                        args=(stdin_fd, sock, container, eof_stop, stop_failures),
+                        args=(stdin_fd, sock, container, eof),
                         name="vibepod-acp-stdin",
                         daemon=True,
                     ).start()
@@ -1942,7 +1961,7 @@ class DockerManager:
                         wait = min(wait, max(0.0, first_output_deadline - time.monotonic()))
                     data = reader.get(wait)
                     if data is None:
-                        if stop_failures:
+                        if eof.failure is not None:
                             # Checked only once nothing is queued, so output
                             # and an EOF that arrived anyway are taken first.
                             break
@@ -2014,14 +2033,14 @@ class DockerManager:
             if old_sigint is not None:
                 signal.signal(signal.SIGINT, old_sigint)
 
-        if stop_failures and not stream_ended:
+        if eof.failure is not None and not stream_ended:
             # The ACP client is gone but the adapter never got its EOF stand-in;
             # the container would keep running, so say which one and fail. If
             # the stream ended anyway, the container's own exit status counts.
             name = getattr(container, "name", container.id)
             warning(
                 f"ACP: the client closed stdin but stopping {name} failed: "
-                f"{stop_failures[0]}; stop it with `vp stop {name}`.",
+                f"{eof.failure}; stop it with `vp stop {name}`.",
             )
             return 1
         waiter.join(timeout=10)
@@ -2035,7 +2054,16 @@ class DockerManager:
                 status = container.attrs.get("State", {}).get("ExitCode", 0)
             except Exception:  # pragma: no cover - auto-removed containers
                 status = 0
-        if eof_stop.is_set() and not stop_requested and status in _STOP_EXIT_CODES:
+        if eof.attempted.is_set() and not stop_requested and status in _STOP_EXIT_CODES:
+            # Only this status depends on whether our stop ended the container.
+            # docker stop returns only once the container exited, so the stream
+            # can end before the call has: wait as long as the call can take
+            # (docker-py's HTTP timeout is the client timeout plus the grace).
+            client_timeout = getattr(self.client.api, "timeout", None)
+            if not isinstance(client_timeout, (int, float)):
+                client_timeout = 60  # docker-py's default
+            eof.done.wait(timeout=client_timeout + _EOF_STOP_GRACE_SECONDS)
+        if eof.stopped and not stop_requested and status in _STOP_EXIT_CODES:
             # We stopped the container because the ACP client closed stdin
             # over a named pipe, the stand-in for the EOF a socket would have
             # delivered; on POSIX the adapter exits 0 there, so report that.

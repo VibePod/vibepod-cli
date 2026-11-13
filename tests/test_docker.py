@@ -760,51 +760,154 @@ def test_attach_stdio_over_named_pipe_ends_when_the_eof_stop_fails(monkeypatch) 
 
 
 @pytest.mark.parametrize(
-    ("stop_error", "recorded"),
+    ("running", "stop_error", "stopped", "failed"),
     [
-        # Already exited and auto-removed: nothing left to stop, no failure.
-        (docker_mod.NotFound("No such container"), False),
-        (RuntimeError("daemon unreachable"), True),
+        (True, None, True, False),
+        # Exited but not removed yet: docker would answer the stop with 304
+        # ("success") although our stop ended nothing, so it is not called.
+        (False, None, False, False),
+        # Already exited and auto-removed: nothing was stopped, and no failure.
+        (True, docker_mod.NotFound("No such container"), False, False),
+        (True, RuntimeError("daemon unreachable"), False, True),
     ],
 )
-def test_forward_stdin_records_only_real_stop_failures(
+def test_forward_stdin_records_the_eof_stop_outcome(
     monkeypatch,
-    stop_error: Exception,
-    recorded: bool,
+    running: bool,
+    stop_error: Exception | None,
+    stopped: bool,
+    failed: bool,
 ) -> None:
-    import threading
-
     # docker-py defines NpipeSocket only on Windows; stand in the fake for it.
     monkeypatch.setattr(docker_mod, "_NpipeSocket", _NpipeStreamSocket)
+    stop_calls: list[int] = []
 
     class _Container(_AttachContainer):
-        def stop(self, timeout: int = 0) -> None:
-            raise stop_error
+        attrs = {"State": {"Running": running, "ExitCode": 0}}
 
-    eof_stop = threading.Event()
-    failures: list[BaseException] = []
+        def stop(self, timeout: int = 0) -> None:
+            stop_calls.append(timeout)
+            if stop_error is not None:
+                raise stop_error
+
+    eof = docker_mod._EofStop()
     read_fd, write_fd = os.pipe()
     os.close(write_fd)  # stdin EOF at once
     try:
-        docker_mod._forward_stdin(
+        docker_mod._forward_stdin(read_fd, _NpipeStreamSocket([]), _Container(), eof)
+    finally:
+        os.close(read_fd)
+
+    assert eof.attempted.is_set()
+    assert eof.done.is_set()
+    assert eof.stopped is stopped
+    assert eof.failure is (stop_error if failed else None)
+    assert len(stop_calls) == (1 if running else 0)
+
+
+def test_attach_stdio_over_named_pipe_keeps_the_kill_status_of_an_exited_container(
+    monkeypatch,
+) -> None:
+    """Regression: the adapter was OOM-killed (137) but not removed yet when the
+    client closed stdin. A stop would "succeed" (HTTP 304) without having ended
+    anything, so 137 must not become 0."""
+
+    class _Container(_AttachContainer):
+        attrs = {"State": {"Running": False, "ExitCode": 137, "OOMKilled": True}}
+
+        def stop(self, timeout: int = 0) -> None:
+            pass  # docker answers 304 for an exited container: no error
+
+    sock = _NpipeStreamSocket([])
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    try:
+        _, _, exit_code = _run_attach_stdio_npipe(
+            monkeypatch,
+            sock,
             read_fd,
-            _NpipeStreamSocket([]),
             _Container(),
-            eof_stop,
-            failures,
+            wait_result={"StatusCode": 137},
         )
     finally:
         os.close(read_fd)
 
-    assert eof_stop.is_set()
-    assert failures == ([stop_error] if recorded else [])
+    assert exit_code == 137
+
+
+def test_attach_stdio_over_named_pipe_waits_for_a_slow_successful_stop(monkeypatch) -> None:
+    """docker stop returns only after the container exited, so the stream can end
+    first; the exit status may only be judged once the stop call is done."""
+    import threading
+    import time
+
+    stop_started = threading.Event()
+    stream_ended = threading.Event()
+
+    class _Container(_AttachContainer):
+        def stop(self, timeout: int = 0) -> None:
+            stop_started.set()
+            stream_ended.wait(5)
+            time.sleep(0.3)  # the API call returns well after the exit
+
+    def _gate() -> None:
+        stop_started.wait(5)  # the container exits because of our stop
+        stream_ended.set()  # this read returns EOF
+
+    sock = _NpipeStreamSocket([], gate=_gate)
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    try:
+        _, _, exit_code = _run_attach_stdio_npipe(
+            monkeypatch,
+            sock,
+            read_fd,
+            _Container(),
+            wait_result={"StatusCode": 143},
+        )
+    finally:
+        os.close(read_fd)
+
+    assert exit_code == 0
+
+
+def test_attach_stdio_over_named_pipe_keeps_the_adapters_kill_status_when_it_was_gone(
+    monkeypatch,
+) -> None:
+    """Regression: the adapter was OOM-killed (137) and auto-removed before the
+    client closed stdin. Our stop found nothing, so 137 must not become 0."""
+    import threading
+
+    stop_tried = threading.Event()
+
+    class _Container(_AttachContainer):
+        def stop(self, timeout: int = 0) -> None:
+            stop_tried.set()
+            raise docker_mod.NotFound("No such container")
+
+    sock = _NpipeStreamSocket([], gate=lambda: stop_tried.wait(5))
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    try:
+        _, _, exit_code = _run_attach_stdio_npipe(
+            monkeypatch,
+            sock,
+            read_fd,
+            _Container(),
+            wait_result={"StatusCode": 137},
+        )
+    finally:
+        os.close(read_fd)
+
+    assert exit_code == 137
 
 
 def test_attach_stdio_over_named_pipe_prefers_a_queued_eof_to_a_failed_stop(
     monkeypatch,
 ) -> None:
     """The stop failed, but the container ended anyway and its EOF is already
-    queued: no warning, and the container's own exit status is reported."""
+    queued: no warning, and the container's own exit status is reported, even a
+    SIGTERM one, since the stop that would explain it never succeeded."""
     import threading
     import time
 
@@ -828,7 +931,7 @@ def test_attach_stdio_over_named_pipe_prefers_a_queued_eof_to_a_failed_stop(
             # Hold the main loop on the first chunk until the failure is
             # recorded; meanwhile the reader queues the EOF behind it.
             stop_failed.wait(5)
-            time.sleep(0.05)  # let _forward_stdin append the failure
+            time.sleep(0.05)  # let _forward_stdin record the failure
             return super().write(data)
 
     frame = b"\x01\x00\x00\x00\x00\x00\x00\x03ok\n"
@@ -842,14 +945,15 @@ def test_attach_stdio_over_named_pipe_prefers_a_queued_eof_to_a_failed_stop(
             sock,
             read_fd,
             _Container(),
-            wait_result={"StatusCode": 3},
+            wait_result={"StatusCode": 143},
             out=out,
         )
     finally:
         os.close(read_fd)
 
     assert out.getvalue() == b"ok\n"
-    assert exit_code == 3
+    # The SIGTERM status is not ours (the stop failed): reported as it is.
+    assert exit_code == 143
     assert warnings == []
 
 
