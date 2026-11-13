@@ -23,7 +23,8 @@
 5. **Verify** with an optional command, such as the test suite, run in the
    clone.
 6. **Bring the branch back** into the repository: only the task's branch, and
-   only forward (see [Safety](#safety)).
+   only forward (see [Safety](#safety)). A new branch the run did no work on
+   is not brought back, so a later attempt starts afresh.
 7. **Hand over** the task to Review with its branch name, or give it back to
    Planned (or block it) with a note saying why.
 

@@ -1180,7 +1180,10 @@ class BoardWorker:
                 else:
                     self.say("info", f"Working on branch {worktree.branch} in {worktree.path}")
                 self._run(task, repo, worktree, result, started, earlier, rework)
-                self._write_back(repo, worktree, result)
+                # A new branch nothing was done on stays out of the repository: a later run
+                # is not held up by it, and starts from the base as it is by then.
+                if worktree.tip is not None or self._did_work(worktree):
+                    self._write_back(repo, worktree, result)
             except worktrees.BranchExistsError as exc:
                 raise TaskProblem(f"{exc}; not continuing on it (--existing refuse)") from exc
             except worktrees.GitError as exc:

@@ -606,6 +606,31 @@ def test_an_agent_that_fails_or_changes_nothing_fails_the_run(
     ]
 
 
+def test_a_run_without_work_leaves_no_branch_behind(
+    board: FakeBoard,
+    server: FakeBoardServer,
+    repo: Path,
+) -> None:
+    board.add_task("Crashes first")
+
+    def crashes(path: Path, prompt: str) -> tuple[int, str]:
+        return 2, "Traceback: boom"
+
+    work(server, FakeRunner(crashes), repo, once=True)
+
+    # Nothing came of the run: no branch is made in the repository for it.
+    assert board.runs[-1]["failureReason"] == "The agent exited with code 2"
+    assert not worktrees.branch_exists(repo, "vp-1")
+    git(repo, "commit", "--quiet", "--allow-empty", "-m", "Moved on")
+    # So the next run is not refused for a branch nobody worked on, and starts from the
+    # base as it is by then.
+    work(server, FakeRunner(), repo, existing="refuse")
+
+    assert board.card("VP-1")["column"] == "review"
+    assert git(repo, "log", "--format=%s", "main..vp-1").splitlines() == ["Add the feature"]
+    assert git(repo, "merge-base", "main", "vp-1") == git(repo, "rev-parse", "main")
+
+
 def test_a_timed_out_agent_is_stopped_and_the_task_returned(
     board: FakeBoard,
     server: FakeBoardServer,
