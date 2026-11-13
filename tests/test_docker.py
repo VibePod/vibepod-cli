@@ -668,7 +668,11 @@ def test_attach_stdio_over_named_pipe_forwards_both_directions(monkeypatch) -> N
     try:
         # The stop's SIGTERM is our stand-in for stdin EOF, not a failure.
         out, _, exit_code = _run_attach_stdio_npipe(
-            monkeypatch, sock, read_fd, _Container(), wait_result={"StatusCode": 143}
+            monkeypatch,
+            sock,
+            read_fd,
+            _Container(),
+            wait_result={"StatusCode": 143},
         )
     finally:
         os.close(read_fd)
@@ -758,7 +762,11 @@ def test_attach_stdio_over_named_pipe_keeps_a_real_failure_exit_code(monkeypatch
     frame = b"\x01\x00\x00\x00\x00\x00\x00\x02{}"
     sock = _NpipeStreamSocket([frame])
     _, _, exit_code = _run_attach_stdio_npipe(
-        monkeypatch, sock, None, _AttachContainer(), wait_result={"StatusCode": 143}
+        monkeypatch,
+        sock,
+        None,
+        _AttachContainer(),
+        wait_result={"StatusCode": 143},
     )
     assert exit_code == 143
 

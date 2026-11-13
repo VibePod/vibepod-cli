@@ -651,7 +651,7 @@ _NPIPE_EOF_ERRORS = (
             _winerror.ERROR_NO_DATA,
             _winerror.ERROR_PIPE_NOT_CONNECTED,
             _winerror.ERROR_OPERATION_ABORTED,
-        }
+        },
     )
     if _winerror is not None
     # Off Windows only tests reach the named-pipe path.

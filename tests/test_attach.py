@@ -370,7 +370,8 @@ def test_attach_interactive_windows_npipe_socket_without_fileno(
     ],
 )
 def test_attach_interactive_windows_pipe_errors_are_not_a_clean_exit(
-    monkeypatch: pytest.MonkeyPatch, error: BaseException
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
 ) -> None:
     """Only the end-of-stream pipe codes mean EOF; anything else must reach run.py."""
     sock = _NpipeLikeSocket([b"partial"], end=error)
@@ -380,7 +381,8 @@ def test_attach_interactive_windows_pipe_errors_are_not_a_clean_exit(
 
 @pytest.mark.parametrize("code", [109, 232, 233, 995])
 def test_attach_interactive_windows_pipe_end_codes_end_the_session(
-    monkeypatch: pytest.MonkeyPatch, code: int
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
 ) -> None:
     """Broken pipe, closing, disconnected and aborted reads are a normal end."""
     sock = _NpipeLikeSocket([b"bye\r\n"], end=_PyWinTypesError(code, "ReadFile", "ended"))
@@ -409,7 +411,9 @@ def test_attach_interactive_windows_enters_and_restores_console_input(
 
     monkeypatch.setattr(docker_mod, "_enter_console_raw_input", _enter)
     monkeypatch.setattr(
-        docker_mod, "_leave_console_raw_input", lambda mode: calls.append(hex(mode))
+        docker_mod,
+        "_leave_console_raw_input",
+        lambda mode: calls.append(hex(mode)),
     )
 
     _attach_windows_npipe(monkeypatch, _NpipeLikeSocket([b"hi\r\n"]))
@@ -771,7 +775,8 @@ def test_forward_windows_console_input_drops_key_after_session_end(
     ],
 )
 def test_forward_windows_console_input_stops_quietly_on_send_failure(
-    monkeypatch: pytest.MonkeyPatch, error: BaseException
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
 ) -> None:
     """A closed NpipeSocket raises non-OSError errors; no thread traceback."""
     keys = iter(["a", "b"])
@@ -811,7 +816,8 @@ def test_forward_windows_console_input_never_blocks_after_stop(
 
     monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch, kbhit=kbhit))
     thread = threading.Thread(
-        target=docker_mod._forward_windows_console_input, args=(object(), None, stop)
+        target=docker_mod._forward_windows_console_input,
+        args=(object(), None, stop),
     )
     thread.start()
     thread.join(timeout=2)
