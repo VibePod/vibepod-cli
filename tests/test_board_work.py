@@ -3731,6 +3731,33 @@ def test_clone_git_mounts_are_relabeled_like_the_workspace_on_selinux(
     assert all(mode.endswith(",z") for _, _, mode in mounts)
 
 
+def test_the_commit_brought_back_is_the_one_that_was_read(
+    monkeypatch: pytest.MonkeyPatch,
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    clone = worktrees.prepare_clone(repo, tmp_path / "trees", "vp-9", "main")
+    git(clone.path, "commit", "--quiet", "--allow-empty", "-m", "First")
+    first = git(clone.path, "rev-parse", "HEAD")
+    branch_commit = worktrees.branch_commit
+
+    def moves_on(path: Path, branch: str) -> str | None:
+        found = branch_commit(path, branch)
+        if path == repo and not found:
+            # The clone's branch moves after its commit was read, before it is fetched.
+            git(clone.path, "commit", "--quiet", "--allow-empty", "-m", "Sneaked in")
+        return found
+
+    monkeypatch.setattr(worktrees, "branch_commit", moves_on)
+
+    try:
+        assert worktrees.write_back(repo, clone) == first
+    except worktrees.GitError:
+        # A git set to a transport that only gives out branch tips refuses instead.
+        pass
+    assert branch_commit(repo, "vp-9") in {first, None}
+
+
 def test_a_clone_left_behind_is_replaced_only_when_nothing_in_it_would_be_lost(
     repo: Path,
     tmp_path: Path,

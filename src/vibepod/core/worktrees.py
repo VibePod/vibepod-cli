@@ -521,7 +521,8 @@ def write_back(repo: Path, clone: TaskClone) -> str:
         "--no-write-fetch-head",
         "--no-recurse-submodules",
         str(clone.path),
-        f"{ref}:{ref}",
+        # The commit that was read, not the branch by its name, which may have moved since.
+        f"{tip}:{ref}",
     )
     if result.returncode == 0:
         return tip
