@@ -91,7 +91,7 @@ Mirror an existing agent end to end; `qwen` is a good template.
 | `src/vibepod/core/resume.py` | The resume-hint pattern, if the agent prints one. |
 | `src/vibepod/core/agent_import.py` | `IMPORT_SPECS` and `AGENT_ROOTS`: which host files `vp import` copies and where they land inside the mount. |
 | `tests/` | The agent's cases in `test_agents.py`, `test_cli.py`, `test_constants.py`, `test_config.py`, `test_run.py`, `test_task_cmd.py`, `test_resume.py` and `test_agent_import.py`. |
-| `docs/`, `README.md` | Every agent table and list, a section under [Individual agents](agents/index.md#individual-agents), and the tables in [Importing an existing setup](import.md). |
+| `docs/`, `README.md` | Every agent table and list, a section under [Individual agents](agents/index.md#individual-agents), and the tables in [Importing an existing setup](import.md). A screenshot of the agent running under `vp run`, saved as `docs/assets/<agent>.png`, goes into that section and into the README gallery. |
 
 `grep -rn qwen README.md docs src tests` lists every place an agent appears,
 which makes a complete checklist for the new one.
@@ -163,5 +163,6 @@ and say in each description how you tested: the commands above are enough.
    that job fails until step 1 has published the image.
 3. **The website last.** The homepage in
    [`vibepod.github.io`](https://github.com/VibePod/vibepod.github.io) names
-   the supported agents and shows one screenshot each; add the new agent
-   there once the CLI change is released.
+   the supported agents and shows one screenshot each
+   (`screenshots/<agent>.png`); add the new agent there once the CLI change
+   is released.
