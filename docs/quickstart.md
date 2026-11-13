@@ -158,12 +158,15 @@ Without `DOCKER_HOST`, `vp` connects to the default pipe
 `npipe:////./pipe/docker_engine`. Podman serves that pipe only while Docker
 Desktop does not hold it; with both installed and Docker Desktop running, `vp`
 uses Docker. Podman's socket auto-discovery does not apply on Windows. To use
-Podman then, point `DOCKER_HOST` at the machine's own pipe:
+Podman then, point `DOCKER_HOST` at the pipe of the machine you run (`podman
+machine list` shows its name):
 
 ```powershell
-podman machine inspect --format '{{.ConnectionInfo.PodmanPipe.Path}}'
-# \\.\pipe\podman-machine-default  ->  in DOCKER_HOST form:
-$env:DOCKER_HOST = "npipe:////./pipe/podman-machine-default"
+$machine = "podman-machine-default"   # your machine's name
+$pipe = podman machine inspect $machine --format '{{.ConnectionInfo.PodmanPipe.Path}}'
+if (-not $pipe) { throw "No pipe for Podman machine '$machine'; check podman machine list" }
+# \\.\pipe\<name> becomes npipe:////./pipe/<name>
+$env:DOCKER_HOST = "npipe://" + ($pipe -replace '\\', '/')
 ```
 
 !!! warning "Known keyboard limitations on native Windows"
