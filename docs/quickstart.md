@@ -147,6 +147,22 @@ Detection reads `/sys/fs/selinux/enforce` on the machine running `vp`, so a
 remote `DOCKER_HOST` whose engine runs on a different (SELinux) host is not
 detected.
 
+### Native Windows
+
+`vp` runs natively on Windows against Docker Desktop or Podman Desktop (their
+default `npipe://` connection). Use Windows Terminal or the console host; the
+console is switched to raw input while an agent is attached and restored
+afterwards.
+
+!!! warning "Known keyboard limitations on native Windows"
+    Console input is still read key by key and translated to terminal
+    sequences, so a few keys do not reach the agent correctly yet: `à` can
+    swallow the next key (or turn `àH` into Arrow Up), emoji arrive as `??`,
+    and Alt+key combinations are ignored. Typing everything else, including
+    arrows, Home/End, PgUp/PgDn, F1–F12, Shift+Tab and Ctrl+arrows, works.
+    The rewrite is tracked in [#242](https://github.com/VibePod/vibepod-cli/issues/242).
+    Running `vp` inside WSL2 avoids these limitations.
+
 ## Install
 
 === "pip"
