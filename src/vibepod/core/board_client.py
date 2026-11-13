@@ -154,10 +154,22 @@ class BoardClient:
         branch_name: str | None = None,
         note: str | None = None,
         head_sha: str | None = None,
+        *,
+        pr_title: str | None = None,
+        pr_body: str | None = None,
     ) -> dict[str, Any]:
         """Moves a claimed task to Review. `head_sha` names the commit handed over: the
-        board binds the reviews and approvals of the task to it."""
-        body = _body(assignee=assignee, branchName=branch_name, note=note, headSha=head_sha)
+        board binds the reviews and approvals of the task to it. `pr_title` and `pr_body`
+        suggest the pull request for the work; either replaces the card's earlier
+        suggestion as a whole. A board from before suggestions ignores them."""
+        body = _body(
+            assignee=assignee,
+            branchName=branch_name,
+            note=note,
+            headSha=head_sha,
+            prTitle=pr_title,
+            prBody=pr_body,
+        )
         result: dict[str, Any] = self.request("POST", f"/api/board/{_ref(card)}/handover", body)
         return _item(result)
 
@@ -195,6 +207,32 @@ class BoardClient:
         """The reviews of a task, newest first, and its approvals for the current head."""
         result: dict[str, Any] = self.request("GET", f"/api/board/{_ref(card)}/reviews")
         return result
+
+    # --- push requests --------------------------------------------------------------
+
+    def claim_push_request(self, request: str, assignee: str) -> dict[str, Any]:
+        """Claims a request to push a task's branch, for a few minutes. Refused with 409 when
+        another worker holds it or it is finished."""
+        result = self.request(
+            "POST",
+            f"/api/board/push-requests/{_ref(request)}/claim",
+            {"assignee": assignee},
+        )
+        return _push_request(result)
+
+    def report_push_request(
+        self,
+        request: str,
+        assignee: str,
+        status: str,
+        pushed_sha: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """Says how the push of a claimed request went: `pushed` with the commit pushed, or
+        `failed` with why."""
+        body = _body(assignee=assignee, status=status, pushedSha=pushed_sha, error=error)
+        result = self.request("POST", f"/api/board/push-requests/{_ref(request)}/result", body)
+        return _push_request(result)
 
     # --- workers --------------------------------------------------------------------
 
@@ -253,6 +291,29 @@ class BoardClient:
             _body(**report),
         )
         return _item(result)
+
+
+def _push_request(result: Any) -> dict[str, Any]:
+    """A push request as the board answers with it: bare, or as the `item` of the reply."""
+    if isinstance(result, dict) and isinstance(result.get("item"), dict):
+        item: dict[str, Any] = result["item"]
+        return item
+    return result if isinstance(result, dict) else {}
+
+
+def push_requests(reply: Any) -> list[dict[str, Any]]:
+    """The requests to push a branch a heartbeat reply carries: none from a board that does
+    not know push requests."""
+    items = reply.get("pushRequests") if isinstance(reply, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict) and item.get("id")]
+
+
+def verdict_push_request(reply: Any) -> dict[str, Any] | None:
+    """The request to push the approved branch a review verdict's reply carries, if any."""
+    item = reply.get("pushRequest") if isinstance(reply, dict) else None
+    return item if isinstance(item, dict) and item.get("id") else None
 
 
 def _error_message(exc: urllib.error.HTTPError) -> str:

@@ -210,7 +210,7 @@ def _say(level: str, message: str) -> None:
 
 def _ensure_allowed(repo: Path) -> None:
     """The repository must be on the allow list, like any `vp task` workspace; the task
-    worktrees made from it inherit its permission."""
+    clones made from it inherit its permission."""
     if is_protected_dir(repo):
         error(f"'{repo}' is a protected directory (home or root); use a project repository.")
         raise typer.Exit(1)
@@ -227,6 +227,27 @@ def _ensure_allowed(repo: Path) -> None:
 
 def _raise_interrupt(_signum: int, _frame: FrameType | None) -> None:
     raise KeyboardInterrupt
+
+
+def _board_flag(config: dict[str, Any], key: str, default: bool) -> bool:
+    """A yes/no setting of the `board` config, such as `board.push`."""
+    board = config.get("board")
+    value = board.get(key, default) if isinstance(board, dict) else default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"false", "no", "off", "0"}:
+            return False
+        if text in {"true", "yes", "on", "1"}:
+            return True
+        return default
+    if value is None:
+        return default
+    return value is not False and value != 0
+
+
+def _push_enabled(config: dict[str, Any]) -> bool:
+    """Whether `board.push` lets the worker push branches for the board; on unless set off."""
+    return _board_flag(config, "push", True)
 
 
 def _repo_allowed(path: Path) -> bool:
@@ -297,15 +318,15 @@ def board_work(
         Path | None,
         typer.Option(
             "--worktree-dir",
-            help="Where task worktrees go; defaults to <repo>-worktrees next to the repository",
+            help="Where task clones go; defaults to <repo>-worktrees next to the repository",
         ),
     ] = None,
     base: Annotated[
         str | None,
         typer.Option(
             "--base",
-            help="Where new branches start, and what reviews diff against; defaults to the "
-            "repository's current branch",
+            help="Where new branches start, and what reviews diff against, taken from the "
+            "remote where it is further along; defaults to the remote's default branch",
         ),
     ] = None,
     branch_template: Annotated[
@@ -320,13 +341,28 @@ def board_work(
         ExistingMode | None,
         typer.Option(
             "--existing",
-            help="When the task's branch or worktree exists: continue or refuse  "
-            "[default: continue]",
+            help="When the task's branch exists: continue or refuse  [default: continue]",
         ),
     ] = None,
     keep_worktree: Annotated[
         bool,
-        typer.Option("--keep-worktree", help="Keep worktrees after the hand-over or review"),
+        typer.Option("--keep-worktree", help="Keep task clones after the hand-over or review"),
+    ] = False,
+    no_push: Annotated[
+        bool,
+        typer.Option(
+            "--no-push",
+            help="Do not push branches for the board: neither an approved one nor on request "
+            "(also board.push: false)",
+        ),
+    ] = False,
+    require_fetch: Annotated[
+        bool,
+        typer.Option(
+            "--require-fetch",
+            help="Block a task whose remote cannot be fetched, instead of working from the "
+            "repository as it is (also board.require_fetch: true)",
+        ),
     ] = False,
     profile: Annotated[
         str | None,
@@ -360,7 +396,7 @@ def board_work(
         str | None,
         typer.Option(
             "--verify",
-            help="Command that must pass in the worktree before the hand-over",
+            help="Command that must pass in the task's clone before the hand-over",
         ),
     ] = None,
     on_fail: Annotated[
@@ -389,13 +425,23 @@ def board_work(
 ) -> None:
     """Claim planned tasks of a board project and let an agent implement each one.
 
-    Each task gets its own branch and worktree. The agent runs headless with the task as
-    its prompt; after an optional --verify command passes, the task moves to Review with
-    its branch. Failed and timed-out tasks go back to Planned (or blocked) with a note.
+    Each task gets its own branch and a clone of the repository to work on it in. The agent
+    runs headless with the task as its prompt; after an optional --verify command passes,
+    the branch comes back into the repository and the task moves to Review with it. Failed
+    and timed-out tasks go back to Planned (or blocked) with a note.
+
+    Before each run the worker fetches the task's remote: new branches start from the
+    remote's default branch, and a continued branch from where the remote has it when that
+    is further along. A failed fetch goes on with the repository as it is, unless
+    --require-fetch.
 
     With --mode review the worker claims tasks in Review instead, and the agent judges the
-    work on the branch, in a worktree of its own, without changing it: approve, or send it
+    work on the branch, in a clone of its own, without changing it: approve, or send it
     back for rework with feedback. A failing --verify command always sends it back.
+
+    When the board asks, the worker pushes branches to GitHub from the repository with your
+    git credentials: the commit a reviewer approved, and the branches of push requests, such
+    as for Open PR. --no-push turns that off.
     """
     reviewing = mode == WorkMode.REVIEW
     if reviewing:
@@ -480,6 +526,8 @@ def board_work(
         on_fail=(on_fail or OnFail.PLANNED).value,
         max_attempts=max_attempts,
         usage_limit_wait_seconds=usage_wait,
+        push=not no_push and _push_enabled(config),
+        require_fetch=require_fetch or _board_flag(config, "require_fetch", False),
     )
     runner = DockerAgentRunner(
         selected,
@@ -536,6 +584,11 @@ def board_work(
     else:
         info(
             f"Handed over {len(summary.handed_over)} task(s), gave back {len(summary.returned)}.",
+        )
+    if summary.pushed or summary.push_failed:
+        info(
+            f"Pushed {len(summary.pushed)} branch(es) for the board"
+            + (f"; {len(summary.push_failed)} push(es) failed." if summary.push_failed else "."),
         )
     if summary.ended_because.startswith(
         ("The agent could not be started", "The agent could not be stopped"),
