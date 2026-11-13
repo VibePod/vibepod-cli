@@ -56,6 +56,13 @@ Cursor's image contract is `HOME=/config` with `cursor-agent` under
 Detached Cursor tasks always pass `--trust` to avoid an interactive workspace
 prompt; only `--ikwid` adds `--force` to bypass command approvals.
 
+Warp's image contract is `HOME=/config`. Warp keeps its login only in the
+Secret Service, so the image entrypoint starts a private D-Bus session bus and
+an unlocked GNOME keyring whose files live in `/config/.local/share/keyrings`.
+The CLI is interactive only (no one-shot mode, no ACP), so the spec has neither
+`headless_prefix` nor `acp_command`. `vp import warp` must never list
+`~/.local/share/keyrings`: on the host that is the user's whole login keyring.
+
 ## Tests
 
 Runner is `pytest` (`python -m pytest`); CI also validates default images with

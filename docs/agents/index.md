@@ -24,6 +24,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `cline` | Cline | `vp cl` | `vibepod/cline:latest` |
 | `junie` | JetBrains | `vp ju` | `vibepod/junie:latest` |
 | `cursor` | Anysphere | `vp cu` | `vibepod/cursor:latest` |
+| `warp` | Warp | `vp w` | `vibepod/warp:latest` |
 
 Alias note: `vp run devstral` resolves to `vp run vibe`, `vp run qwen-cli`
 resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
@@ -319,7 +320,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`, `cline`, `junie`, `cursor`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`, `cline`, `junie`, `cursor`, `warp`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -454,6 +455,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `cline` | `--auto-approve true` |
 | `junie` | `--brave` |
 | `cursor` | `--force` |
+| `warp` | `--auto-approve` |
 
 Example:
 
@@ -671,7 +673,7 @@ claude --resume 39bf1a93-ea1f-4b0a-a894-0a662e5a1d4e
 ```
 
 When VibePod recognizes such a hint in the session output (supported for
-Claude, Codex, Pi, Copilot, Jcode, Freebuff, Hermes, Cline, Junie, and Cursor), it
+Claude, Codex, Pi, Copilot, Jcode, Freebuff, Hermes, Cline, Junie, Cursor, and Warp), it
 prints the equivalent VibePod command after the agent exits:
 
 ```text
@@ -1553,6 +1555,97 @@ The image pins Cursor's release channel to `static` in `cli-config.json` on
 every start. That is the CLI's only switch for its background self-update,
 which would otherwise download each new ~550 MB package into the config mount
 while the image keeps running its own pinned copy.
+
+### Warp Agent CLI (Warp)
+
+```bash
+vp run warp   # or: vp w
+```
+
+The default image is `vibepod/warp:latest`. Until it is published, build the
+Warp image from the companion
+[vibepod-agents branch](https://github.com/VibePod/vibepod-agents/tree/warp-agent/docker/warp)
+and select the local image explicitly. From that repository's checkout:
+
+```bash
+docker build -t vibepod/warp:local docker/warp
+VP_IMAGE_WARP=vibepod/warp:local vp run warp
+```
+
+The `:local` tag avoids automatic pulls of `:latest`. The CLI registration
+alone does not install Warp; the image must provide `warp` and the `/config`
+state mount described below.
+
+The Warp Agent CLI (`warp`) runs the agent from the Warp terminal app in any
+terminal. It is closed source and ships as a single binary from
+`releases.warp.dev`; the image pins one build and tracks new ones from Warp's
+download endpoint. Models are served through your Warp account (`/model`), and
+its bring-your-own-key support (`/api-keys`) takes OpenAI, Anthropic and Google
+keys but no custom endpoint, so VibePod's global `llm` settings and
+`--provider` do not apply to it. State is persisted under
+`~/.config/vibepod/agents/warp/`, mounted at `/config` inside the container
+(`HOME=/config`):
+
+| Path in container | Contents |
+|---|---|
+| `/config/.config/warp-terminal/cli/settings.toml` | CLI settings and execution profiles (permissions, command denylist) |
+| `/config/.local/state/warp-terminal/` | Conversation database and logs (`warp-cli/warp.log`) |
+| `/config/.local/share/keyrings/` | Keyring holding the login, provider API keys and MCP credentials |
+| `/config/.agents/skills/`, `/config/.agents/AGENTS.md` | Personal skills and global rules |
+
+**Authentication.** Start the agent and follow the device login: the CLI shows
+a verification link and a code, and opening the link in the host browser is
+enough (no callback port is involved). The login is remembered across runs:
+
+```bash
+vp run warp
+```
+
+Or use a Warp API key instead, which skips the login:
+
+```yaml
+agents:
+  warp:
+    env:
+      WARP_API_KEY: <your-api-key>
+```
+
+Or per run: `vp run warp -e WARP_API_KEY=<your-api-key>`.
+
+**Keyring.** Warp stores its login only in the Secret Service keyring and has
+no file fallback, and a container has neither a session bus nor a keyring. The
+image therefore starts a private D-Bus session bus and a GNOME keyring (secrets
+component only) before the agent, unlocked automatically, with its files on
+the config mount. That keyring is protected by the permissions of the config
+directory, like the credential files other agents keep there. Set
+`VP_WARP_KEYRING=0` to run without it; Warp then asks for the login on every
+start unless `WARP_API_KEY` is set.
+
+**Proxy and TLS.** Warp honours `HTTP_PROXY`/`HTTPS_PROXY` and `SSL_CERT_FILE`
+natively, which VibePod supplies when the proxy is enabled. Besides its own
+API, Warp sends telemetry to RudderStack and Sentry on start; both show up in
+the proxy log and can be blocked with the proxy filter.
+
+**IKWID mode.** `--ikwid` adds `--auto-approve`, which starts every new
+conversation with auto-approve on. By default that also bypasses Warp's command
+denylist; set `auto_approve_bypasses_command_denylist = false` under
+`[agents.warp_agent.other]` in `settings.toml` to keep the denylist in force:
+
+```bash
+vp run warp --ikwid
+```
+
+**Interactive only.** The Warp Agent CLI takes no prompt argument and has no
+print mode or ACP server, so task mode (`vp task create warp`) and
+`vp run warp --acp` are not available.
+
+**Skills.** Warp scans `~/.agents/skills/`, so skills installed via
+`vp skills` are mounted at `/config/.agents/skills/<id>` and picked up
+automatically.
+
+VibePod sets `WARP_TUI_DISABLE_AUTOUPDATE=1`. The background self-update would
+otherwise stage each new ~250 MB build into the config mount while the image
+keeps running its own pinned copy.
 
 ## Hermes Agent (`hermes`) — developer preview
 
