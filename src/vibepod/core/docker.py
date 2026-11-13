@@ -789,7 +789,8 @@ def _forward_stdin(
     *eof_stop* records that, so the caller does not report the resulting
     SIGTERM exit as a failure. A stop that fails is appended to
     *stop_failures*, so the caller ends the session instead of waiting on a
-    container that never sees EOF.
+    container that never sees EOF; a container that is already gone (it
+    exited and was auto-removed meanwhile) needs no stop and is no failure.
     """
     while True:
         try:
@@ -806,6 +807,8 @@ def _forward_stdin(
             eof_stop.set()
             try:
                 container.stop(timeout=5)
+            except NotFound:
+                pass
             except Exception as exc:
                 stop_failures.append(exc)
             return
@@ -1917,6 +1920,7 @@ class DockerManager:
         first_output_deadline: float | None = time.monotonic() + _ACP_FIRST_OUTPUT_WARN_SECONDS
         eof_stop = threading.Event()
         stop_failures: list[BaseException] = []
+        stream_ended = False
         stdio_reader: _ThreadedReader | None = None
         try:
             if not _is_selectable(sock) or (stdin_fd is not None and not _can_select_stdin()):
@@ -1932,12 +1936,16 @@ class DockerManager:
                         name="vibepod-acp-stdin",
                         daemon=True,
                     ).start()
-                while not stop_requested and not stop_failures:
+                while not stop_requested:
                     wait = _PIPE_POLL_SECONDS
                     if first_output_deadline is not None:
                         wait = min(wait, max(0.0, first_output_deadline - time.monotonic()))
                     data = reader.get(wait)
                     if data is None:
+                        if stop_failures:
+                            # Checked only once nothing is queued, so output
+                            # and an EOF that arrived anyway are taken first.
+                            break
                         if (
                             first_output_deadline is not None
                             and time.monotonic() >= first_output_deadline
@@ -1946,6 +1954,7 @@ class DockerManager:
                             _warn_no_output()
                         continue
                     if not data:
+                        stream_ended = True
                         break
                     first_output_deadline = None
                     _handle_output(data)
@@ -2005,9 +2014,10 @@ class DockerManager:
             if old_sigint is not None:
                 signal.signal(signal.SIGINT, old_sigint)
 
-        if stop_failures:
+        if stop_failures and not stream_ended:
             # The ACP client is gone but the adapter never got its EOF stand-in;
-            # the container would keep running, so say which one and fail.
+            # the container would keep running, so say which one and fail. If
+            # the stream ended anyway, the container's own exit status counts.
             name = getattr(container, "name", container.id)
             warning(
                 f"ACP: the client closed stdin but stopping {name} failed: "
