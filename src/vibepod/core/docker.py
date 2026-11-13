@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
 import os
+import queue
 import re
 import select
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -43,6 +46,14 @@ except ImportError:  # pragma: no cover - exercised off Windows
 else:
     msvcrt = _msvcrt
 
+ctypes: Any | None
+try:
+    import ctypes as _ctypes
+except ImportError:  # pragma: no cover - exercised on ctypes-less runtimes
+    ctypes = None
+else:
+    ctypes = _ctypes
+
 try:
     import docker as _docker
     from docker.errors import APIError as _APIError
@@ -58,6 +69,32 @@ else:
     APIError = _APIError
     DockerException = _DockerException
     NotFound = _NotFound
+
+#: docker-py's stream ids of the multiplexed (no-TTY) attach protocol, and the
+#: Win32 "pipe ended" code it maps to EOF itself.
+_STREAM_STDOUT, _STREAM_STDERR, _NPIPE_ENDED = 1, 2, 109
+if docker is not None:
+    from docker.utils import socket as _docker_socket
+
+    _STREAM_STDOUT = _docker_socket.STDOUT
+    _STREAM_STDERR = _docker_socket.STDERR
+    _NPIPE_ENDED = _docker_socket.NPIPE_ENDED
+
+#: docker-py's named-pipe socket class; ``docker.transport`` only defines it on
+#: Windows (it needs pywin32). Elsewhere nothing is an instance of the stand-in,
+#: the same fallback ``docker.utils.socket`` uses.
+_NpipeSocket: Any
+try:
+    from docker.transport import NpipeSocket as _NpipeSocket
+except ImportError:
+    _NpipeSocket = type(None)
+
+#: pywin32's Win32 error-code names, installed with docker-py on Windows.
+_winerror: Any
+try:
+    _winerror = importlib.import_module("winerror")
+except ImportError:
+    _winerror = None
 
 
 class DockerClientError(RuntimeError):
@@ -292,28 +329,512 @@ def _discover_podman_socket() -> str | None:
     return None
 
 
+#: ``STD_INPUT_HANDLE`` and the console input mode flags (wincon.h) needed to put
+#: the Windows console into the raw, no-echo input mode a POSIX TTY gets from
+#: ``tty.setraw()``. Defined unconditionally so the helpers below stay testable
+#: off Windows.
+_STD_INPUT_HANDLE = -10
+_ENABLE_PROCESSED_INPUT = 0x0001
+_ENABLE_LINE_INPUT = 0x0002
+_ENABLE_ECHO_INPUT = 0x0004
+_ENABLE_WINDOW_INPUT = 0x0008
+_ENABLE_MOUSE_INPUT = 0x0010
+_ENABLE_INSERT_MODE = 0x0020
+_ENABLE_QUICK_EDIT_MODE = 0x0040
+#: Must accompany any SetConsoleMode call meant to change the quick-edit or
+#: insert bits; without it the console ignores those two bits entirely.
+_ENABLE_EXTENDED_FLAGS = 0x0080
+_ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
+
+#: Console input flags cleared while attached. ``ENABLE_ECHO_INPUT`` is the one
+#: that duplicates keystrokes (local echo plus the container TTY echo); the rest
+#: stop line editing, Ctrl+C-as-signal, resize/mouse records and click-to-select
+#: from interfering with the agent's own line editing.
+#:
+#: ``ENABLE_VIRTUAL_TERMINAL_INPUT`` is cleared rather than set, although it would
+#: hand us ready-made VT sequences: it switches the pseudo-console to generating
+#: bytes per key *event*, and because the CRT flips the console mode around every
+#: single ``msvcrt.getwch()`` read, press and release then get encoded
+#: inconsistently -- one ``a`` arrives as ``a`` plus a kitty ``ESC[97;1:3u``
+#: key-release report that the agent inserts as text. Key encoding therefore
+#: stays legacy and ``_EXTENDED_KEY_SEQUENCES`` does the translating.
+_RAW_CONSOLE_INPUT_CLEAR = (
+    _ENABLE_ECHO_INPUT
+    | _ENABLE_LINE_INPUT
+    | _ENABLE_PROCESSED_INPUT
+    | _ENABLE_WINDOW_INPUT
+    | _ENABLE_MOUSE_INPUT
+    | _ENABLE_INSERT_MODE
+    | _ENABLE_QUICK_EDIT_MODE
+    | _ENABLE_VIRTUAL_TERMINAL_INPUT
+)
+
+#: Scan codes reported after the ``\x00``/``\xe0`` console prefix, mapped to the VT
+#: sequences a Linux TTY expects. This is how navigation keys reach the agent:
+#: the console is kept in its legacy key reporting (see
+#: :func:`_raw_console_input_mode` for why), so every arrow/Home/End/Delete/F key
+#: arrives as a scan code pair.
+_EXTENDED_KEY_SEQUENCES: dict[int, bytes] = {
+    59: b"\x1bOP",  # F1
+    60: b"\x1bOQ",  # F2
+    61: b"\x1bOR",  # F3
+    62: b"\x1bOS",  # F4
+    63: b"\x1b[15~",  # F5
+    64: b"\x1b[17~",  # F6
+    65: b"\x1b[18~",  # F7
+    66: b"\x1b[19~",  # F8
+    67: b"\x1b[20~",  # F9
+    68: b"\x1b[21~",  # F10
+    71: b"\x1b[H",  # Home
+    72: b"\x1b[A",  # Arrow Up
+    73: b"\x1b[5~",  # Page Up
+    75: b"\x1b[D",  # Arrow Left
+    77: b"\x1b[C",  # Arrow Right
+    79: b"\x1b[F",  # End
+    80: b"\x1b[B",  # Arrow Down
+    81: b"\x1b[6~",  # Page Down
+    82: b"\x1b[2~",  # Insert
+    83: b"\x1b[3~",  # Delete
+    133: b"\x1b[23~",  # F11
+    134: b"\x1b[24~",  # F12
+    15: b"\x1b[Z",  # Shift+Tab
+    115: b"\x1b[1;5D",  # Ctrl+Left
+    116: b"\x1b[1;5C",  # Ctrl+Right
+    141: b"\x1b[1;5A",  # Ctrl+Up
+    145: b"\x1b[1;5B",  # Ctrl+Down
+    119: b"\x1b[1;5H",  # Ctrl+Home
+    117: b"\x1b[1;5F",  # Ctrl+End
+    147: b"\x1b[3;5~",  # Ctrl+Delete
+}
+
+
 def _encode_console_character(ch: str) -> bytes:
-    encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
-    return ch.encode(encoding, errors="replace")
+    """Encode one console key for the container TTY.
+
+    Always UTF-8: the container side is a Linux PTY, while the Windows console
+    hands us the character in its own codepage (cp850/cp1252 for a legacy
+    console), whose bytes are invalid UTF-8 as soon as a non-ASCII key is typed.
+    """
+    return ch.encode("utf-8", errors="replace")
+
+
+#: A kitty keyboard protocol key report (CSI u): a codepoint, then optional
+#: shifted/base alternates and a modifier field, any of which may carry a
+#: ``:value`` sub-field. Group 1 is the event type of the modifier field, where
+#: ``2`` is auto-repeat and ``3`` is a key *release*.
+_KITTY_KEY_REPORT = re.compile(rb"\x1b\[\d+(?::\d+)?(?:;\d+(?::(\d+))?)?u")
+
+#: CSI/SS3 final bytes (0x40-0x7E per ECMA-48); ``[`` opens a CSI and ``O`` opens
+#: SS3, so both fall in that range but act as intermediates here.
+_CSI_FINAL_FIRST, _CSI_FINAL_LAST = 0x40, 0x7E
+_CSI_INTERMEDIATES = "[O"
+_MAX_ESCAPE_SEQUENCE_CHARS = 32
+
+#: How long a bare ``ESC`` waits for the rest of its sequence before it is
+#: forwarded as the Escape key itself. Bytes of one sequence normally arrive as a
+#: single burst; the grace period only covers a pseudo-console that delivers that
+#: burst trickling, and stays far below anything a user would notice.
+_ESCAPE_SEQUENCE_GRACE_SECONDS = 0.05
+_KEY_POLL_INTERVAL = 0.002
+#: How often the console input thread checks for a key while idle. It bounds
+#: both the typing latency and how long the thread outlives the session.
+_KEY_WAIT_POLL_SECONDS = 0.01
+
+
+def _console_key_available(deadline: float | None = None) -> bool:
+    """True once the console has further key events queued.
+
+    With a *deadline* the answer is waited for (polled, not blocked) until then,
+    so a sequence split across several reads is still recognized.
+    """
+    kbhit = getattr(msvcrt, "kbhit", None) if msvcrt is not None else None
+    if kbhit is None:
+        return False
+    while True:
+        try:
+            if kbhit():
+                return True
+        except OSError:
+            return False
+        if deadline is None or time.monotonic() >= deadline:
+            return False
+        time.sleep(_KEY_POLL_INTERVAL)
+
+
+def _console_escape_bytes() -> bytes:
+    """Forward the escape sequence queued behind a bare ``ESC`` key read.
+
+    A terminal (or the pseudo-console replaying its output as key events for a
+    legacy console app) reports one key as a burst of events, so what follows
+    belongs to this sequence -- even when the pseudo-console hands the burst out
+    a few bytes at a time, which the grace period in ``_console_key_available``
+    covers. Kitty key *release* reports -- one ``a`` arriving as ``a`` plus an
+    ``ESC[97;1:3u`` -- are dropped, since a Linux PTY has no such thing and a
+    prompt that never enabled the protocol inserts them as stray text. Press and
+    auto-repeat reports, Alt-as-Meta (``ESC`` plus a char), bracketed paste
+    markers and SS3 keys are forwarded verbatim.
+    """
+    if msvcrt is None or getattr(msvcrt, "kbhit", None) is None:
+        # No way to look ahead: keep the one-key-read-per-byte behaviour.
+        return b"\x1b"
+    deadline = time.monotonic() + _ESCAPE_SEQUENCE_GRACE_SECONDS
+    chars: list[str] = []
+    while len(chars) < _MAX_ESCAPE_SEQUENCE_CHARS and _console_key_available(deadline):
+        try:
+            ch = msvcrt.getwch()
+        except (EOFError, KeyboardInterrupt, OSError):
+            break
+        chars.append(ch)
+        if ch not in _CSI_INTERMEDIATES and _CSI_FINAL_FIRST <= ord(ch) <= _CSI_FINAL_LAST:
+            break
+    if not chars:
+        # Nothing arrived: it really was the Escape key (vim escape, TUI
+        # interrupt), so hand it over instead of holding it back.
+        return b"\x1b"
+    sequence = b"\x1b" + _encode_console_character("".join(chars))
+    report = _KITTY_KEY_REPORT.fullmatch(sequence)
+    if report is not None and (report.group(1) or b"1") == b"3":
+        return b""
+    return sequence
+
+
+def _console_key_bytes(ch: str) -> bytes:
+    """Bytes to forward for one console key read, ``b""`` to forward nothing.
+
+    Navigation and function keys arrive from the Windows console as a
+    ``\\x00``/``\\xe0`` prefix plus a scan code, which a Linux TTY cannot make
+    sense of (once UTF-8 encoded it turns into mojibake such as ``\\xc3\\xa0H``
+    for Arrow Up, i.e. stray characters in the agent prompt), so they are mapped
+    to the VT sequences a terminal would send. Unmapped codes are dropped rather
+    than sent as garbage. Backspace is normalized to ``\\x7f``, which is what a
+    Linux terminal sends for that key (``\\x08`` shows up as ``^H`` in prompts
+    that only bind DEL). A bare ``ESC`` hands over to
+    :func:`_console_escape_bytes`, which assembles and screens the rest of the
+    sequence.
+    """
+    if ch in ("\x00", "\xe0") and msvcrt is not None:
+        try:
+            code = msvcrt.getwch()
+        except (EOFError, KeyboardInterrupt, OSError):
+            return b""
+        return _EXTENDED_KEY_SEQUENCES.get(ord(code), b"")
+    if ch == "\x1b":
+        return _console_escape_bytes()
+    if ch == "\x08":
+        return b"\x7f"
+    return _encode_console_character(ch)
+
+
+def _raw_console_input_mode(old_mode: int) -> int:
+    """Console input mode with local echo and line editing off.
+
+    Only ``_RAW_CONSOLE_INPUT_CLEAR`` bits are touched, so anything the console
+    was configured with beyond raw input (and the mode the caller restores) is
+    preserved; see that constant for why VT input mode is cleared, not enabled.
+    ``ENABLE_EXTENDED_FLAGS`` is set so clearing quick-edit takes effect;
+    otherwise a mouse click starts a selection that freezes the agent's output.
+    """
+    return (old_mode & ~_RAW_CONSOLE_INPUT_CLEAR) | _ENABLE_EXTENDED_FLAGS
+
+
+def _kernel32() -> Any | None:
+    """``ctypes.windll.kernel32`` on Windows, ``None`` everywhere else."""
+    if ctypes is None or sys.platform != "win32":
+        return None
+    try:
+        return ctypes.windll.kernel32
+    except Exception:  # pragma: no cover - exotic CPython builds
+        return None
+
+
+def _get_console_input_mode(kernel32: Any) -> int | None:
+    """Current console input mode of our stdin, ``None`` if it is not a console."""
+    if ctypes is None:
+        return None
+    mode = ctypes.c_uint32()
+    if not kernel32.GetConsoleMode(kernel32.GetStdHandle(_STD_INPUT_HANDLE), ctypes.pointer(mode)):
+        return None
+    return int(mode.value)
+
+
+def _set_console_input_mode(kernel32: Any, mode: int) -> bool:
+    if ctypes is None:
+        return False
+    handle = kernel32.GetStdHandle(_STD_INPUT_HANDLE)
+    # SetConsoleMode takes the mode by value (DWORD), unlike GetConsoleMode's
+    # LPDWORD; a pointer here is read as mode bits and the call fails.
+    return bool(kernel32.SetConsoleMode(handle, ctypes.c_uint32(mode)))
+
+
+def _enter_console_raw_input() -> int | None:
+    """Switch the Windows console input to raw, no-echo mode.
+
+    The POSIX attach path gets this from ``tty.setraw()`` for free. Without the
+    equivalent console request the console host keeps handling input itself:
+    keystrokes are echoed locally on top of the container TTY echo (typed text
+    shows up doubled — ``msvcrt.getwch()`` clears echo only inside its own read),
+    input is line-buffered, and Ctrl+C becomes a local ``KeyboardInterrupt``
+    instead of byte ``0x03`` for the agent. Returns the previous mode to restore,
+    or ``None`` when stdin is not a console window or the mode cannot be changed.
+    """
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return None
+    try:
+        old_mode = _get_console_input_mode(kernel32)
+        if old_mode is None:
+            return None
+        if not _set_console_input_mode(kernel32, _raw_console_input_mode(old_mode)):
+            return None
+        return old_mode
+    except Exception:  # pragma: no cover - console API failure
+        return None
+
+
+def _leave_console_raw_input(old_mode: int) -> None:
+    """Restore a mode saved by :func:`_enter_console_raw_input`."""
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return
+    try:
+        # With ENABLE_EXTENDED_FLAGS, so the saved quick-edit/insert bits are
+        # applied too and the user's quick-edit setting comes back.
+        _set_console_input_mode(kernel32, old_mode | _ENABLE_EXTENDED_FLAGS)
+    except Exception:  # pragma: no cover - console API failure
+        pass
 
 
 def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading.Event) -> None:
     if msvcrt is None:
         return
+    kbhit = getattr(msvcrt, "kbhit", None)
     while not stop_event.is_set():
+        if kbhit is not None:
+            # Only read once a key is queued: a getwch() left blocked after the
+            # session ended would steal the next keystroke, and on return the
+            # CRT puts back the raw console mode we have already restored.
+            try:
+                if not kbhit():
+                    time.sleep(_KEY_WAIT_POLL_SECONDS)
+                    continue
+            except OSError:
+                return
         try:
-            ch = msvcrt.getwch()
-            if ch in ("\x00", "\xe0"):
-                ch += msvcrt.getwch()
+            data = _console_key_bytes(msvcrt.getwch())
         except (EOFError, KeyboardInterrupt, OSError):
             return
-
-        data = _encode_console_character(ch)
+        if not data:
+            continue
+        if stop_event.is_set():
+            # The session ended while getwch() waited; the socket is closed.
+            return
         if logger is not None:
             logger.log_input(data)
         try:
             sock.sendall(data)
+        except Exception:
+            # A closed NpipeSocket raises RuntimeError, a broken pipe
+            # pywintypes.error; neither is an OSError.
+            return
+
+
+#: ``pywintypes.error`` codes a named-pipe read raises when the stream is over
+#: rather than broken: ``ERROR_BROKEN_PIPE`` (109, the daemon closed its end;
+#: ``docker.utils.socket.read`` maps it to EOF the same way), ``ERROR_NO_DATA``
+#: (232, pipe being closed), ``ERROR_PIPE_NOT_CONNECTED`` (233, the server
+#: disconnected) and ``ERROR_OPERATION_ABORTED`` (995, the read was cancelled
+#: because the handle was closed).
+_NPIPE_EOF_ERRORS = (
+    frozenset(
+        {
+            _winerror.ERROR_BROKEN_PIPE,
+            _winerror.ERROR_NO_DATA,
+            _winerror.ERROR_PIPE_NOT_CONNECTED,
+            _winerror.ERROR_OPERATION_ABORTED,
+        },
+    )
+    if _winerror is not None
+    # Off Windows only tests reach the named-pipe path.
+    else frozenset({_NPIPE_ENDED, 232, 233, 995})
+)
+
+#: Exit codes of a container ended by ``container.stop()``: SIGTERM (143), or
+#: SIGKILL (137) once the stop timeout ran out.
+_STOP_EXIT_CODES = frozenset({137, 143})
+
+#: Grace period of the stop that stands in for stdin EOF on a named pipe.
+_EOF_STOP_GRACE_SECONDS = 5
+
+#: How often the main thread wakes while a :class:`_ThreadedReader` is waiting, so
+#: Ctrl+C and signal handlers still run promptly.
+_PIPE_POLL_SECONDS = 0.1
+
+#: Chunks a :class:`_ThreadedReader` buffers ahead of a slow consumer (a busy
+#: terminal or ACP client) before it stops reading: back-pressure, as the
+#: select() loop gets for free, instead of unbounded memory.
+_READER_QUEUE_CHUNKS = 64
+
+
+def _is_selectable(sock: Any) -> bool:
+    """True when ``select()`` accepts *sock*.
+
+    On Windows over ``npipe://`` (Docker Desktop, Podman Desktop) the attach
+    socket is a docker-py ``NpipeSocket``, which has no ``fileno()``, and
+    Windows ``select()`` only takes Winsock sockets anyway. TCP and SSH
+    connections hand back real sockets, also on Windows. Checked by type, as
+    ``docker.utils.socket`` does.
+    """
+    return not isinstance(sock, _NpipeSocket)
+
+
+def _recv_chunk(sock: Any, buf: bytearray, pipe: bool) -> bytes:
+    """One blocking read from the attach socket into *buf*; ``b""`` at EOF.
+
+    A named pipe (*pipe*) is read with the overlapped ``recv_into`` rather than
+    ``recv``: its handle is opened for overlapped I/O, and a synchronous
+    ``ReadFile`` on it may report completion early while the input thread
+    writes to the same handle. Only the codes in ``_NPIPE_EOF_ERRORS`` count as
+    EOF; any other error propagates, so a broken connection is not mistaken for
+    the agent exiting.
+    """
+    if not pipe:
+        return bytes(sock.recv(len(buf)))
+    try:
+        count = sock.recv_into(buf)
+    except Exception as exc:
+        if exc.args and exc.args[0] in _NPIPE_EOF_ERRORS:
+            return b""
+        raise
+    return bytes(memoryview(buf)[:count])
+
+
+def _can_select_stdin() -> bool:
+    """False on Windows, where ``select()`` takes only Winsock sockets."""
+    return sys.platform != "win32"
+
+
+class _ThreadedReader:
+    """Read the attach socket on a helper thread instead of ``select()``.
+
+    The main thread collects chunks with :meth:`get`, which returns after at
+    most *timeout* seconds, so it keeps handling Ctrl+C, signals and its own
+    deadlines while the read blocks. The queue is bounded; :meth:`close` lets a
+    reader waiting for room exit.
+    """
+
+    def __init__(self, sock: Any, bufsize: int) -> None:
+        # docker-py gives the socket the client's 60 s timeout, which a
+        # blocking read honours: an agent idle for a minute would end the
+        # session. select() never needed it, so turn it off.
+        try:
+            sock.settimeout(None)
+        except Exception:  # pragma: no cover - best effort
+            pass
+        self._sock = sock
+        self._buf = bytearray(bufsize)
+        self._pipe = not _is_selectable(sock)
+        self._closed = threading.Event()
+        self._chunks: queue.Queue[bytes | BaseException] = queue.Queue(maxsize=_READER_QUEUE_CHUNKS)
+        self._thread = threading.Thread(target=self._run, name="vibepod-attach-output", daemon=True)
+        self._thread.start()
+
+    def _put(self, item: bytes | BaseException) -> bool:
+        """Queue *item*, waiting for room; False once the reader was closed."""
+        while not self._closed.is_set():
+            try:
+                self._chunks.put(item, timeout=_PIPE_POLL_SECONDS)
+            except queue.Full:
+                continue
+            return True
+        return False
+
+    def _run(self) -> None:
+        while not self._closed.is_set():
+            try:
+                data = _recv_chunk(self._sock, self._buf, self._pipe)
+            except BaseException as exc:
+                self._put(exc)
+                return
+            if not self._put(data) or not data:
+                return
+
+    def close(self) -> None:
+        """Stop the reader once its current read returns; queued data is dropped."""
+        self._closed.set()
+
+    def get(self, timeout: float) -> bytes | None:
+        """Next chunk, ``b""`` at EOF, ``None`` when *timeout* passed first.
+
+        Re-raises the error that ended the reader thread.
+        """
+        try:
+            item = self._chunks.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+class _EofStop:
+    """Outcome of the container stop that stands in for stdin EOF on a named pipe.
+
+    Written by the stdin thread, read by ``attach_stdio``. ``stopped`` is set
+    only when *our* stop ended a running container, so only then may a
+    SIGTERM/SIGKILL status be reported as a clean exit. A container that had
+    already exited (removed, or stopped but not yet removed: the stop would
+    succeed with HTTP 304 there) or a stop that failed leaves the adapter's own
+    exit status alone.
+    """
+
+    def __init__(self) -> None:
+        self.attempted = threading.Event()
+        self.done = threading.Event()
+        self.stopped = False
+        self.failure: BaseException | None = None
+
+
+def _forward_stdin(stdin_fd: int, sock: Any, container: Any, eof: _EofStop) -> None:
+    """Copy ACP client input from *stdin_fd* to the attach socket on a thread.
+
+    On stdin EOF a real socket is half-closed so the adapter sees EOF and exits
+    while its output keeps draining. A named pipe cannot be half-closed
+    (``NpipeSocket.shutdown`` closes the whole handle, cutting off the output
+    still to come), so the container is stopped instead, which ends the stream;
+    *eof* records how that went (see :class:`_EofStop`). A container that is
+    already gone (it exited and was auto-removed meanwhile) needs no stop and
+    is no failure.
+    """
+    while True:
+        try:
+            data = os.read(stdin_fd, 65536)
         except OSError:
+            data = b""
+        if not data:
+            if _is_selectable(sock):
+                try:
+                    sock.shutdown(socket.SHUT_WR)
+                except OSError:  # pragma: no cover - already closed
+                    pass
+                return
+            eof.attempted.set()
+            try:
+                # An exited container stops "successfully" (HTTP 304) without
+                # our stop having ended it, so only stop one that still runs.
+                container.reload()
+                if container.attrs.get("State", {}).get("Running", True):
+                    container.stop(timeout=_EOF_STOP_GRACE_SECONDS)
+                    eof.stopped = True
+            except NotFound:
+                pass  # already exited and auto-removed
+            except Exception as exc:
+                eof.failure = exc
+            finally:
+                eof.done.set()
+            return
+        try:
+            sock.sendall(data)
+        except Exception:
             return
 
 
@@ -1194,9 +1715,11 @@ class DockerManager:
         output_tail = bytearray()
         stdin_fd = None
         old_tty = None
+        old_console_mode: int | None = None
         old_winch_handler = None
         input_stop_event: threading.Event | None = None
         input_thread: threading.Thread | None = None
+        interactive_reader: _ThreadedReader | None = None
         sigwinch = getattr(signal, "SIGWINCH", None)
         try:
             if sys.stdin.isatty() and termios is not None and tty is not None:
@@ -1212,6 +1735,9 @@ class DockerManager:
 
                     signal.signal(sigwinch, _on_winch)
             elif sys.stdin.isatty() and msvcrt is not None:
+                # The console host must stop interpreting/echoing input, see
+                # _enter_console_raw_input(); the container TTY is the echo.
+                old_console_mode = _enter_console_raw_input()
                 input_stop_event = threading.Event()
                 input_thread = threading.Thread(
                     target=_forward_windows_console_input,
@@ -1220,8 +1746,28 @@ class DockerManager:
                 )
                 input_thread.start()
 
+            def _emit(data: bytes) -> None:
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+                output_tail.extend(data)
+                if len(output_tail) > ATTACH_TAIL_LIMIT:
+                    del output_tail[:-ATTACH_TAIL_LIMIT]
+
+            if not _is_selectable(sock):
+                # Windows named pipe: no select(). Only reachable on Windows,
+                # where console input is forwarded by its own thread above.
+                interactive_reader = reader = _ThreadedReader(sock, 8192)
+                while True:
+                    data = reader.get(_PIPE_POLL_SECONDS)
+                    if data is None:
+                        continue
+                    if not data:
+                        break
+                    _emit(data)
+                return bytes(output_tail)
+
             while True:
-                readers = [sock]
+                readers: list[Any] = [sock]
                 if stdin_fd is not None:
                     readers.append(sys.stdin)
 
@@ -1231,11 +1777,7 @@ class DockerManager:
                     data = sock.recv(8192)
                     if not data:
                         break
-                    sys.stdout.buffer.write(data)
-                    sys.stdout.buffer.flush()
-                    output_tail.extend(data)
-                    if len(output_tail) > ATTACH_TAIL_LIMIT:
-                        del output_tail[:-ATTACH_TAIL_LIMIT]
+                    _emit(data)
 
                 if stdin_fd is not None and sys.stdin in ready:
                     user_data = os.read(stdin_fd, 1024)
@@ -1245,6 +1787,8 @@ class DockerManager:
                         logger.log_input(user_data)
                     sock.sendall(user_data)
         finally:
+            if interactive_reader is not None:
+                interactive_reader.close()
             try:
                 sock_wrapper.close()
             except Exception:
@@ -1253,6 +1797,8 @@ class DockerManager:
                 input_stop_event.set()
             if input_thread is not None:
                 input_thread.join(timeout=0.2)
+            if old_console_mode is not None:
+                _leave_console_raw_input(old_console_mode)
             if sigwinch is not None and old_winch_handler is not None:
                 signal.signal(sigwinch, old_winch_handler)
             if stdin_fd is not None and old_tty is not None and termios is not None:
@@ -1357,79 +1903,127 @@ class DockerManager:
         from vibepod.utils.console import warning
 
         buffer = b""
+
+        def _handle_output(data: bytes) -> None:
+            nonlocal buffer
+            buffer += data
+            # Docker (no TTY) frames each stream chunk with an 8-byte header:
+            # stream byte, 3 padding bytes, 4-byte big-endian payload length.
+            # Frames can split across recv() bounds, so buffer until header
+            # and payload are complete.
+            while len(buffer) >= 8:
+                stream_type, length = struct.unpack(">BxxxL", buffer[:8])
+                if len(buffer) < 8 + length:
+                    break
+                payload = buffer[8 : 8 + length]
+                buffer = buffer[8 + length :]
+                if stream_type == _STREAM_STDOUT:
+                    sys.stdout.buffer.write(payload)
+                    sys.stdout.buffer.flush()
+                elif stream_type == _STREAM_STDERR:
+                    sys.stderr.buffer.write(payload)
+                    sys.stderr.buffer.flush()
+                if logger is not None:
+                    logger.log_output(payload)
+
+        def _warn_no_output() -> None:
+            warning(
+                f"ACP: no output from the adapter after {_ACP_FIRST_OUTPUT_WARN_SECONDS}s; "
+                "the editor is still waiting on initialize. For claude and codex the "
+                "adapter is fetched with npx on every launch, so check "
+                f"`docker logs {getattr(container, 'name', container.id)}`.",
+            )
+
         # Until the adapter says anything the editor sits on a pending
         # initialize with no visible reason; after a while, name the usual
         # cause on stderr (the editor's ACP log) once.
         first_output_deadline: float | None = time.monotonic() + _ACP_FIRST_OUTPUT_WARN_SECONDS
+        eof = _EofStop()
+        stream_ended = False
+        stdio_reader: _ThreadedReader | None = None
         try:
-            while True:
-                if stop_requested:
-                    break
-                readers: list[Any] = [sock]
+            if not _is_selectable(sock) or (stdin_fd is not None and not _can_select_stdin()):
+                # Windows: select() rejects named pipes and stdin pipes alike
+                # (it takes only Winsock sockets), so on npipe:// -- and with
+                # stdin to forward, on tcp:// or ssh:// too -- both directions
+                # get a thread.
+                stdio_reader = reader = _ThreadedReader(sock, 65536)
                 if stdin_fd is not None:
-                    readers.append(sys.stdin)
-                timeout: float | None = None
-                if first_output_deadline is not None:
-                    timeout = max(0.0, first_output_deadline - time.monotonic())
-                ready, _, _ = select.select(readers, [], [], timeout)
-                if not ready:
-                    if first_output_deadline is None:
+                    threading.Thread(
+                        target=_forward_stdin,
+                        args=(stdin_fd, sock, container, eof),
+                        name="vibepod-acp-stdin",
+                        daemon=True,
+                    ).start()
+                while not stop_requested:
+                    wait = _PIPE_POLL_SECONDS
+                    if first_output_deadline is not None:
+                        wait = min(wait, max(0.0, first_output_deadline - time.monotonic()))
+                    data = reader.get(wait)
+                    if data is None:
+                        if eof.failure is not None:
+                            # Checked only once nothing is queued, so output
+                            # and an EOF that arrived anyway are taken first.
+                            break
+                        if (
+                            first_output_deadline is not None
+                            and time.monotonic() >= first_output_deadline
+                        ):
+                            first_output_deadline = None
+                            _warn_no_output()
                         continue
-                    first_output_deadline = None
-                    warning(
-                        f"ACP: no output from the adapter after {_ACP_FIRST_OUTPUT_WARN_SECONDS}s; "
-                        "the editor is still waiting on initialize. For claude and codex the "
-                        "adapter is fetched with npx on every launch, so check "
-                        f"`docker logs {getattr(container, 'name', container.id)}`.",
-                    )
-                    continue
-
-                if sock in ready:
-                    data = sock.recv(65536)
                     if not data:
+                        stream_ended = True
                         break
                     first_output_deadline = None
-                    buffer += data
-                    # Docker (no TTY) frames each stream chunk with an 8-byte
-                    # header: stream byte, 3 padding bytes, 4-byte big-endian
-                    # payload length. Frames can split across recv() bounds,
-                    # so buffer until header and payload are complete.
-                    while len(buffer) >= 8:
-                        stream_type = buffer[0]
-                        length = int.from_bytes(buffer[4:8], "big")
-                        if len(buffer) < 8 + length:
-                            break
-                        payload = buffer[8 : 8 + length]
-                        buffer = buffer[8 + length :]
-                        if stream_type == 1:
-                            sys.stdout.buffer.write(payload)
-                            sys.stdout.buffer.flush()
-                        elif stream_type == 2:
-                            sys.stderr.buffer.write(payload)
-                            sys.stderr.buffer.flush()
-                        if logger is not None:
-                            logger.log_output(payload)
+                    _handle_output(data)
+            else:
+                while True:
+                    if stop_requested:
+                        break
+                    readers: list[Any] = [sock]
+                    if stdin_fd is not None:
+                        readers.append(sys.stdin)
+                    timeout: float | None = None
+                    if first_output_deadline is not None:
+                        timeout = max(0.0, first_output_deadline - time.monotonic())
+                    ready, _, _ = select.select(readers, [], [], timeout)
+                    if not ready:
+                        if first_output_deadline is None:
+                            continue
+                        first_output_deadline = None
+                        _warn_no_output()
+                        continue
 
-                if stdin_fd is not None and sys.stdin in ready:
-                    try:
-                        user_data = os.read(stdin_fd, 65536)
-                    except OSError:
-                        user_data = b""
-                    if not user_data:
-                        # stdin EOF (ACP client went away): close our write
-                        # side so the adapter sees EOF and exits, but keep
-                        # draining the container stream until it ends.
+                    if sock in ready:
+                        data = sock.recv(65536)
+                        if not data:
+                            break
+                        first_output_deadline = None
+                        _handle_output(data)
+
+                    if stdin_fd is not None and sys.stdin in ready:
                         try:
-                            sock.shutdown(socket.SHUT_WR)
-                        except OSError:  # pragma: no cover - already closed
-                            pass
-                        stdin_fd = None
-                    else:
-                        try:
-                            sock.sendall(user_data)
+                            user_data = os.read(stdin_fd, 65536)
                         except OSError:
+                            user_data = b""
+                        if not user_data:
+                            # stdin EOF (ACP client went away): close our write
+                            # side so the adapter sees EOF and exits, but keep
+                            # draining the container stream until it ends.
+                            try:
+                                sock.shutdown(socket.SHUT_WR)
+                            except OSError:  # pragma: no cover - already closed
+                                pass
                             stdin_fd = None
+                        else:
+                            try:
+                                sock.sendall(user_data)
+                            except OSError:
+                                stdin_fd = None
         finally:
+            if stdio_reader is not None:
+                stdio_reader.close()
             try:
                 sock_wrapper.close()
             except Exception:  # pragma: no cover - best effort
@@ -1439,6 +2033,16 @@ class DockerManager:
             if old_sigint is not None:
                 signal.signal(signal.SIGINT, old_sigint)
 
+        if eof.failure is not None and not stream_ended:
+            # The ACP client is gone but the adapter never got its EOF stand-in;
+            # the container would keep running, so say which one and fail. If
+            # the stream ended anyway, the container's own exit status counts.
+            name = getattr(container, "name", container.id)
+            warning(
+                f"ACP: the client closed stdin but stopping {name} failed: "
+                f"{eof.failure}; stop it with `vp stop {name}`.",
+            )
+            return 1
         waiter.join(timeout=10)
         status = wait_result.get("StatusCode")
         if status is None:
@@ -1450,4 +2054,18 @@ class DockerManager:
                 status = container.attrs.get("State", {}).get("ExitCode", 0)
             except Exception:  # pragma: no cover - auto-removed containers
                 status = 0
+        if eof.attempted.is_set() and not stop_requested and status in _STOP_EXIT_CODES:
+            # Only this status depends on whether our stop ended the container.
+            # docker stop returns only once the container exited, so the stream
+            # can end before the call has: wait as long as the call can take
+            # (docker-py's HTTP timeout is the client timeout plus the grace).
+            client_timeout = getattr(self.client.api, "timeout", None)
+            if not isinstance(client_timeout, (int, float)):
+                client_timeout = 60  # docker-py's default
+            eof.done.wait(timeout=client_timeout + _EOF_STOP_GRACE_SECONDS)
+        if eof.stopped and not stop_requested and status in _STOP_EXIT_CODES:
+            # We stopped the container because the ACP client closed stdin
+            # over a named pipe, the stand-in for the EOF a socket would have
+            # delivered; on POSIX the adapter exits 0 there, so report that.
+            status = 0
         return int(status or 0)

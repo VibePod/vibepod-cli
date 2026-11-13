@@ -147,6 +147,37 @@ Detection reads `/sys/fs/selinux/enforce` on the machine running `vp`, so a
 remote `DOCKER_HOST` whose engine runs on a different (SELinux) host is not
 detected.
 
+### Native Windows
+
+`vp` runs natively on Windows against Docker Desktop or Podman Desktop (their
+default `npipe://` connection). Use Windows Terminal or the console host; the
+console is switched to raw input while an agent is attached and restored
+afterwards.
+
+Without `DOCKER_HOST`, `vp` connects to the default pipe
+`npipe:////./pipe/docker_engine`. Podman serves that pipe only while Docker
+Desktop does not hold it; with both installed and Docker Desktop running, `vp`
+uses Docker. Podman's socket auto-discovery does not apply on Windows. To use
+Podman then, point `DOCKER_HOST` at the pipe of the machine you run (`podman
+machine list` shows its name):
+
+```powershell
+$machine = "podman-machine-default"   # your machine's name
+$pipe = podman machine inspect $machine --format '{{.ConnectionInfo.PodmanPipe.Path}}'
+if (-not $pipe) { throw "No pipe for Podman machine '$machine'; check podman machine list" }
+# \\.\pipe\<name> becomes npipe:////./pipe/<name>
+$env:DOCKER_HOST = "npipe://" + ($pipe -replace '\\', '/')
+```
+
+!!! warning "Known keyboard limitations on native Windows"
+    Console input is still read key by key and translated to terminal
+    sequences, so a few keys do not reach the agent correctly yet: `à` can
+    swallow the next key (or turn `àH` into Arrow Up), emoji arrive as `??`,
+    and Alt+key combinations are ignored. Typing everything else, including
+    arrows, Home/End, PgUp/PgDn, F1–F12, Shift+Tab and Ctrl+arrows, works.
+    The rewrite is tracked in [#242](https://github.com/VibePod/vibepod-cli/issues/242).
+    Running `vp` inside WSL2 avoids these limitations.
+
 ## Install
 
 === "pip"
