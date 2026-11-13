@@ -5072,6 +5072,25 @@ def test_fetching_moves_only_remote_tracking_refs_without_hooks_or_the_token(
         worktrees.fetch_remote(repo, f"{github}", timeout=1)
 
 
+def test_fetching_does_not_follow_the_fetch_mappings_of_the_remote(
+    repo: Path,
+    github: Path,
+    tmp_path: Path,
+) -> None:
+    published(repo, github)
+    other = colleague(tmp_path, github)
+    upstream = pushes(other, "main", "Upstream change")
+    # A mapping of the user's own, such as for a vendored branch: git follows it for
+    # whatever a fetch brings, unless told not to.
+    git(repo, "config", "--add", "remote.origin.fetch", "+refs/heads/main:refs/heads/vendor")
+    before = worktrees.branch_refs(repo)
+
+    assert worktrees.fetch_remote(repo, None) == "origin"
+
+    assert git(repo, "rev-parse", "origin/main") == upstream
+    assert worktrees.branch_refs(repo) == before
+
+
 def test_vp_board_work_require_fetch_and_its_config(
     monkeypatch,
     board: FakeBoard,

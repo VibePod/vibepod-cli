@@ -989,6 +989,9 @@ def fetch_remote(
                 "--no-tags",
                 "--no-write-fetch-head",
                 "--no-recurse-submodules",
+                # Only the mapping named here: not those of the remote's configuration,
+                # which git would follow as well and which may name branches.
+                "--refmap=",
                 "--quiet",
                 "--",
                 remote,
