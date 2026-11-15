@@ -139,7 +139,10 @@ RUN chmod 1777 ${PIXI_HOME} ${PIXI_HOME}/bin
   reproducibility.
 - The `detached-environments` setting is an example. It is global, so a
   project's own `.pixi/config.toml` overrides it; for a new project it is a
-  starting point.
+  starting point. That file is in the bind-mounted `.pixi`, so the container
+  reads it too: with `detached-environments = false` there, pixi in the
+  container installs into the host's `.pixi/envs` and can overwrite the host
+  environments.
 - The environments live in the workspace: add `.pixi-linux-*/` to the
   project's `.gitignore`.
 
