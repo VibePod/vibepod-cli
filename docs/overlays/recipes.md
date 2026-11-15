@@ -101,7 +101,7 @@ RUN set -ex && \
     cd /tmp && \
     sed 's|pixi-aarch64-unknown-linux-musl.tar.gz|/tmp/pixi.tar.gz|g' pixi.sha256 | sha256sum -c - && \
     mkdir -p ${PIXI_HOME}/bin && \
-    tar xzf /tmp/pixi.tar.gz -C ${PIXI_HOME}/bin && \
+    tar --no-same-owner -xzf /tmp/pixi.tar.gz -C ${PIXI_HOME}/bin && \
     chmod +x ${PIXI_HOME}/bin/pixi && \
     rm -f /tmp/pixi.tar.gz /tmp/pixi.sha256
 
@@ -117,12 +117,31 @@ RUN pixi init
 RUN pixi add poppler qpdf ghostscript tesseract
 
 ENV PATH=/opt/vp_pixi/.pixi/envs/default/bin:$PATH
+
+# Keep workspace environments off the bind-mounted `.pixi`, which the host may
+# have populated for a different platform.
+# The directory is named after `uname -m`, so each architecture gets its own
+# tree (/workspace/.pixi-linux-aarch64, /workspace/.pixi-linux-x86_64).
+RUN printf 'detached-environments = "/workspace/.pixi-linux-%s"\n' "$(uname -m)" \
+    > ${PIXI_HOME}/config.toml && \
+    cat ${PIXI_HOME}/config.toml
+
+# `pixi global install` writes into PIXI_HOME and PIXI_HOME/bin, so the
+# harness user needs write access to both. The sticky bit stops that user from
+# replacing or deleting root's files there (bin/pixi stays root-owned, 755).
+# Only the directories change, so this layer doesn't copy the pixi binary.
+RUN chmod 1777 ${PIXI_HOME} ${PIXI_HOME}/bin
 ```
 
 - Targets an arm64 host; on x86_64 replace `aarch64` with `x86_64` in both
   `ADD` URLs and the `sed` pattern.
 - Uses `latest`; pin a release (as in the previous recipe) for
   reproducibility.
+- The `detached-environments` setting is an example. It is global, so a
+  project's own `.pixi/config.toml` overrides it; for a new project it is a
+  starting point.
+- The environments live in the workspace: add `.pixi-linux-*/` to the
+  project's `.gitignore`.
 
 ## pi + MCP servers (pi-mcp-adapter)
 
