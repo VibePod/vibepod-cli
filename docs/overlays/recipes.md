@@ -189,6 +189,86 @@ the baked-in extension:
   and needs registry access at runtime. Pin it, or bake the server into the
   overlay next to the adapter and point `command` at it.
 
+## pi + vibepod-board (OAuth sign-in)
+
+pi's built-in MCP support can sign in to
+[vibepod-board](https://github.com/VibePod/vibepod-board) through the browser,
+so no board token has to be pasted into a config file. OAuth asks for two
+things a container does not offer on its own: pi only signs in to a server on
+HTTPS or `localhost`, and the browser on the host has to reach the callback
+listener pi opens on the container's loopback interface. Two `socat` forwards
+close both gaps. Starting them from the image entrypoint keeps the project
+free of `agents.pi.init` configuration.
+
+```dockerfile
+# .vibepod/overlay/pi/Dockerfile — no FROM line
+RUN apt-get update && apt-get install -y --no-install-recommends socat \
+    && rm -rf /var/lib/apt/lists/*
+
+# Forward localhost:3000 to the board and port 8766 to pi's OAuth callback
+# listener on 127.0.0.1:8765, then hand over to the image's own entrypoint.
+RUN printf '%s\n' '#!/bin/sh' \
+    'socat TCP-LISTEN:3000,bind=127.0.0.1,fork,reuseaddr TCP:vibepod-board:3000 &' \
+    'socat TCP-LISTEN:8766,fork,reuseaddr TCP:127.0.0.1:8765 &' \
+    'exec /usr/local/bin/entrypoint.sh "$@"' > /usr/local/bin/board-forward.sh \
+    && chmod +x /usr/local/bin/board-forward.sh
+ENTRYPOINT ["/usr/local/bin/board-forward.sh"]
+CMD ["pi"]
+```
+
+Commit the server entry pi reads at startup, `.pi/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "vibepod-board": {
+      "url": "http://localhost:3000/mcp",
+      "oauth": { "callbackPort": 8765 }
+    }
+  }
+}
+```
+
+Sign in once, publishing the callback port for that run:
+
+```bash
+vp run pi -p 127.0.0.1:8765:8766
+```
+
+Trust the project when pi asks, run `/mcp login vibepod-board`, open the
+sign-in URL in the browser on the host, and pick the board projects pi may
+use. pi stores the credentials in its config directory, which VibePod keeps
+between runs, so from then on a plain `vp run pi` starts with the board
+connected.
+
+- **`localhost:3000` inside the container** — pi refuses OAuth over plain
+  HTTP unless the server is on a loopback address, and the board accepts no
+  other non-HTTPS `PUBLIC_URL`. The first forward makes the board's default
+  address, `http://localhost:3000`, work from inside the container too.
+- **Port 8766** — pi's callback listener binds `127.0.0.1:8765` in the
+  container, where a published port cannot reach it. The second forward
+  listens on 8766 on all interfaces and relays to it;
+  `-p 127.0.0.1:8765:8766` maps it back to the port the browser is redirected
+  to, on the host's loopback only. The port is needed for the sign-in run
+  alone.
+- **Entrypoint wrapper instead of `init`** — `agents.pi.init` could start the
+  same forwards, but needs a `.vibepod/config.yaml` next to the overlay. The
+  wrapper `exec`s the image's own entrypoint, so UID mapping still runs.
+  `CMD` is repeated because setting `ENTRYPOINT` clears the inherited one.
+- **Per-agent overlay** — the wrapper calls the pi image's entrypoint by
+  path, and other agents in the project do not need the forwards.
+- **Board address** — the forward targets `vibepod-board:3000`, the alias and
+  port from the board's `compose.yml` on the
+  [VibePod network](../integrations.md#services-on-the-vibepod-network).
+  Adjust it if your board runs elsewhere. The board needs a version with
+  OAuth sign-in.
+- **Not together with pi-mcp-adapter** — the adapter from the previous recipe
+  replaces pi's built-in MCP support, which reads `.pi/mcp.json` and provides
+  `/mcp login`.
+- **Token instead of OAuth** — pi can send a board API token as an
+  `Authorization` header to `http://vibepod-board:3000/mcp` directly; that
+  needs no overlay at all.
+
 ## Agent tooling: RTK and Graphify
 
 Fragments that install [RTK](https://github.com/rtk-ai/rtk) and
