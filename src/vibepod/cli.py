@@ -131,6 +131,20 @@ def run_command(
         list[str] | None,
         typer.Option("--provider", help="Temporarily use a global provider"),
     ] = None,
+    remote_control: Annotated[
+        bool,
+        typer.Option(
+            "--remote-control",
+            help="Codex: control this session from the ChatGPT app (experimental)",
+        ),
+    ] = False,
+    pair: Annotated[
+        bool,
+        typer.Option(
+            "--pair",
+            help="Codex: also print a code to pair a new phone (implies --remote-control)",
+        ),
+    ] = False,
 ) -> None:
     """Start an agent container."""
     run.run(
@@ -152,6 +166,8 @@ def run_command(
         profile=profile,
         workspace_system_path=workspace_system_path,
         provider_names=provider_names,
+        remote_control=remote_control,
+        pair=pair,
         passthrough_args=_context_args(ctx),
     )
 
@@ -271,6 +287,20 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             list[str] | None,
             typer.Option("--provider", help="Temporarily use a global provider"),
         ] = None,
+        remote_control: Annotated[
+            bool,
+            typer.Option(
+                "--remote-control",
+                help="Codex: control this session from the ChatGPT app (experimental)",
+            ),
+        ] = False,
+        pair: Annotated[
+            bool,
+            typer.Option(
+                "--pair",
+                help="Codex: also print a code to pair a new phone (implies --remote-control)",
+            ),
+        ] = False,
     ) -> None:
         run.run(
             agent=agent_name,
@@ -291,6 +321,8 @@ def _register_run_alias(command_name: str, agent_name: str) -> None:
             profile=profile,
             workspace_system_path=workspace_system_path,
             provider_names=provider_names,
+            remote_control=remote_control,
+            pair=pair,
             passthrough_args=_context_args(ctx),
         )
 

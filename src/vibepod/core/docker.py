@@ -1335,6 +1335,7 @@ class DockerManager:
         workspace_mount_path: str | None = None,
         start: bool = True,
         tty: bool = True,
+        hostname: str | None = None,
     ) -> Any:
         container_name = name or f"vibepod-{agent}-{uuid4().hex[:8]}"
 
@@ -1416,6 +1417,8 @@ class DockerManager:
                     create_kwargs["user"] = user
                 if entrypoint:
                     create_kwargs["entrypoint"] = entrypoint
+                if hostname:
+                    create_kwargs["hostname"] = hostname
 
                 created = self.client.api.create_container(**create_kwargs)
                 container_id = created["Id"]
@@ -1452,6 +1455,10 @@ class DockerManager:
                 run_kwargs["user"] = user
             if entrypoint:
                 run_kwargs["entrypoint"] = entrypoint
+            if hostname:
+                # Agents that name the machine after it (Codex remote control
+                # lists the host by it) would otherwise see the container ID.
+                run_kwargs["hostname"] = hostname
 
             return self.client.containers.run(**run_kwargs)
         except APIError as exc:
