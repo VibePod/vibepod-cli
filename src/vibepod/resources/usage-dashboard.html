@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Subscription usage · VibePod</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <a class="brand" href="/">VibePod <span>/ usage</span></a
+        ><span class="local">Local only</span>
+      </header>
+      <section class="intro">
+        <p class="eyebrow">YOUR SUBSCRIPTIONS</p>
+        <h1>Know what’s left.</h1>
+        <p>Remaining allowances and reset times from your coding tools.</p>
+      </section>
+      <div class="toolbar">
+        <label
+          >Profile
+          <select id="profile">
+            <option value="">All profiles</option>
+          </select></label
+        ><button id="reload" type="button">Reload snapshots</button>
+      </div>
+      <p id="status" role="status" aria-live="polite"></p>
+      <section
+        id="cards"
+        class="cards"
+        aria-label="Subscription allowances"
+      ></section>
+      <aside id="empty" hidden>
+        <h2>No snapshots yet</h2>
+        <p>
+          Start your signed-in VibePod agents, then run
+          <code>vp usage refresh</code>.
+        </p>
+        <p>
+          For Claude, first run <code>vp usage setup-claude</code> and use
+          Claude Code normally.
+        </p>
+      </aside>
+      <footer>
+        <p>
+          Run <code>vp usage watch</code> in another terminal to collect
+          updates. This page reloads saved snapshots every 30 seconds.
+        </p>
+        <p>
+          Claude snapshots update after responses. Stale values are last known
+          observations; a reset time passing does not confirm a renewed
+          allowance. Subscription limits are separate from API costs.
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>
