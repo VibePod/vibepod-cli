@@ -359,6 +359,9 @@ def _agent_skill_paths(agent: str, env: Mapping[str, str] | None = None) -> list
       - junie    reads $JUNIE_HOME/skills/          → /config/.junie/skills/ unless
         the agent env sets another absolute JUNIE_HOME
         (~/.agents/skills/ only at project level, as <project>/.agents/skills/)
+      - eca      reads $XDG_CONFIG_HOME/eca/skills/ → /config/.config/eca/skills/
+        (also ~/.agents/skills/, but its server takes ~ from the passwd entry,
+        not HOME, and rootless Podman generates that entry with another home)
 
     Gemini wraps skills inside an extension manifest and would need a generated
     gemini-extension.json — handled separately when we add that support.
@@ -377,6 +380,8 @@ def _agent_skill_paths(agent: str, env: Mapping[str, str] | None = None) -> list
         if not junie_home.startswith("/"):
             junie_home = "/config/.junie"
         return [f"{junie_home}/skills"]
+    if agent == "eca":
+        return ["/config/.config/eca/skills"]
     if agent in (
         "codex",
         "opencode",

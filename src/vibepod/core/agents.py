@@ -448,6 +448,48 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         # It takes no prompt argument, has no print mode and ships no Agent
         # Client Protocol server.
     ),
+    "eca": AgentSpec(
+        "eca",
+        "editor-code-assistant",
+        DEFAULT_IMAGES["eca"],
+        "eca",
+        # eca-cli is ECA's terminal client. It spawns the image's `eca server`
+        # (found on PATH, so it never downloads a server of its own) and talks
+        # to it over stdio.
+        ["eca-cli"],
+        "/config",
+        # ECA keeps config.json, AGENTS.md, rules, commands and skills in
+        # $XDG_CONFIG_HOME/eca, its logins (db.transit.json) and per-workspace
+        # chats in $XDG_CACHE_HOME/eca, and eca-cli its state in
+        # $XDG_STATE_HOME/eca. The server, like any JVM program, takes ~ from
+        # the passwd entry rather than from HOME, so the XDG variables keep its
+        # state on this mount even where the runtime generates that entry
+        # (rootless Podman). Set here as well as in the image so an image
+        # override keeps them.
+        # No llm_env_map: providers live in ECA's config.json (custom
+        # providers take a URL and `${env:VAR}` keys), and its built-in
+        # OpenAI provider speaks the Responses API, so an OpenAI-compatible
+        # base URL cannot simply be routed through it. HTTP(S)_PROXY, NO_PROXY
+        # and SSL_CERT_FILE (added to the trusted CAs) are honoured natively.
+        {
+            "HOME": "/config",
+            "XDG_CONFIG_HOME": "/config/.config",
+            "XDG_CACHE_HOME": "/config/.cache",
+            "XDG_STATE_HOME": "/config/.local/state",
+        },
+        # Trust mode approves the tool calls that would ask; deny rules in the
+        # config still apply.
+        ikwid_args=["--trust"],
+        # `-p` prints the answer and exits. Tool calls that would ask are
+        # rejected, as nobody is there to approve them, unless --ikwid adds
+        # --trust. eca-cli rejects unknown options and joins the remaining
+        # arguments into the prompt, so the prompt goes after `--`, where a
+        # leading "-" stays prompt text.
+        headless_prefix=["-p"],
+        headless_options_before_prompt=True,
+        # No acp_command: ECA speaks its own LSP-like protocol over
+        # `eca server`, not the Agent Client Protocol.
+    ),
 }
 
 _SHORTCUT_BY_AGENT = {agent: shortcut for shortcut, agent in AGENT_SHORTCUTS.items()}

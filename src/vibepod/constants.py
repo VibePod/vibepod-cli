@@ -38,6 +38,7 @@ SUPPORTED_AGENTS = (
     "junie",
     "cursor",
     "warp",
+    "eca",
 )
 
 AGENT_SHORTCUTS: dict[str, str] = {
@@ -59,6 +60,7 @@ AGENT_SHORTCUTS: dict[str, str] = {
     "ju": "junie",
     "cu": "cursor",
     "w": "warp",
+    "e": "eca",
 }
 
 #: Former canonical agent ids. Existing state (config keys, overlay dirs,
@@ -109,6 +111,7 @@ IMAGE_OVERRIDE_ENV_KEYS: tuple[str, ...] = (
     "VP_IMAGE_JUNIE",
     "VP_IMAGE_CURSOR",
     "VP_IMAGE_WARP",
+    "VP_IMAGE_ECA",
     "VP_DATASETTE_IMAGE",
     "VP_PROXY_IMAGE",
     "VP_SKILLS_ENGINE_IMAGE",
@@ -210,6 +213,10 @@ def get_default_images() -> dict[str, str]:
         "warp": os.environ.get(
             "VP_IMAGE_WARP",
             f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/warp:latest",
+        ),
+        "eca": os.environ.get(
+            "VP_IMAGE_ECA",
+            f"{os.environ.get('VP_IMAGE_NAMESPACE', 'vibepod')}/eca:latest",
         ),
         "datasette": os.environ.get(
             "VP_DATASETTE_IMAGE",

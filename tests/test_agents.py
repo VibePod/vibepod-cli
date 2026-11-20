@@ -188,6 +188,35 @@ def test_warp_spec_matches_container_contract() -> None:
     assert spec.preview is False
 
 
+def test_eca_spec_matches_container_contract() -> None:
+    spec = get_agent_spec("eca")
+    assert spec.id == "eca"
+    assert spec.provider == "editor-code-assistant"
+    assert spec.image == DEFAULT_IMAGES["eca"]
+    assert spec.config_subdir == "eca"
+    # The terminal client, which runs the image's `eca server` itself.
+    assert spec.command == ["eca-cli"]
+    assert spec.config_mount_path == "/config"
+    # The server takes ~ from the passwd entry, not HOME, so its config,
+    # logins/chats and eca-cli's state are pinned to the mount explicitly.
+    assert spec.extra_env == {
+        "HOME": "/config",
+        "XDG_CONFIG_HOME": "/config/.config",
+        "XDG_CACHE_HOME": "/config/.cache",
+        "XDG_STATE_HOME": "/config/.local/state",
+    }
+    assert spec.ikwid_args == ["--trust"]
+    # eca-cli rejects unknown options, so the prompt goes after `--`.
+    assert spec.headless_prefix == ["-p"]
+    assert spec.headless_options_before_prompt is True
+    assert spec.headless_command is None
+    # ECA speaks its own protocol, not the Agent Client Protocol.
+    assert spec.acp_command is None
+    assert spec.llm_env_map is None
+    assert spec.llm_model_args is None
+    assert spec.preview is False
+
+
 def test_dsh_spec_matches_container_contract() -> None:
     spec = get_agent_spec("dsh")
     assert spec.id == "dsh"
@@ -359,6 +388,7 @@ def test_agents_without_llm_env_map() -> None:
         "junie",
         "cursor",
         "warp",
+        "eca",
     ):
         spec = get_agent_spec(agent)
         assert spec.llm_env_map is None, f"{agent} should not have llm_env_map"

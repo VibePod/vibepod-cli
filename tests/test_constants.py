@@ -28,6 +28,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
         "VP_IMAGE_JUNIE",
         "VP_IMAGE_CURSOR",
         "VP_IMAGE_WARP",
+        "VP_IMAGE_ECA",
         "VP_DATASETTE_IMAGE",
         "VP_PROXY_IMAGE",
     ):
@@ -54,6 +55,7 @@ def test_default_images_match_documented_registry_defaults(monkeypatch) -> None:
     assert images["junie"] == "vibepod/junie:latest"
     assert images["cursor"] == "vibepod/cursor:latest"
     assert images["warp"] == "vibepod/warp:latest"
+    assert images["eca"] == "vibepod/eca:latest"
     assert images["datasette"] == "vibepod/datasette:latest"
     assert images["proxy"] == "vibepod/proxy:latest"
 
@@ -171,3 +173,11 @@ def test_warp_image_override(monkeypatch) -> None:
     images = get_default_images()
 
     assert images["warp"] == "example/warp:dev"
+
+
+def test_eca_image_override(monkeypatch) -> None:
+    monkeypatch.setenv("VP_IMAGE_ECA", "example/eca:dev")
+
+    images = get_default_images()
+
+    assert images["eca"] == "example/eca:dev"

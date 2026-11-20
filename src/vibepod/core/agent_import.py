@@ -311,6 +311,34 @@ IMPORT_SPECS: dict[str, tuple[ImportEntry, ...]] = {
         ImportEntry(".warp/custom_model_routers", ".warp/custom_model_routers", "models"),
         SHARED_SKILLS,
     ),
+    # ~/.config/eca belongs to ECA alone, and its skills/ is where the pod
+    # mounts VibePod's skills too. The shared ~/.agents/skills is not listed:
+    # ECA resolves ~ from the passwd entry, which is not always the persisted
+    # mount (see _agent_skill_paths).
+    "eca": (
+        ImportEntry(
+            ".config/eca/config.json",
+            ".config/eca/config.json",
+            "credentials",
+            note=(
+                "/login saves the API key of key-based providers into config.json, "
+                "so it is treated as a credential."
+            ),
+        ),
+        ImportEntry(".config/eca/AGENTS.md", ".config/eca/AGENTS.md", "memory"),
+        ImportEntry(".config/eca/rules", ".config/eca/rules", "memory"),
+        ImportEntry(".config/eca/skills", ".config/eca/skills", "skills"),
+        ImportEntry(".config/eca/commands", ".config/eca/commands", "skills"),
+        ImportEntry(".config/eca/agents", ".config/eca/agents", "skills"),
+        ImportEntry(".config/eca/hooks", ".config/eca/hooks", "hooks"),
+        ImportEntry(".config/eca", ".config/eca", "settings"),
+        ImportEntry(
+            ".cache/eca/db.transit.json",
+            ".cache/eca/db.transit.json",
+            "credentials",
+            note="Subscription logins (OAuth tokens) and MCP server logins.",
+        ),
+    ),
 }
 
 
@@ -365,6 +393,14 @@ AGENT_ROOTS: dict[str, tuple[AgentRoot, ...]] = {
     "warp": (
         AgentRoot(".config/warp-terminal/cli", ".config/warp-terminal/cli"),
         AgentRoot(".warp/custom_model_routers", ".warp/custom_model_routers"),
+    ),
+    # ~/.cache/eca also holds every workspace's chats (keyed by its host path,
+    # which a pod at /workspace never matches), plugin checkouts, tool-call
+    # outputs and eca-cli's managed copy of the server, so only the logins
+    # file is a root: the rest of the cache is neither copied nor reported.
+    "eca": (
+        AgentRoot(".config/eca", ".config/eca"),
+        AgentRoot(".cache/eca/db.transit.json", ".cache/eca/db.transit.json"),
     ),
 }
 

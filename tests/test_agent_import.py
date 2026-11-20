@@ -154,6 +154,8 @@ _KNOWN_CREDENTIALS: dict[str, tuple[str, ...]] = {
     "cline": (".cline/data/settings/providers.json",),
     "junie": (".junie/secure_credentials.json",),
     "cursor": (".config/cursor/auth.json",),
+    # /login writes the keys of key-based providers into config.json.
+    "eca": (".config/eca/config.json", ".cache/eca/db.transit.json"),
 }
 
 #: Agents that keep no credential file at all: Warp stores its login only in
@@ -801,6 +803,60 @@ def test_warp_import_never_takes_the_host_keyring(tmp_path: Path) -> None:
 
     assert plan.files == []
     assert plan.unclassified == []
+
+
+def test_eca_import_classifies_its_config_directory(tmp_path: Path) -> None:
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    eca = home / ".config" / "eca"
+    _write(eca / "config.json", '{"providers": {"anthropic": {"key": "sk-ant"}}}')
+    _write(eca / "AGENTS.md", "# Global rules\n")
+    _write(eca / "rules" / "style.md", "Prefer small diffs.\n")
+    _write(eca / "skills" / "lint" / "SKILL.md", "---\nname: lint\n---\n")
+    _write(eca / "commands" / "review.md", "Review the diff.\n")
+    _write(eca / "agents" / "reviewer.md", "---\nname: reviewer\n---\n")
+    _write(eca / "hooks" / "check.sh", "#!/bin/sh\n")
+    _write(eca / "modules" / "mine.clj", "(ns mine)\n")
+
+    plan = plan_import("eca", home, dest, DEFAULT_CATEGORIES)
+
+    # HOME is the mount, so every file keeps its home-relative path.
+    assert sorted((f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files) == [
+        ("hooks", ".config/eca/hooks/check.sh"),
+        ("memory", ".config/eca/AGENTS.md"),
+        ("memory", ".config/eca/rules/style.md"),
+        ("settings", ".config/eca/modules/mine.clj"),
+        ("skills", ".config/eca/agents/reviewer.md"),
+        ("skills", ".config/eca/commands/review.md"),
+        ("skills", ".config/eca/skills/lint/SKILL.md"),
+    ]
+    # config.json can hold API keys saved by /login, so it waits for the flag.
+    assert any(
+        s.source == eca / "config.json" and "--with-credentials" in s.reason for s in plan.skipped
+    )
+
+
+def test_eca_import_takes_only_the_logins_from_its_cache(tmp_path: Path) -> None:
+    """Chats are keyed by host workspace paths, which a pod at /workspace never matches."""
+    home, dest = tmp_path / "home", tmp_path / "dest"
+    cache = home / ".cache" / "eca"
+    _write(cache / "db.transit.json", "[]")
+    _write(cache / "myproject-0a1b2c" / "chats" / "chat-1.transit.json", "[]")
+    _write(cache / "eca-cli" / "eca", "binary")
+    _write(cache / "plugins" / "some-plugin" / "plugin.json", "{}")
+
+    plan = plan_import("eca", home, dest, ALL_CATEGORIES)
+
+    assert [(f.category, f.dest.relative_to(dest).as_posix()) for f in plan.files] == [
+        ("credentials", ".cache/eca/db.transit.json"),
+    ]
+    assert plan.unclassified == []
+
+
+def test_eca_logins_alone_count_as_an_installation(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _write(home / ".cache" / "eca" / "db.transit.json", "[]")
+
+    assert scan_host(home) == {"eca": [home / ".cache" / "eca" / "db.transit.json"]}
 
 
 def test_cursor_ide_extensions_are_not_reported(tmp_path: Path) -> None:

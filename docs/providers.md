@@ -280,7 +280,10 @@ this feature: its runtime prioritizes saved provider settings, ignores
 `OPENAI_BASE_URL`, and restricts keys by endpoint host, so use `hermes setup`
 inside the container (see the [Hermes notes](agents/index.md#hermes-agent-hermes-developer-preview)).
 Gemini, Copilot, Auggie, Agy, Freebuff, Vibe, dsh, Cline, Junie, Cursor, and Warp
-have no verified custom-endpoint mechanism and are rejected as well.
+have no verified custom-endpoint mechanism and are rejected as well. ECA is
+rejected too until its routing has been verified; define custom endpoints as
+providers in ECA's own `config.json` instead (see the
+[ECA notes](agents/index.md#eca-editor-code-assistant)).
 
 Qwen, Tau, Jcode, and OpenCode follow the same temporary-launch rules as the
 first three agents: saved credentials and native configuration are never
