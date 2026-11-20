@@ -23,7 +23,7 @@ tracking, and an analytics dashboard to monitor and compare agents side-by-side.
 
 - ⚡ **Zero config** — no setup required; `vp run <agent>` just works. Optional YAML for custom configuration
 - 🐳 **Isolated agents** — each agent runs in its own Docker or Podman container
-- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Mistral Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes, Cline, Junie, Cursor, Warp & more
+- 🔀 **Unified interface** — one CLI for Claude, Gemini, Codex, Mistral Vibe, Copilot, Auggie, Pi, Agy, Tau, Jcode, Freebuff, Qwen, dsh, Hermes, Cline, Junie, Cursor, Warp, ECA & more
 - 🔌 **Model providers** — register any OpenAI- or Anthropic-compatible endpoint or local model server once with `vp provider add`, then route supported agents to it with `vp run --provider` ([docs and supported agents](https://vibepod.dev/docs/providers/))
 - 🧩 **Skills** — install reusable prompt recipes per-project or per-user with `vp skills add`
 - 🧱 **Project overlays** — commit a `FROM`-less Dockerfile fragment in `.vibepod/overlay/` and VibePod auto-builds a cached, content-addressed image layer on top of the agent's base image — one clearly named image per project and agent ([docs](https://vibepod.dev/docs/overlays/))
@@ -103,6 +103,7 @@ Use `--ikwid` to append each agent's auto-approval / permission-skip flag when s
 | `junie`             | `--brave`                                    |
 | `cursor`            | `--force`                                    |
 | `warp`              | `--auto-approve`                             |
+| `eca`               | `--trust`                                    |
 
 ## Editor integration (`--acp`)
 
@@ -205,6 +206,7 @@ Current defaults:
 - `junie` -> `vibepod/junie:latest`
 - `cursor` -> `vibepod/cursor:latest`
 - `warp` -> `vibepod/warp:latest`
+- `eca` -> `vibepod/eca:latest`
 - `datasette` -> `vibepod/datasette:latest`
 - `proxy` -> `vibepod/proxy:latest` ([repo](https://github.com/VibePod/vibepod-proxy))
 
@@ -233,6 +235,7 @@ VP_IMAGE_CLINE=vibepod/cline:latest vp run cline
 VP_IMAGE_JUNIE=vibepod/junie:latest vp run junie
 VP_IMAGE_CURSOR=vibepod/cursor:latest vp run cursor
 VP_IMAGE_WARP=vibepod/warp:latest vp run warp
+VP_IMAGE_ECA=vibepod/eca:latest vp run eca
 VP_DATASETTE_IMAGE=vibepod/datasette:latest vp logs start
 VP_PROXY_IMAGE=vibepod/proxy:latest vp proxy start
 VP_SKILLS_ENGINE_IMAGE=vibepod/skills-engine:latest vp skills list

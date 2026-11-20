@@ -486,3 +486,22 @@ def test_default_config_includes_warp_agent(monkeypatch, tmp_path: Path) -> None
     # Unlike dsh, this integration publishes nothing.
     assert warp["ports"] == []
     assert warp["init"] == []
+
+
+def test_default_config_includes_eca_agent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VP_CONFIG_DIR", str(tmp_path))
+    # Default images are resolved at import time, so VP_IMAGE_* in the test
+    # environment would leak in; pin the entry the config must pick up.
+    monkeypatch.setitem(DEFAULT_IMAGES, "eca", "example/eca:default")
+    config = get_config()
+
+    eca = config["agents"]["eca"]
+
+    assert eca["enabled"] is True
+    assert eca["image"] == "example/eca:default"
+    assert eca["auto_pull"] is None
+    assert eca["env"] == {}
+    assert eca["volumes"] == []
+    # Unlike dsh, this integration publishes nothing.
+    assert eca["ports"] == []
+    assert eca["init"] == []

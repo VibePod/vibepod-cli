@@ -108,6 +108,7 @@ def test_agent_extra_volumes_for_other_agents(tmp_path: Path) -> None:
         "junie",
         "cursor",
         "warp",
+        "eca",
     ):
         assert run_cmd._agent_extra_volumes(agent, config_dir) == []
 
@@ -940,6 +941,68 @@ def test_warp_acp_is_rejected(monkeypatch, _tmp_config_root) -> None:
     monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
 
     result = CliRunner().invoke(app, ["run", "warp", "-w", str(workspace), "--acp"])
+
+    assert result.exit_code != 0
+    assert stub.run_kwargs is None
+
+
+@pytest.mark.parametrize("invocation", [["run", "eca"], ["e"]])
+@pytest.mark.parametrize("ikwid", [False, True])
+def test_eca_launch_preserves_state_and_forwards_arguments(
+    monkeypatch,
+    _tmp_config_root,
+    invocation,
+    ikwid,
+) -> None:
+    """Both entry points launch eca-cli with its state on the mount and intact arguments."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("eca", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            *invocation,
+            "-w",
+            str(workspace),
+            "--detach",
+            *(["--ikwid"] if ikwid else []),
+            "--",
+            "-c",
+            "and now add tests",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stub.run_kwargs is not None
+    assert stub.run_kwargs["command"] == [
+        "eca-cli",
+        *(["--trust"] if ikwid else []),
+        "-c",
+        "and now add tests",
+    ]
+    assert stub.run_kwargs["config_mount_path"] == "/config"
+    assert Path(stub.run_kwargs["config_dir"]) == _tmp_config_root / "config" / "agents" / "eca"
+    env = stub.run_kwargs["env"]
+    assert env["HOME"] == "/config"
+    # The server resolves ~ from the passwd entry, so its config, logins and
+    # chats must not depend on it.
+    assert env["XDG_CONFIG_HOME"] == "/config/.config"
+    assert env["XDG_CACHE_HOME"] == "/config/.cache"
+    assert env["XDG_STATE_HOME"] == "/config/.local/state"
+
+
+def test_eca_acp_is_rejected(monkeypatch, _tmp_config_root) -> None:
+    """ECA speaks its own protocol, not ACP, so --acp must abort."""
+    workspace = _tmp_config_root / "workspace"
+    workspace.mkdir()
+    stub = _PortCapturingManager()
+    monkeypatch.setattr(run_cmd, "get_config", lambda: _ports_config("eca", None))
+    monkeypatch.setattr(run_cmd, "DockerManager", lambda: stub)
+
+    result = CliRunner().invoke(app, ["run", "eca", "-w", str(workspace), "--acp"])
 
     assert result.exit_code != 0
     assert stub.run_kwargs is None
@@ -4215,6 +4278,13 @@ def test_warp_skill_paths_use_shared_agents_dir() -> None:
     from vibepod.commands.run import _agent_skill_paths
 
     assert _agent_skill_paths("warp") == ["/config/.agents/skills"]
+
+
+def test_eca_skill_paths_use_its_xdg_config_dir() -> None:
+    """ECA reads $XDG_CONFIG_HOME/eca/skills, which does not depend on the passwd home."""
+    from vibepod.commands.run import _agent_skill_paths
+
+    assert _agent_skill_paths("eca") == ["/config/.config/eca/skills"]
 
 
 def test_hermes_skill_paths_use_shared_agents_dir() -> None:

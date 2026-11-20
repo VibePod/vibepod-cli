@@ -494,3 +494,18 @@ def test_warp_shortcut_runs_warp(monkeypatch) -> None:
     assert result.exit_code == 0
     assert called["agent"] == "warp"
     assert called["passthrough"] == []
+
+
+def test_eca_shortcut_runs_eca(monkeypatch) -> None:
+    called: dict[str, object] = {"agent": None, "passthrough": None}
+
+    def _fake_run(agent=None, **kwargs) -> None:  # noqa: ANN001, ANN003, ARG001
+        called["agent"] = agent
+        called["passthrough"] = list(kwargs.get("passthrough_args") or [])
+
+    monkeypatch.setattr(run_cmd, "run", _fake_run)
+
+    result = runner.invoke(app, ["e"])
+    assert result.exit_code == 0
+    assert called["agent"] == "eca"
+    assert called["passthrough"] == []

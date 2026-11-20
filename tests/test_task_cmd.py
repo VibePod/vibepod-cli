@@ -131,6 +131,7 @@ def test_headless_prefix_set_for_supported_agents() -> None:
     assert AGENT_SPECS["cline"].headless_prefix == ["--act"]
     assert AGENT_SPECS["junie"].headless_prefix == ["--task"]
     assert AGENT_SPECS["cursor"].headless_prefix == ["--trust", "-p"]
+    assert AGENT_SPECS["eca"].headless_prefix == ["-p"]
 
 
 def test_headless_prefix_none_for_unsupported_agents() -> None:
@@ -600,6 +601,43 @@ def test_task_create_cursor_trusts_workspace_and_keeps_prompt_intact(
     ]
     assert stub.run_kwargs["env"]["HOME"] == "/config"
     assert stub.run_kwargs["env"]["NODE_USE_ENV_PROXY"] == "1"
+
+
+@pytest.mark.parametrize("ikwid", [False, True])
+def test_task_create_eca_prints_and_keeps_prompt_intact(
+    monkeypatch,
+    tmp_path,
+    tmp_task_store,
+    ikwid,
+) -> None:
+    """eca-cli -p prints the answer and exits; only --ikwid adds --trust.
+
+    eca-cli rejects unknown options and joins the other arguments into the
+    prompt, so passthrough flags go first and the prompt after `--`.
+    """
+    stub = _CapturingDockerManager()
+    monkeypatch.setattr(task_cmd, "get_config", _make_config)
+    monkeypatch.setattr(task_cmd, "DockerManager", lambda: stub)
+
+    task_cmd.task_create(
+        agent="eca",
+        prompt="- fix the tests",
+        workspace=tmp_path,
+        ikwid=ikwid,
+        passthrough_args=["--model", "anthropic/claude-sonnet-4-6"],
+    )
+
+    assert stub.run_kwargs["command"] == [
+        "eca-cli",
+        *(["--trust"] if ikwid else []),
+        "-p",
+        "--model",
+        "anthropic/claude-sonnet-4-6",
+        "--",
+        "- fix the tests",
+    ]
+    assert stub.run_kwargs["env"]["HOME"] == "/config"
+    assert stub.run_kwargs["env"]["XDG_CACHE_HOME"] == "/config/.cache"
 
 
 def test_task_create_ikwid_appends_ikwid_args_before_headless_prefix(
