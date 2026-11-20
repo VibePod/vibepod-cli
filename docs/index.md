@@ -34,6 +34,7 @@ VibePod (`vp`) lets you run any supported AI coding agent in an isolated Docker 
 | `junie`    | JetBrains      | `vp ju`  |
 | `cursor`   | Anysphere      | `vp cu`  |
 | `warp`     | Warp           | `vp w`   |
+| `eca`      | Editor Code Assistant | `vp e` |
 
 ## Next Steps
 

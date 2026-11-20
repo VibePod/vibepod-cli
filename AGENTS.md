@@ -66,6 +66,16 @@ The CLI is interactive only (no one-shot mode, no ACP), so the spec has neither
 `headless_prefix` nor `acp_command`. `vp import warp` must never list
 `~/.local/share/keyrings`: on the host that is the user's whole login keyring.
 
+ECA's image contract is `HOME=/config` plus `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`
+and `XDG_STATE_HOME` under `/config`, set in both the image and the spec: the
+`eca` server is a GraalVM native image and takes `~` from the passwd entry, not
+`$HOME`, which rootless Podman generates with another home. For the same reason
+`_agent_skill_paths` mounts skills into `$XDG_CONFIG_HOME/eca/skills`, and the
+import map skips the shared `~/.agents/skills`. VibePod runs `eca-cli`, the
+terminal client; it uses the `eca` on PATH, so it never downloads a server of
+its own. Its print mode rejects unknown options, so tasks put the prompt after
+`--` (`headless_options_before_prompt`).
+
 ## Interactive attach
 
 Windows attach is a separate code path that Linux CI only reaches through

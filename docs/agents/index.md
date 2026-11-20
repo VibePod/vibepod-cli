@@ -25,6 +25,7 @@ VibePod manages each agent as a Docker or Podman container. Credentials and conf
 | `junie` | JetBrains | `vp ju` | `vibepod/junie:latest` |
 | `cursor` | Anysphere | `vp cu` | `vibepod/cursor:latest` |
 | `warp` | Warp | `vp w` | `vibepod/warp:latest` |
+| `eca` | Editor Code Assistant | `vp e` | `vibepod/eca:latest` |
 
 Alias note: `vp run devstral` resolves to `vp run vibe`, `vp run qwen-cli`
 resolves to `vp run qwen`, and `vp run deepseek` / `vp run deepseek-harness`
@@ -250,6 +251,7 @@ also key per-project state by cwd:
 | `copilot` | trusted folders and saved tool approvals; `--continue` likely (unverified) | `COPILOT_HOME` (moves auth too) |
 | `auggie` | `--continue` / `--resume` / `session list` | `--augment-cache-dir` flag |
 | `opencode` | only non-git projects (sessions are keyed by the repo's root commit) | `git init`, or `XDG_DATA_HOME` |
+| `eca` | `eca-cli -c` and the `/chats` list (chats are stored per workspace path under `~/.cache/eca/`) | `XDG_CACHE_HOME`, e.g. `/config/.cache/my-project` (moves logins too) |
 
 Set the env var in the project's `.vibepod/config.yaml` under
 `agents.<agent>.env`, as in the Claude example above. Point it at a
@@ -320,7 +322,7 @@ agents:
 
 ## Image customization workflows
 
-VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`, `cline`, `junie`, `cursor`, `warp`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
+VibePod has a fixed set of supported agent IDs (`claude`, `gemini`, `opencode`, `vibe`, `auggie`, `copilot`, `codex`, `pi`, `agy`, `tau`, `jcode`, `freebuff`, `qwen`, `dsh`, `hermes`, `cline`, `junie`, `cursor`, `warp`, `eca`). The CLI also supports the aliases `devstral` (→ `vibe`), `qwen-cli` (→ `qwen`), and `deepseek` / `deepseek-harness` (→ `dsh`). Image customization means changing the image used for one of those IDs.
 
 ### 1. Extend an existing image for an agent
 
@@ -456,6 +458,7 @@ Use `--ikwid` to enable each agent's built-in auto-approval / permission-skip mo
 | `junie` | `--brave` |
 | `cursor` | `--force` |
 | `warp` | `--auto-approve` |
+| `eca` | `--trust` |
 
 Example:
 
@@ -584,6 +587,7 @@ Task mode applies a finite timeout by default: **2 hours**. Override it per task
 | `cline` | `cline --act "<prompt>"` |
 | `junie` | `junie --task "<prompt>"` |
 | `cursor` | `cursor-agent --trust -p "<prompt>"` |
+| `eca` | `eca-cli -p -- "<prompt>"` |
 
 Other agents error with a clear message; support can be added by setting `headless_prefix` (or `headless_command` for agents whose one-shot invocation differs from their interactive command) on their `AgentSpec`.
 
@@ -1634,6 +1638,94 @@ automatically.
 VibePod sets `WARP_TUI_DISABLE_AUTOUPDATE=1`. The background self-update would
 otherwise stage each new ~250 MB build into the config mount while the image
 keeps running its own pinned copy.
+
+### ECA (Editor Code Assistant)
+
+```bash
+vp run eca   # or: vp e
+```
+
+[ECA](https://eca.dev) is a free, open-source, editor-agnostic coding agent.
+Its server (`eca`) does the chat, tools, providers and MCP, and editors drive it
+over a protocol modelled on LSP; `vp run eca` starts
+[`eca-cli`](https://github.com/editor-code-assistant/eca-cli), the terminal
+client, which runs the server for you. Both are native binaries from GitHub
+releases: the image pins the server release, tracks new ones, and takes the
+newest `eca-cli` when it is built. eca-cli uses the image's server and never
+downloads one of its own. State is persisted under
+`~/.config/vibepod/agents/eca/`, mounted at `/config` inside the container
+(`HOME=/config`, with `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME`
+below it):
+
+| Path in container | Contents |
+|---|---|
+| `/config/.config/eca/config.json` | Settings: providers and models, MCP servers, tool approvals, hooks, and the API keys entered with `/login` |
+| `/config/.config/eca/AGENTS.md`, `rules/`, `commands/`, `skills/`, `agents/` | Global rules, custom commands, personal skills and agents |
+| `/config/.cache/eca/db.transit.json` | Subscription logins (OAuth tokens) and MCP server logins |
+| `/config/.cache/eca/<workspace>/` | Chat history, per workspace path |
+| `/config/.local/state/eca/` | eca-cli's chat list, recent models and log |
+
+**Authentication.** Type `/login` (or open `/providers`), pick a provider and
+follow its flow. GitHub Copilot shows a device code and Anthropic a code to
+paste back, so opening the printed link in the host browser is enough. An API
+key typed there is saved to `config.json`. ECA's built-in providers also read
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `GOOGLE_API_KEY`, so a key can come
+from the host instead:
+
+```bash
+vp run eca -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+```
+
+The OpenAI subscription login (`pro`) is different: the browser returns to
+`http://localhost:1455/auth/callback`, so publish that port for the run in
+which you log in:
+
+```bash
+vp run eca -p 127.0.0.1:1455:1455
+```
+
+**Models.** Providers and models are configured in ECA itself (`/login`,
+`/model`, or `providers` in `config.json`, where a key can reference a variable
+as `${env:VAR}`), so VibePod's global `llm` settings and `--provider` do not
+apply to it.
+
+**Proxy and TLS.** ECA honours `HTTP_PROXY`/`HTTPS_PROXY` and `NO_PROXY`, and
+adds the certificates in `SSL_CERT_FILE` to the ones it trusts, so its traffic
+reaches the dashboard when the proxy is enabled.
+
+**IKWID mode.** `--ikwid` adds `--trust`, which starts eca-cli in trust mode:
+tool calls that would ask for approval run without asking, while `deny` rules
+in `config.json` still apply. `/trust` or `Ctrl+Y` toggles it in a session:
+
+```bash
+vp run eca --ikwid
+```
+
+**Non-interactive mode.** `eca-cli -p` prints the answer and exits, so task
+mode works. Nobody is there to approve a tool call, so the calls that would
+ask (by default every tool that is not read-only) are rejected unless
+`--ikwid` adds `--trust`. Pass eca-cli flags such as `--model` after `--`;
+VibePod puts them ahead of the prompt and the prompt after its own `--`, so a
+prompt that starts with `-` is not read as an option:
+
+```bash
+vp task create eca "Summarize the README"
+vp task create eca "fix the failing test" --ikwid -- --model anthropic/claude-sonnet-4-6
+```
+
+**Resuming.** eca-cli prints no resume command when it exits.
+`vp run eca -- -c` continues the workspace's latest chat, and `/chats` lists
+the others. Every project is mounted at `/workspace`, so both see the chats of
+all projects on the profile; see
+[per-project state](#per-project-state-and-the-shared-workspace-path).
+
+**Skills.** Skills installed via `vp skills` are mounted at
+`/config/.config/eca/skills/<id>`, ECA's own global skills directory, and
+picked up automatically.
+
+**Editor integration.** ECA's editor plugins talk to `eca server` over ECA's
+own protocol, not the Agent Client Protocol, so `vp run eca --acp` is not
+available.
 
 ## Hermes Agent (`hermes`) — developer preview
 
