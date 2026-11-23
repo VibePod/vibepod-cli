@@ -414,12 +414,17 @@ _LEFT_ALT_PRESSED = 0x0002
 _RIGHT_CTRL_PRESSED = 0x0004
 _LEFT_CTRL_PRESSED = 0x0008
 _SHIFT_PRESSED = 0x0010
+_ENHANCED_KEY = 0x0100
 _ALT_PRESSED = _RIGHT_ALT_PRESSED | _LEFT_ALT_PRESSED
 _CTRL_PRESSED = _RIGHT_CTRL_PRESSED | _LEFT_CTRL_PRESSED
 _VK_BACK = 0x08
 _VK_TAB = 0x09
 _VK_MENU = 0x12
 _VK_SPACE = 0x20
+#: Navigation keys the numpad digits turn into with NumLock off (0-9 as Insert,
+#: End, Down, Page Down, Left, Clear, Right, Home, Up, Page Up). Only these
+#: numpad copies lack ``ENHANCED_KEY``; the dedicated arrow/Home/... keys have it.
+_VK_NUMPAD_NAVIGATION = frozenset({0x2D, 0x23, 0x28, 0x22, 0x25, 0x0C, 0x27, 0x24, 0x26, 0x21})
 
 #: Keys that send a VT sequence instead of text, by virtual-key code, as
 #: ``(introducer, number, final)``: ``ESC`` + introducer + number + final when
@@ -578,6 +583,9 @@ class _ConsoleKeyDecoder:
     def __init__(self) -> None:
         self._escape: str | None = None
         self._high_surrogate: int | None = None
+        #: Counts every start of a hold (an ``ESC`` or a high surrogate), so the
+        #: caller can restart its grace period for a new hold in the same batch.
+        self.holds = 0
 
     @property
     def pending(self) -> bool:
@@ -608,6 +616,15 @@ class _ConsoleKeyDecoder:
         shift = bool(event.state & _SHIFT_PRESSED)
         alt = bool(event.state & _ALT_PRESSED)
         ctrl = bool(event.state & _CTRL_PRESSED)
+        if (
+            alt
+            and not ctrl
+            and event.vk in _VK_NUMPAD_NAVIGATION
+            and not event.state & _ENHANCED_KEY
+        ):
+            # A digit of Alt+numpad input with NumLock off; the character it
+            # spells arrives with the release of Alt.
+            return b""
         sequence = _VK_SEQUENCES.get(event.vk)
         if sequence is not None:
             modifier = 1 + shift + 2 * alt + 4 * ctrl
@@ -624,6 +641,10 @@ class _ConsoleKeyDecoder:
         elif not char:
             return b""  # modifier keys, dead keys, keys without text
         meta = alt and not (ctrl and char >= 0x20)
+        if 0xD800 <= char <= 0xDFFF:
+            # Repeating half of a surrogate pair would pair the halves wrongly
+            # (``?😀?``); an emoji is not typed by holding a key anyway.
+            count = 1
         return b"".join(self._character(char, meta) for _ in range(count))
 
     def _character(self, code: int, meta: bool) -> bytes:
@@ -631,6 +652,7 @@ class _ConsoleKeyDecoder:
         if 0xD800 <= code <= 0xDBFF:
             out += self.flush()
             self._high_surrogate = code
+            self.holds += 1
             return out
         if 0xDC00 <= code <= 0xDFFF and self._high_surrogate is not None:
             high, self._high_surrogate = self._high_surrogate, None
@@ -647,11 +669,13 @@ class _ConsoleKeyDecoder:
         if self._escape is None:
             if text == "\x1b":
                 self._escape = text
+                self.holds += 1
                 return b""
             return _encode_console_character(text)
         if text == "\x1b":
             out = self._finish_escape()
             self._escape = text
+            self.holds += 1
             return out
         self._escape += text
         if len(self._escape) == 2:
@@ -813,8 +837,9 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
     :func:`_read_console_key_events`) and translated by
     :class:`_ConsoleKeyDecoder`. A held ``ESC`` is forwarded as the Escape key
     once ``_ESCAPE_SEQUENCE_GRACE_SECONDS`` have passed without completing a
-    sequence, measured from the ``ESC`` itself, so a stream of unrelated records
-    (a held Shift auto-repeating) cannot hold it back indefinitely.
+    sequence, measured from that ``ESC`` itself, so a stream of unrelated
+    records (a held Shift auto-repeating) cannot hold it back indefinitely. What
+    is still held when the session ends is dropped, since the socket is closing.
     """
     read = _console_key_reader()
     if read is None:
@@ -834,10 +859,12 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
             return
         if events is None:
             return
+        holds = decoder.holds
         data = b"".join(decoder.feed(event) for event in events)
         if not decoder.pending:
             flush_at = None
-        elif flush_at is None:
+        elif flush_at is None or decoder.holds != holds:
+            # A new hold began in this batch: its grace period starts now.
             flush_at = time.monotonic() + grace
         elif time.monotonic() >= flush_at:
             data += decoder.flush()

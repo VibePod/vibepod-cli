@@ -682,6 +682,44 @@ def test_forward_windows_console_input_flushes_escape_despite_other_records(
     assert bytes(sock.sent) == b"\x1b"
 
 
+def test_forward_windows_console_input_restarts_grace_for_a_new_escape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ESC arriving while another is held gets its own full grace period.
+
+    The new ESC forwards the held one at once and is held itself; it must not
+    inherit the first one's deadline and go out only a few ms after it came.
+    """
+    stop = threading.Event()
+    sock = _RecordingSock()
+    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
+    esc = _key("\x1b", vk=0x1B)
+    first_at: list[float] = []
+    second_at: list[float] = []
+    flushed_at: list[float] = []
+
+    def read(timeout_ms: int) -> list[Any] | None:
+        now = time.monotonic()
+        if not first_at:
+            first_at.append(now)
+            return [esc]
+        if not second_at and now - first_at[0] >= grace * 0.8:
+            second_at.append(now)
+            return [esc]
+        if len(sock.sent) == 2:
+            flushed_at.append(now)
+            stop.set()
+            return []
+        time.sleep(min(timeout_ms, 2) / 1000)
+        return []
+
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    docker_mod._forward_windows_console_input(sock, None, stop)
+
+    assert bytes(sock.sent) == b"\x1b\x1b"
+    assert flushed_at[0] - second_at[0] >= grace * 0.9
+
+
 def test_forward_windows_console_input_logs_what_it_sends(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

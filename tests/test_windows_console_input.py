@@ -146,7 +146,7 @@ def test_kernel32_prototypes_keep_handles_pointer_sized() -> None:
         (0x25, _D._LEFT_CTRL_PRESSED, b"\x1b[1;5D"),
         (0x27, _D._RIGHT_CTRL_PRESSED, b"\x1b[1;5C"),
         (0x26, _D._SHIFT_PRESSED, b"\x1b[1;2A"),
-        (0x28, _D._LEFT_ALT_PRESSED, b"\x1b[1;3B"),
+        (0x28, _D._LEFT_ALT_PRESSED | ENHANCED, b"\x1b[1;3B"),
         (0x24, _D._LEFT_CTRL_PRESSED | _D._SHIFT_PRESSED, b"\x1b[1;6H"),
         (0x2E, _D._LEFT_CTRL_PRESSED, b"\x1b[3;5~"),
         (0x70, _D._SHIFT_PRESSED, b"\x1b[1;2P"),
@@ -182,6 +182,35 @@ def test_key_releases_and_keys_without_text_send_nothing() -> None:
 def test_alt_numpad_character_arrives_with_the_alt_release() -> None:
     numpad = [key(vk=0x60 + digit, state=_D._LEFT_ALT_PRESSED) for digit in (2, 2, 4)]
     assert decode(numpad, key("à", vk=_D._VK_MENU, down=False)) == "à".encode()
+
+
+def test_alt_numpad_with_numlock_off_sends_only_the_character() -> None:
+    # NumLock off: the digits 0, 2, 2, 4 arrive as Insert, Down, Down, Left
+    # without ENHANCED_KEY; they must not go out as Alt+navigation keys.
+    alt = _D._LEFT_ALT_PRESSED
+    digits = [key(vk=vk, state=alt) for vk in (0x2D, 0x28, 0x28, 0x25)]
+    assert decode(digits, key("à", vk=_D._VK_MENU, down=False)) == "à".encode()
+
+
+def test_alt_with_the_dedicated_navigation_keys_still_sends_them() -> None:
+    alt = _D._LEFT_ALT_PRESSED | ENHANCED
+    assert decode(key(vk=0x26, state=alt), key(vk=0x2D, state=alt)) == b"\x1b[1;3A\x1b[2;3~"
+    # Without Alt the numpad navigation keys are ordinary navigation keys.
+    assert decode(key(vk=0x26)) == b"\x1b[A"
+
+
+def test_repeated_surrogate_halves_still_make_one_emoji() -> None:
+    assert decode(key(0xD83D, repeat=2), key(0xDE00, repeat=2)) == "😀".encode()
+
+
+def test_every_new_hold_is_counted() -> None:
+    decoder = docker_mod._ConsoleKeyDecoder()
+    decoder.feed(key("\x1b", vk=0x1B))
+    assert decoder.holds == 1
+    decoder.feed(key("\x1b", vk=0x1B))  # forwards the first ESC, holds the second
+    assert decoder.holds == 2
+    decoder.feed(key(0xD83D))
+    assert decoder.holds == 3
 
 
 def test_repeat_count_repeats_the_key() -> None:

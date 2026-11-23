@@ -169,14 +169,12 @@ if (-not $pipe) { throw "No pipe for Podman machine '$machine'; check podman mac
 $env:DOCKER_HOST = "npipe://" + ($pipe -replace '\\', '/')
 ```
 
-!!! warning "Known keyboard limitations on native Windows"
-    Console input is still read key by key and translated to terminal
-    sequences, so a few keys do not reach the agent correctly yet: `à` can
-    swallow the next key (or turn `àH` into Arrow Up), emoji arrive as `??`,
-    and Alt+key combinations are ignored. Typing everything else, including
-    arrows, Home/End, PgUp/PgDn, F1–F12, Shift+Tab and Ctrl+arrows, works.
-    The rewrite is tracked in [#242](https://github.com/VibePod/vibepod-cli/issues/242).
-    Running `vp` inside WSL2 avoids these limitations.
+!!! note "Alt+Enter in Windows Terminal"
+    Keys reach the agent as a Linux terminal would send them, Alt+key
+    included. Windows Terminal, however, uses Alt+Enter itself to toggle full
+    screen, so that key never reaches the agent. To use it (for example for a
+    newline in the agent prompt), remove the Alt+Enter binding of "Toggle
+    fullscreen" in Windows Terminal under Settings → Actions.
 
 ## Install
 
