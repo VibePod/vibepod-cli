@@ -598,9 +598,11 @@ class _ConsoleKeyDecoder:
         self._high_surrogate: int | None = None
         #: True while the rest of an over-long release report is swallowed.
         self._discarding = False
-        #: Counts every start of a hold (an ``ESC`` or a high surrogate), so the
-        #: caller can restart its grace period for a new hold in the same batch.
-        self.holds = 0
+        #: Counts every record that starts or extends what is held (an ``ESC``,
+        #: each character added to its sequence, each character of a release
+        #: being swallowed, a high surrogate). The caller restarts its grace
+        #: period whenever it moves, so only a pause in the sequence ends it.
+        self.progress = 0
 
     @property
     def pending(self) -> bool:
@@ -608,17 +610,15 @@ class _ConsoleKeyDecoder:
         return self._escape is not None or self._high_surrogate is not None or self._discarding
 
     @property
-    def assembling_report(self) -> bool:
-        """True while the held input is a CSI parameter run, i.e. a report on its way.
+    def holding_bare_escape(self) -> bool:
+        """True while nothing but a lone ``ESC`` is held.
 
-        The caller then feeds records it has already read before applying the
-        grace deadline, so a report it read late is still recognized; a bare
-        ``ESC`` keeps the strict deadline.
+        That is most likely the Escape key, so its deadline is strict: records
+        read after it are not added to it. Anything longer (``ESC[``, ``ESC O``,
+        a release being swallowed) or half an emoji is a sequence under way,
+        whose queued rest is still read before it is given up.
         """
-        if self._discarding:
-            return True
-        held = self._escape or ""
-        return len(held) > 2 and self._is_parameter_run(held)
+        return self._escape == "\x1b" and self._high_surrogate is None and not self._discarding
 
     @staticmethod
     def _is_parameter_run(held: str) -> bool:
@@ -685,7 +685,7 @@ class _ConsoleKeyDecoder:
         if 0xD800 <= code <= 0xDBFF:
             out += self.flush()
             self._high_surrogate = code
-            self.holds += 1
+            self.progress += 1
             return out
         if 0xDC00 <= code <= 0xDFFF and self._high_surrogate is not None:
             high, self._high_surrogate = self._high_surrogate, None
@@ -701,6 +701,7 @@ class _ConsoleKeyDecoder:
     def _text(self, text: str) -> bytes:
         if self._discarding:
             if text in _CSI_PARAMETER_CHARS:
+                self.progress += 1
                 return b""
             self._discarding = False
             if _CSI_FINAL_FIRST <= ord(text) <= _CSI_FINAL_LAST:
@@ -708,15 +709,16 @@ class _ConsoleKeyDecoder:
         if self._escape is None:
             if text == "\x1b":
                 self._escape = text
-                self.holds += 1
+                self.progress += 1
                 return b""
             return _encode_console_character(text)
         if text == "\x1b":
             out = self._finish_escape()
             self._escape = text
-            self.holds += 1
+            self.progress += 1
             return out
         self._escape += text
+        self.progress += 1
         if len(self._escape) == 2:
             if text in _CSI_INTERMEDIATES:
                 return b""
@@ -886,11 +888,14 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
 
     Key records are read with ``ReadConsoleInputW`` (see
     :func:`_read_console_key_events`) and translated by
-    :class:`_ConsoleKeyDecoder`. A held ``ESC`` is forwarded as the Escape key
-    once ``_ESCAPE_SEQUENCE_GRACE_SECONDS`` have passed without completing a
-    sequence, measured from that ``ESC`` itself, so a stream of unrelated
-    records (a held Shift auto-repeating) cannot hold it back indefinitely. What
-    is still held when the session ends is dropped, since the socket is closing.
+    :class:`_ConsoleKeyDecoder`. What the decoder holds is given up (forwarded
+    as is) once ``_ESCAPE_SEQUENCE_GRACE_SECONDS`` pass without the held
+    sequence growing, not counting time spent writing to the container. Records
+    that do not extend it (a held Shift auto-repeating) do not restart that
+    period. A lone ``ESC`` is given up strictly at its deadline; a sequence under
+    way only once nothing more is queued, so a report the worker read late is
+    still recognized. What is still held when the session ends is dropped,
+    since the socket is closing.
     """
     read = _console_key_reader()
     if read is None:
@@ -901,7 +906,13 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
     flush_at: float | None = None
 
     def send(data: bytes) -> bool:
-        """Forward *data*; False once the session is over or the socket broke."""
+        """Forward *data*; False once the session is over or the socket broke.
+
+        A slow write (a busy named pipe) does not eat into the grace period of
+        what is held: the deadline moves by the time the write took, or records
+        that were queued in time would look late.
+        """
+        nonlocal flush_at
         if not data:
             return True
         if stop_event.is_set():
@@ -909,12 +920,15 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
             return False
         if logger is not None:
             logger.log_input(data)
+        started = time.monotonic()
         try:
             sock.sendall(data)
         except Exception:
             # A closed NpipeSocket raises RuntimeError, a broken pipe
             # pywintypes.error; neither is an OSError.
             return False
+        if flush_at is not None:
+            flush_at += time.monotonic() - started
         return True
 
     while not stop_event.is_set():
@@ -930,25 +944,26 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
             return
         if events is None:
             return
-        if flush_at is not None and time.monotonic() >= flush_at and not decoder.assembling_report:
-            # The grace period of a bare ESC ran out before these records were
-            # read (the wait can overshoot it), so they do not belong to it:
-            # forward it in its own write first, as a terminal would, rather
-            # than let them complete a sequence. (The attach stream may still
-            # merge the two writes on the way to the agent.) A report already
-            # under way is instead given the records read so far, see below.
+        if flush_at is not None and time.monotonic() >= flush_at and decoder.holding_bare_escape:
+            # A lone ESC whose grace period ran out before these records were
+            # read (the wait can overshoot it) is the Escape key: forward it in
+            # its own write first, as a terminal would, rather than let them
+            # extend it. (The attach stream may still merge the two writes on
+            # the way to the agent.)
             flush_at = None
             if not send(decoder.flush()):
                 return
-        holds = decoder.holds
+        progress = decoder.progress
         data = b"".join(decoder.feed(event) for event in events)
         if not decoder.pending:
             flush_at = None
-        elif flush_at is None or decoder.holds != holds:
-            # A new hold began in this batch: its grace period starts now.
+        elif flush_at is None or decoder.progress != progress:
+            # The held sequence started or grew: its grace period starts now.
             flush_at = time.monotonic() + grace
-        elif time.monotonic() >= flush_at:
-            # Still incomplete after the records that were already queued.
+        elif not events and time.monotonic() >= flush_at:
+            # A sequence under way, and nothing more queued after its deadline
+            # (a read that returned records goes round once more with a 0 ms
+            # wait, so queued records are always read first): give it up.
             data += decoder.flush()
             flush_at = None
         if not send(data):

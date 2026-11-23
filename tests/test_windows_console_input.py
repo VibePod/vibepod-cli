@@ -152,18 +152,20 @@ def test_dropped_release_whose_end_never_comes_stops_at_the_flush() -> None:
     decoder = docker_mod._ConsoleKeyDecoder()
     prefix = "\x1b[97;1:3;" + "97:" * 45
     assert b"".join(decoder.feed(event) for event in typed(prefix)) == b""
-    assert decoder.pending and decoder.assembling_report
+    assert decoder.pending and not decoder.holding_bare_escape
     assert decoder.flush() == b""  # the grace period ended it
     assert b"".join(decoder.feed(event) for event in typed("12")) == b"12"
 
 
-def test_only_parameter_runs_count_as_a_report_under_way() -> None:
+def test_only_a_lone_escape_counts_as_the_bare_escape_key() -> None:
     decoder = docker_mod._ConsoleKeyDecoder()
     decoder.feed(key("\x1b", vk=0x1B))
-    assert not decoder.assembling_report  # a bare ESC keeps the strict deadline
-    for event in typed("[97;1"):
-        decoder.feed(event)
-    assert decoder.assembling_report
+    assert decoder.holding_bare_escape  # strict deadline
+    decoder.feed(key("[", vk=0xDB))
+    assert not decoder.holding_bare_escape  # ESC[ is a sequence under way
+    decoder.flush()
+    decoder.feed(key(0xD83D))
+    assert decoder.pending and not decoder.holding_bare_escape  # half an emoji
 
 
 @pytest.mark.parametrize("report", ["\x1b[97:65:97;2:2u", "\x1b[97;1;97u", "\x1b[97u"])
@@ -271,14 +273,19 @@ def test_repeated_surrogate_halves_still_make_one_emoji() -> None:
     assert decode(key(0xD83D, repeat=2), key(0xDE00, repeat=2)) == "😀".encode()
 
 
-def test_every_new_hold_is_counted() -> None:
+def test_progress_moves_with_every_held_record_only() -> None:
     decoder = docker_mod._ConsoleKeyDecoder()
     decoder.feed(key("\x1b", vk=0x1B))
-    assert decoder.holds == 1
-    decoder.feed(key("\x1b", vk=0x1B))  # forwards the first ESC, holds the second
-    assert decoder.holds == 2
+    assert decoder.progress == 1
+    decoder.feed(key(vk=0x10, state=_D._SHIFT_PRESSED))  # Shift extends nothing
+    assert decoder.progress == 1
+    decoder.feed(key("[", vk=0xDB))
+    assert decoder.progress == 2
+    decoder.feed(key("\x1b", vk=0x1B))  # forwards ESC[, holds the new ESC
+    assert decoder.progress == 3
+    decoder.flush()
     decoder.feed(key(0xD83D))
-    assert decoder.holds == 3
+    assert decoder.progress == 4
 
 
 def test_repeat_count_repeats_the_key() -> None:
