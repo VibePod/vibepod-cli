@@ -558,6 +558,10 @@ def _typed(text: str) -> list[Any]:
     return [_key(ch) for ch in text]
 
 
+#: Reads a fake console serves before it ends; the timing tests need a few dozen.
+_POLL_BUDGET = 500
+
+
 def _fake_console_keys(
     monkeypatch: pytest.MonkeyPatch,
     batches: list[list[Any]],
@@ -567,13 +571,17 @@ def _fake_console_keys(
 
     Returns the read timeouts the forwarder asked for. *on_idle*, if given, is
     called once all batches are served and decides what the reads return then
-    (``[]`` keeps the console idle, ``None`` ends it).
+    (``[]`` keeps the console idle, ``None`` ends it). After ``_POLL_BUDGET``
+    reads the console ends regardless, so a regression that never sends what a
+    test waits for fails its byte assertion instead of hanging the suite.
     """
     queue = list(batches)
     timeouts: list[int] = []
 
     def read(timeout_ms: int) -> list[Any] | None:
         timeouts.append(timeout_ms)
+        if len(timeouts) > _POLL_BUDGET:
+            return None
         if queue:
             return queue.pop(0)
         if on_idle is not None:
@@ -587,10 +595,14 @@ def _fake_console_keys(
 class _RecordingSock:
     def __init__(self) -> None:
         self.sent = bytearray()
-        self.calls = 0
+        self.chunks: list[bytes] = []
+
+    @property
+    def calls(self) -> int:
+        return len(self.chunks)
 
     def sendall(self, data: bytes) -> None:
-        self.calls += 1
+        self.chunks.append(bytes(data))
         self.sent.extend(data)
 
 
@@ -698,7 +710,12 @@ def test_forward_windows_console_input_restarts_grace_for_a_new_escape(
     second_at: list[float] = []
     flushed_at: list[float] = []
 
+    polls: list[int] = []
+
     def read(timeout_ms: int) -> list[Any] | None:
+        polls.append(timeout_ms)
+        if len(polls) > _POLL_BUDGET:
+            return None  # fail the assertions below instead of hanging
         now = time.monotonic()
         if not first_at:
             first_at.append(now)
@@ -718,6 +735,79 @@ def test_forward_windows_console_input_restarts_grace_for_a_new_escape(
 
     assert bytes(sock.sent) == b"\x1b\x1b"
     assert flushed_at[0] - second_at[0] >= grace * 0.9
+
+
+@pytest.mark.parametrize(
+    ("late", "expected"),
+    [
+        # Escape, then j after the grace period: two keys, not Meta+j.
+        (_typed("j"), [b"\x1b", b"j"]),
+        # The rest of a release report arriving too late no longer swallows
+        # the Escape key along with it.
+        (_typed("[97;1:3u"), [b"\x1b", b"[97;1:3u"]),
+    ],
+)
+def test_forward_windows_console_input_sends_an_expired_escape_on_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+    late: list[Any],
+    expected: list[bytes],
+) -> None:
+    """Records read after the deadline (a wait that overshot it) do not join the ESC."""
+    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
+
+    def overshooting_wait(timeout_ms: int) -> list[Any] | None:
+        if late_served:
+            return None
+        time.sleep(grace + 0.02)  # the wait ends well after the deadline ...
+        late_served.append(True)
+        return late  # ... with records that arrived meanwhile
+
+    late_served: list[bool] = []
+    _fake_console_keys(monkeypatch, [[_key("\x1b", vk=0x1B)]], on_idle=overshooting_wait)
+    sock = _RecordingSock()
+
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
+
+    assert sock.chunks == expected
+
+
+def test_forward_windows_console_input_never_waits_0_ms_before_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wait is rounded up: a 0 ms timeout only once the deadline has passed."""
+    stop = threading.Event()
+    sock = _RecordingSock()
+    seen: list[tuple[int, float]] = []
+    flush_at: list[float] = []
+
+    def idle(timeout_ms: int) -> list[Any]:
+        seen.append((timeout_ms, time.monotonic()))
+        if sock.sent:
+            stop.set()
+        time.sleep(timeout_ms / 1000)
+        return []
+
+    def first(timeout_ms: int) -> list[Any]:
+        flush_at.append(time.monotonic() + docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS)
+        return [_key("\x1b", vk=0x1B)]
+
+    batches_served: list[bool] = []
+
+    def read(timeout_ms: int) -> list[Any] | None:
+        if len(seen) > _POLL_BUDGET:
+            return None
+        if not batches_served:
+            batches_served.append(True)
+            return first(timeout_ms)
+        return idle(timeout_ms)
+
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    docker_mod._forward_windows_console_input(sock, None, stop)
+
+    assert bytes(sock.sent) == b"\x1b"
+    # flush_at here is taken just before the forwarder's own, so it is earlier.
+    early_zero = [at for timeout, at in seen if timeout == 0 and at < flush_at[0]]
+    assert early_zero == []
 
 
 def test_forward_windows_console_input_logs_what_it_sends(
@@ -745,11 +835,18 @@ def test_forward_windows_console_input_drops_key_after_session_end(
         return [_key("a", vk=0x41)]
 
     class _ClosedSock:
+        attempts = 0
+
         def sendall(self, data: bytes) -> None:
-            raise AssertionError("sent to a closed socket")
+            # Raising alone would not fail the test: the forwarder treats any
+            # send error as a closed socket. Count, and assert outside.
+            _ClosedSock.attempts += 1
+            raise RuntimeError("sent to a closed socket")
 
     monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
     docker_mod._forward_windows_console_input(_ClosedSock(), None, stop)
+
+    assert _ClosedSock.attempts == 0
 
 
 @pytest.mark.parametrize(

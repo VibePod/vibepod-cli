@@ -98,6 +98,32 @@ def test_kitty_release_reports_with_alternates_or_text_are_dropped(report: str) 
     assert docker_mod._KITTY_KEY_REPORT.fullmatch(report.encode())
 
 
+def test_long_kitty_release_with_a_text_field_is_dropped() -> None:
+    # 36 characters: more than the general 32-character escape bound.
+    report = "\x1b[97:65:97;2:3;97:769:128512:128513u"
+    assert len(report) > docker_mod._MAX_ESCAPE_SEQUENCE_CHARS
+    assert decode(typed(report)) == b""
+
+
+def test_long_kitty_press_is_forwarded_whole() -> None:
+    report = "\x1b[97:65:97;2:1;97:769:128512:128513u"
+    assert decode(typed(report)) == report.encode()
+
+
+def test_overlong_parameter_sequence_is_forwarded_not_held_forever() -> None:
+    decoder = docker_mod._ConsoleKeyDecoder()
+    sequence = "\x1b[" + "1;" * 100  # no final byte ever comes
+    out = b"".join(decoder.feed(event) for event in typed(sequence)) + decoder.flush()
+    assert out == sequence.encode()
+
+
+def test_non_parameter_sequences_keep_the_short_bound() -> None:
+    decoder = docker_mod._ConsoleKeyDecoder()
+    sequence = "\x1b[?" + "1" * 40
+    out = b"".join(decoder.feed(event) for event in typed(sequence))
+    assert out.startswith(sequence[: docker_mod._MAX_ESCAPE_SEQUENCE_CHARS].encode())
+
+
 @pytest.mark.parametrize("report", ["\x1b[97:65:97;2:2u", "\x1b[97;1;97u", "\x1b[97u"])
 def test_kitty_press_and_repeat_reports_are_forwarded(report: str) -> None:
     assert decode(typed(report)) == report.encode()

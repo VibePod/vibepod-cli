@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 import os
 import queue
 import re
@@ -394,6 +395,11 @@ _KITTY_KEY_REPORT = re.compile(rb"\x1b\[\d+(?::\d*){0,2}(?:;\d*(?::(\d+))?(?:;[\
 _CSI_FINAL_FIRST, _CSI_FINAL_LAST = 0x40, 0x7E
 _CSI_INTERMEDIATES = "[O"
 _MAX_ESCAPE_SEQUENCE_CHARS = 32
+#: A CSI that so far holds only parameter bytes may grow longer: a kitty key
+#: report's ``;text`` field can carry several codepoints, and a release report
+#: cut at 32 characters would reach the agent as stray text.
+_CSI_PARAMETER_CHARS = frozenset("0123456789:;")
+_MAX_CSI_PARAMETER_SEQUENCE_CHARS = 128
 
 #: How long a bare ``ESC`` waits for the rest of its sequence before it is
 #: forwarded as the Escape key itself. Bytes of one sequence normally arrive as a
@@ -571,10 +577,12 @@ class _ConsoleKeyDecoder:
     accept Ctrl+Alt for it too, so Ctrl+Alt with a printable character is the
     character itself.
 
-    A text ``ESC`` that is not the Escape key -- the start of a sequence the
-    terminal answers a query with (``ESC[?1;2c``) or a kitty key report -- is
-    held until its sequence is complete, so kitty key *releases*, which a Linux
-    PTY has no notion of, can be dropped. The caller flushes a held ``ESC``
+    Every ``ESC`` -- the Escape key as well as the start of a sequence the
+    terminal answers a query with (``ESC[?1;2c``) or a kitty key report, which
+    reach a console app as plain text records -- is held until its sequence is
+    complete, so kitty key *releases*, which a Linux PTY has no notion of, can
+    be dropped. The two cannot be told apart reliably, so Escape followed by a
+    key within the grace period reaches the agent as one chunk. The caller flushes a held ``ESC``
     (:meth:`flush`) once :attr:`pending` has waited the grace period without
     another key, and a mapped key flushes it too: Escape then Arrow Up is two
     keys, never one garbled sequence.
@@ -683,9 +691,16 @@ class _ConsoleKeyDecoder:
                 return b""
             return self._finish_escape()  # ESC + char: Alt-as-Meta, OSC start, ...
         final = _CSI_FINAL_FIRST <= ord(text) <= _CSI_FINAL_LAST
-        if final or len(self._escape) >= _MAX_ESCAPE_SEQUENCE_CHARS:
+        if final or len(self._escape) >= self._escape_limit():
             return self._finish_escape()
         return b""
+
+    def _escape_limit(self) -> int:
+        """How long the held sequence may grow before it is forwarded as is."""
+        held = self._escape or ""
+        if held.startswith("\x1b[") and _CSI_PARAMETER_CHARS.issuperset(held[2:]):
+            return _MAX_CSI_PARAMETER_SEQUENCE_CHARS
+        return _MAX_ESCAPE_SEQUENCE_CHARS
 
     def _finish_escape(self) -> bytes:
         sequence = _encode_console_character(self._escape or "")
@@ -848,32 +863,14 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
     idle_ms = int(_KEY_WAIT_POLL_SECONDS * 1000)
     grace = _ESCAPE_SEQUENCE_GRACE_SECONDS
     flush_at: float | None = None
-    while not stop_event.is_set():
-        if flush_at is None:
-            timeout_ms = idle_ms
-        else:
-            timeout_ms = max(0, min(idle_ms, int((flush_at - time.monotonic()) * 1000)))
-        try:
-            events = read(timeout_ms)
-        except Exception:  # pragma: no cover - console API failure
-            return
-        if events is None:
-            return
-        holds = decoder.holds
-        data = b"".join(decoder.feed(event) for event in events)
-        if not decoder.pending:
-            flush_at = None
-        elif flush_at is None or decoder.holds != holds:
-            # A new hold began in this batch: its grace period starts now.
-            flush_at = time.monotonic() + grace
-        elif time.monotonic() >= flush_at:
-            data += decoder.flush()
-            flush_at = None
+
+    def send(data: bytes) -> bool:
+        """Forward *data*; False once the session is over or the socket broke."""
         if not data:
-            continue
+            return True
         if stop_event.is_set():
             # The session ended while we waited; the socket is closed.
-            return
+            return False
         if logger is not None:
             logger.log_input(data)
         try:
@@ -881,6 +878,38 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
         except Exception:
             # A closed NpipeSocket raises RuntimeError, a broken pipe
             # pywintypes.error; neither is an OSError.
+            return False
+        return True
+
+    while not stop_event.is_set():
+        if flush_at is None:
+            timeout_ms = idle_ms
+        else:
+            # Rounded up, so the wait neither ends early nor spins at 0 ms.
+            remaining_ms = math.ceil((flush_at - time.monotonic()) * 1000)
+            timeout_ms = max(0, min(idle_ms, remaining_ms))
+        try:
+            events = read(timeout_ms)
+        except Exception:  # pragma: no cover - console API failure
+            return
+        if events is None:
+            return
+        if flush_at is not None and time.monotonic() >= flush_at:
+            # The grace period ran out before these records were read (the wait
+            # can overshoot it), so they do not belong to the held ESC: forward
+            # it on its own first, as a terminal would, rather than let them
+            # complete a sequence or turn Escape + key into Meta+key.
+            flush_at = None
+            if not send(decoder.flush()):
+                return
+        holds = decoder.holds
+        data = b"".join(decoder.feed(event) for event in events)
+        if not decoder.pending:
+            flush_at = None
+        elif flush_at is None or decoder.holds != holds:
+            # A new hold began in this batch: its grace period starts now.
+            flush_at = time.monotonic() + grace
+        if not send(data):
             return
 
 
