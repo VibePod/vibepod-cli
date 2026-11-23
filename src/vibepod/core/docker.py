@@ -514,16 +514,21 @@ class _KeyEvent(NamedTuple):
 
 _WAIT_OBJECT_0 = 0x0000
 _WAIT_TIMEOUT = 0x0102
-#: Records read per ``ReadConsoleInputW`` call; a paste is just more batches.
+#: Records read per ``ReadConsoleInputW`` call, and how many such batches one
+#: read takes while records stay queued. A burst (a long report, a paste) is
+#: then read in one go: records already queued must not look late to the
+#: caller's deadline just because they did not fit into the first batch.
 _INPUT_RECORD_BATCH = 128
+_MAX_INPUT_RECORD_BATCHES = 8
 
 
 def _read_console_key_events(kernel32: Any, handle: Any, timeout_ms: int) -> list[_KeyEvent] | None:
     """Key events queued on the console input *handle*, without ever blocking.
 
-    Waits up to *timeout_ms* for the first record, then reads only what is
-    queued, so the caller can check for the session end between calls and no
-    read is left waiting to steal the next keystroke once the session is over.
+    Waits up to *timeout_ms* for the first record, then reads what is queued
+    (up to ``_MAX_INPUT_RECORD_BATCHES`` batches), so the caller can check for
+    the session end between calls and no read is left waiting to steal the next
+    keystroke once the session is over.
     Unlike ``msvcrt.getwch()``, ``ReadConsoleInputW`` leaves the console mode
     alone and hands over the whole record: virtual-key code, modifiers and the
     UTF-16 text unit, so no ``\\xe0`` prefix byte has to be told apart from an
@@ -537,30 +542,31 @@ def _read_console_key_events(kernel32: Any, handle: Any, timeout_ms: int) -> lis
         return []
     if status != _WAIT_OBJECT_0:
         return None
-    queued = ctypes.c_uint32()
-    if not kernel32.GetNumberOfConsoleInputEvents(handle, ctypes.byref(queued)):
-        return None
-    if not queued.value:
-        return []
-    records = (_INPUT_RECORD * min(queued.value, _INPUT_RECORD_BATCH))()
-    read = ctypes.c_uint32()
-    if not kernel32.ReadConsoleInputW(handle, records, len(records), ctypes.byref(read)):
-        return None
     events: list[_KeyEvent] = []
-    for record in records[: read.value]:
-        if record.EventType != _KEY_EVENT:
-            continue
-        key = record.Event.KeyEvent
-        events.append(
-            _KeyEvent(
-                key_down=bool(key.bKeyDown),
-                repeat=int(key.wRepeatCount),
-                vk=int(key.wVirtualKeyCode),
-                scan=int(key.wVirtualScanCode),
-                char=int(key.uChar),
-                state=int(key.dwControlKeyState),
-            ),
-        )
+    for _ in range(_MAX_INPUT_RECORD_BATCHES):
+        queued = ctypes.c_uint32()
+        if not kernel32.GetNumberOfConsoleInputEvents(handle, ctypes.byref(queued)):
+            return None
+        if not queued.value:
+            break
+        records = (_INPUT_RECORD * min(queued.value, _INPUT_RECORD_BATCH))()
+        read = ctypes.c_uint32()
+        if not kernel32.ReadConsoleInputW(handle, records, len(records), ctypes.byref(read)):
+            return None
+        for record in records[: read.value]:
+            if record.EventType != _KEY_EVENT:
+                continue
+            key = record.Event.KeyEvent
+            events.append(
+                _KeyEvent(
+                    key_down=bool(key.bKeyDown),
+                    repeat=int(key.wRepeatCount),
+                    vk=int(key.wVirtualKeyCode),
+                    scan=int(key.wVirtualScanCode),
+                    char=int(key.uChar),
+                    state=int(key.dwControlKeyState),
+                ),
+            )
     return events
 
 
@@ -587,10 +593,12 @@ class _ConsoleKeyDecoder:
     reach a console app as plain text records -- is held until its sequence is
     complete, so kitty key *releases*, which a Linux PTY has no notion of, can
     be dropped. The two cannot be told apart reliably, so Escape followed by a
-    key within the grace period reaches the agent as one chunk. The caller flushes a held ``ESC``
-    (:meth:`flush`) once :attr:`pending` has waited the grace period without
-    another key, and a mapped key flushes it too: Escape then Arrow Up is two
-    keys, never one garbled sequence.
+    key within the grace period reaches the agent as one chunk. A release
+    longer than ``_MAX_CSI_PARAMETER_SEQUENCE_CHARS`` is swallowed up to its
+    final byte while it is held (:attr:`pending`). The caller gives up whatever
+    is held (:meth:`flush`) once the grace period since the hold started (see
+    ``holds``) has passed, and a mapped key flushes it too: Escape then Arrow
+    Up is two keys, never one garbled sequence.
     """
 
     def __init__(self) -> None:
@@ -598,27 +606,16 @@ class _ConsoleKeyDecoder:
         self._high_surrogate: int | None = None
         #: True while the rest of an over-long release report is swallowed.
         self._discarding = False
-        #: Counts every record that starts or extends what is held (an ``ESC``,
-        #: each character added to its sequence, each character of a release
-        #: being swallowed, a high surrogate). The caller restarts its grace
-        #: period whenever it moves, so only a pause in the sequence ends it.
-        self.progress = 0
+        #: Counts every start of a hold (an ``ESC`` or a high surrogate), so the
+        #: caller can start a new grace period for a new hold in the same batch.
+        #: Records that only extend a hold do not count: the grace period runs
+        #: from the start of the hold, which bounds how long input is held.
+        self.holds = 0
 
     @property
     def pending(self) -> bool:
         """True while a partial escape sequence or half an emoji is held back."""
         return self._escape is not None or self._high_surrogate is not None or self._discarding
-
-    @property
-    def holding_bare_escape(self) -> bool:
-        """True while nothing but a lone ``ESC`` is held.
-
-        That is most likely the Escape key, so its deadline is strict: records
-        read after it are not added to it. Anything longer (``ESC[``, ``ESC O``,
-        a release being swallowed) or half an emoji is a sequence under way,
-        whose queued rest is still read before it is given up.
-        """
-        return self._escape == "\x1b" and self._high_surrogate is None and not self._discarding
 
     @staticmethod
     def _is_parameter_run(held: str) -> bool:
@@ -685,7 +682,7 @@ class _ConsoleKeyDecoder:
         if 0xD800 <= code <= 0xDBFF:
             out += self.flush()
             self._high_surrogate = code
-            self.progress += 1
+            self.holds += 1
             return out
         if 0xDC00 <= code <= 0xDFFF and self._high_surrogate is not None:
             high, self._high_surrogate = self._high_surrogate, None
@@ -701,7 +698,6 @@ class _ConsoleKeyDecoder:
     def _text(self, text: str) -> bytes:
         if self._discarding:
             if text in _CSI_PARAMETER_CHARS:
-                self.progress += 1
                 return b""
             self._discarding = False
             if _CSI_FINAL_FIRST <= ord(text) <= _CSI_FINAL_LAST:
@@ -709,16 +705,15 @@ class _ConsoleKeyDecoder:
         if self._escape is None:
             if text == "\x1b":
                 self._escape = text
-                self.progress += 1
+                self.holds += 1
                 return b""
             return _encode_console_character(text)
         if text == "\x1b":
             out = self._finish_escape()
             self._escape = text
-            self.progress += 1
+            self.holds += 1
             return out
         self._escape += text
-        self.progress += 1
         if len(self._escape) == 2:
             if text in _CSI_INTERMEDIATES:
                 return b""
@@ -889,13 +884,11 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
     Key records are read with ``ReadConsoleInputW`` (see
     :func:`_read_console_key_events`) and translated by
     :class:`_ConsoleKeyDecoder`. What the decoder holds is given up (forwarded
-    as is) once ``_ESCAPE_SEQUENCE_GRACE_SECONDS`` pass without the held
-    sequence growing, not counting time spent writing to the container. Records
-    that do not extend it (a held Shift auto-repeating) do not restart that
-    period. A lone ``ESC`` is given up strictly at its deadline; a sequence under
-    way only once nothing more is queued, so a report the worker read late is
-    still recognized. What is still held when the session ends is dropped,
-    since the socket is closing.
+    as is) once ``_ESCAPE_SEQUENCE_GRACE_SECONDS`` have passed since the hold
+    started, not counting time spent writing to the container, however many
+    records arrive meanwhile (a held Shift or digit auto-repeating), so input
+    is never held back for longer. What is still held when the session ends is
+    dropped, since the socket is closing.
     """
     read = _console_key_reader()
     if read is None:
@@ -908,9 +901,10 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
     def send(data: bytes) -> bool:
         """Forward *data*; False once the session is over or the socket broke.
 
-        A slow write (a busy named pipe) does not eat into the grace period of
-        what is held: the deadline moves by the time the write took, or records
-        that were queued in time would look late.
+        A slow write (a busy named pipe, a slow session log) does not eat into
+        the grace period of what is held: the deadline moves by the time the
+        write took. Otherwise records that were queued in time would be read
+        after the deadline and look late.
         """
         nonlocal flush_at
         if not data:
@@ -918,17 +912,18 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
         if stop_event.is_set():
             # The session ended while we waited; the socket is closed.
             return False
-        if logger is not None:
-            logger.log_input(data)
         started = time.monotonic()
         try:
+            if logger is not None:
+                logger.log_input(data)
             sock.sendall(data)
         except Exception:
             # A closed NpipeSocket raises RuntimeError, a broken pipe
             # pywintypes.error; neither is an OSError.
             return False
-        if flush_at is not None:
-            flush_at += time.monotonic() - started
+        finally:
+            if flush_at is not None:
+                flush_at += time.monotonic() - started
         return True
 
     while not stop_event.is_set():
@@ -944,28 +939,23 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
             return
         if events is None:
             return
-        if flush_at is not None and time.monotonic() >= flush_at and decoder.holding_bare_escape:
-            # A lone ESC whose grace period ran out before these records were
-            # read (the wait can overshoot it) is the Escape key: forward it in
-            # its own write first, as a terminal would, rather than let them
-            # extend it. (The attach stream may still merge the two writes on
-            # the way to the agent.)
+        if flush_at is not None and time.monotonic() >= flush_at:
+            # The grace period ran out before these records were read. A read
+            # returns as soon as input arrives and takes the whole queued burst,
+            # and write time is not counted, so they arrived after it: forward
+            # what is held on its own first (Escape, O, then a late A must not
+            # become Arrow Up). The attach stream may still merge the two writes
+            # on the way to the agent.
             flush_at = None
             if not send(decoder.flush()):
                 return
-        progress = decoder.progress
+        holds = decoder.holds
         data = b"".join(decoder.feed(event) for event in events)
         if not decoder.pending:
             flush_at = None
-        elif flush_at is None or decoder.progress != progress:
-            # The held sequence started or grew: its grace period starts now.
+        elif flush_at is None or decoder.holds != holds:
+            # A new hold began in this batch: its grace period starts now.
             flush_at = time.monotonic() + grace
-        elif not events and time.monotonic() >= flush_at:
-            # A sequence under way, and nothing more queued after its deadline
-            # (a read that returned records goes round once more with a 0 ms
-            # wait, so queued records are always read first): give it up.
-            data += decoder.flush()
-            flush_at = None
         if not send(data):
             return
 

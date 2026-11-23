@@ -152,20 +152,9 @@ def test_dropped_release_whose_end_never_comes_stops_at_the_flush() -> None:
     decoder = docker_mod._ConsoleKeyDecoder()
     prefix = "\x1b[97;1:3;" + "97:" * 45
     assert b"".join(decoder.feed(event) for event in typed(prefix)) == b""
-    assert decoder.pending and not decoder.holding_bare_escape
+    assert decoder.pending
     assert decoder.flush() == b""  # the grace period ended it
     assert b"".join(decoder.feed(event) for event in typed("12")) == b"12"
-
-
-def test_only_a_lone_escape_counts_as_the_bare_escape_key() -> None:
-    decoder = docker_mod._ConsoleKeyDecoder()
-    decoder.feed(key("\x1b", vk=0x1B))
-    assert decoder.holding_bare_escape  # strict deadline
-    decoder.feed(key("[", vk=0xDB))
-    assert not decoder.holding_bare_escape  # ESC[ is a sequence under way
-    decoder.flush()
-    decoder.feed(key(0xD83D))
-    assert decoder.pending and not decoder.holding_bare_escape  # half an emoji
 
 
 @pytest.mark.parametrize("report", ["\x1b[97:65:97;2:2u", "\x1b[97;1;97u", "\x1b[97u"])
@@ -273,19 +262,17 @@ def test_repeated_surrogate_halves_still_make_one_emoji() -> None:
     assert decode(key(0xD83D, repeat=2), key(0xDE00, repeat=2)) == "😀".encode()
 
 
-def test_progress_moves_with_every_held_record_only() -> None:
+def test_holds_count_only_the_start_of_a_hold() -> None:
     decoder = docker_mod._ConsoleKeyDecoder()
     decoder.feed(key("\x1b", vk=0x1B))
-    assert decoder.progress == 1
-    decoder.feed(key(vk=0x10, state=_D._SHIFT_PRESSED))  # Shift extends nothing
-    assert decoder.progress == 1
-    decoder.feed(key("[", vk=0xDB))
-    assert decoder.progress == 2
+    assert decoder.holds == 1
+    decoder.feed(key("[", vk=0xDB))  # extends the hold: no new grace period
+    assert decoder.holds == 1
     decoder.feed(key("\x1b", vk=0x1B))  # forwards ESC[, holds the new ESC
-    assert decoder.progress == 3
+    assert decoder.holds == 2
     decoder.flush()
     decoder.feed(key(0xD83D))
-    assert decoder.progress == 4
+    assert decoder.holds == 3
 
 
 def test_repeat_count_repeats_the_key() -> None:
@@ -384,14 +371,28 @@ def test_read_console_key_events_returns_key_records_only() -> None:
     assert docker_mod._read_console_key_events(console, 7, 10) == []  # timed out
 
 
-def test_read_console_key_events_reads_in_bounded_batches() -> None:
+def test_read_console_key_events_takes_the_whole_queued_burst() -> None:
+    """Records queued together are read together, in bounded batches, so a
+    burst longer than one batch does not look late to the deadline."""
     a = key("a", vk=0x41)
+    batch = docker_mod._INPUT_RECORD_BATCH
     console = _RecordConsole([(docker_mod._KEY_EVENT, a)] * 300)
 
     events = docker_mod._read_console_key_events(console, 7, 10)
 
-    assert events is not None and len(events) == docker_mod._INPUT_RECORD_BATCH
-    assert console.read_sizes == [docker_mod._INPUT_RECORD_BATCH]
+    assert events is not None and len(events) == 300
+    assert console.read_sizes == [batch, batch, 300 - 2 * batch]
+
+
+def test_read_console_key_events_bounds_one_read() -> None:
+    a = key("a", vk=0x41)
+    batches = docker_mod._MAX_INPUT_RECORD_BATCHES
+    console = _RecordConsole([(docker_mod._KEY_EVENT, a)] * 5000)
+
+    events = docker_mod._read_console_key_events(console, 7, 10)
+
+    assert events is not None and len(events) == batches * docker_mod._INPUT_RECORD_BATCH
+    assert len(console.read_sizes) == batches
 
 
 def test_read_console_key_events_reports_a_failed_wait() -> None:

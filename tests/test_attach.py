@@ -844,11 +844,11 @@ def test_forward_windows_console_input_completes_a_report_read_late(
     """
     clock = _use_fake_clock(monkeypatch)
     sock = _TimedSock(clock, delay=0.06)
-    _fake_console_keys(monkeypatch, [_typed("x\x1b[97;1"), _typed(":3u")])
+    _fake_console_keys(monkeypatch, [_typed("x\x1b[97;1"), _typed(":3u"), _typed("y")])
 
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
-    assert [data for _, data in sock.sends] == [b"x"]
+    assert [data for _, data in sock.sends] == [b"x", b"y"]
 
 
 def _scripted_console(
@@ -873,28 +873,39 @@ def _scripted_console(
     monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
 
 
+#: The Windows timer tick: a ``WaitForSingleObject`` timeout ends on a tick, so
+#: a short wait can last up to this long (input still ends it at once).
+_TIMER_TICK = 0.0156
+
+
 def _timeline_console(
     monkeypatch: pytest.MonkeyPatch,
     clock: _FakeClock,
     schedule: list[tuple[float, list[Any]]],
+    tick: float = 0.0,
 ) -> None:
     """Records arrive at fixed times; each read waits as a real console read would.
 
-    A read returns the next records once their time is reached within its
-    timeout, and otherwise ``[]`` after the full timeout; after the last
-    records the console ends.
+    A read returns the next records as soon as their time is reached within its
+    wait, and otherwise ``[]`` once the wait is over. With *tick*, a wait lasts
+    at least one timer tick, as on Windows. After the last records the console
+    ends.
     """
     queue = list(schedule)
+    polls: list[int] = []
 
     def read(timeout_ms: int) -> list[Any] | None:
-        if not queue:
+        polls.append(timeout_ms)
+        if not queue or len(polls) > _POLL_BUDGET:
             return None
+        # Even a 0 ms wait takes a moment; a frozen fake clock would spin forever.
+        wait = max(timeout_ms / 1000, tick) if timeout_ms else 0.0001
         at, events = queue[0]
-        if at <= clock.now + timeout_ms / 1000:
+        if at <= clock.now + wait:
             queue.pop(0)
             clock.now = max(clock.now, at)
             return events
-        clock.now += timeout_ms / 1000
+        clock.now += wait
         return []
 
     monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
@@ -913,51 +924,63 @@ def test_forward_windows_console_input_slow_send_does_not_split_a_report(
     first: str,
     rest: str,
 ) -> None:
-    """Writing ``x`` takes 60 ms; the queued rest of the release is still read in time."""
+    """Writing ``x`` takes 60 ms; the queued rest of the release is still read in time.
+
+    The ``y`` typed after it must be the next and only other write: forwarding
+    goes on after a dropped release.
+    """
     clock = _use_fake_clock(monkeypatch)
     sock = _TimedSock(clock, delay=0.06)
-    _scripted_console(monkeypatch, clock, [(0, _typed(first)), (0, _typed(rest))])
+    steps = [(0.0, _typed(first)), (0.0, _typed(rest)), (0.0, _typed("y"))]
+    _scripted_console(monkeypatch, clock, steps)
 
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
-    assert [data for _, data in sock.sends] == [b"x"]
+    assert [data for _, data in sock.sends] == [b"x", b"y"]
 
 
 @pytest.mark.parametrize(
-    ("first", "rest", "expected"),
+    ("first", "late", "expected"),
     [
-        ("\x1b[", "97;1:3u", []),  # a release: dropped whole
-        ("\x1b[?", "1;2c", [b"\x1b[?1;2c"]),  # a terminal reply: forwarded whole
-        ("\x1bO", "P", [b"\x1bOP"]),  # SS3 F1
+        # vim: Escape, O (open line), A -- not application-mode Arrow Up.
+        ("\x1bO", "A", [b"\x1bO", b"A"]),
+        ("\x1b[", "A", [b"\x1b[", b"A"]),
+        ("\x1b", "j", [b"\x1b", b"j"]),
     ],
 )
-def test_forward_windows_console_input_waits_for_the_queued_rest_of_a_sequence(
+def test_forward_windows_console_input_splits_what_arrives_after_the_deadline(
     monkeypatch: pytest.MonkeyPatch,
     first: str,
-    rest: str,
+    late: str,
     expected: list[bytes],
 ) -> None:
-    """A sequence under way is not cut when the wait overshoots its deadline."""
+    """A record that arrives after the grace period does not join what is held.
+
+    The read returns as soon as it arrives, so arriving and being read after
+    the deadline are the same thing (write time is not counted).
+    """
     clock = _use_fake_clock(monkeypatch)
     sock = _TimedSock(clock)
     grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
-    _scripted_console(monkeypatch, clock, [(0, _typed(first)), (grace + 0.016, _typed(rest))])
+    # The last wait before the deadline overshoots it by up to a timer tick;
+    # the late record arrives within that overshoot, after the deadline.
+    schedule = [(0.0, _typed(first)), (grace + 0.005, _typed(late))]
+    _timeline_console(monkeypatch, clock, schedule, tick=_TIMER_TICK)
 
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
     assert [data for _, data in sock.sends] == expected
 
 
-def test_forward_windows_console_input_joins_an_emoji_read_late(
+def test_forward_windows_console_input_joins_an_emoji_after_a_slow_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = _use_fake_clock(monkeypatch)
     sock = _TimedSock(clock, delay=0.06)
-    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
     _scripted_console(
         monkeypatch,
         clock,
-        [(0, [_key("x", vk=0x58), _key(0xD83D)]), (grace + 0.016, [_key(0xDE00)])],
+        [(0.0, [_key("x", vk=0x58), _key(0xD83D)]), (0.0, [_key(0xDE00)])],
     )
 
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
@@ -965,75 +988,72 @@ def test_forward_windows_console_input_joins_an_emoji_read_late(
     assert [data for _, data in sock.sends] == [b"x", "😀".encode()]
 
 
-def test_forward_windows_console_input_keeps_discarding_across_reads(
+def test_forward_windows_console_input_counts_a_slow_log_write_like_a_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A long release whose batch crosses the bound after the deadline stays dropped."""
     clock = _use_fake_clock(monkeypatch)
     sock = _TimedSock(clock)
-    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
-    report = "\x1b[97;1:3;" + "97:" * 60 + "97u"
+    logger = types.SimpleNamespace(log_input=lambda data: clock.sleep(0.06))
     _scripted_console(
         monkeypatch,
         clock,
-        [
-            (0, _typed(report[:50])),
-            (grace + 0.03, _typed(report[50:150])),  # crosses 128, still no final
-            (0, _typed(report[150:])),
-            (0, _typed("x")),
-        ],
+        [(0.0, _typed("x\x1b")), (0.0, _typed("[97;1:3u")), (0.0, _typed("y"))],
     )
+
+    docker_mod._forward_windows_console_input(sock, logger, threading.Event())
+
+    assert [data for _, data in sock.sends] == [b"x", b"y"]
+
+
+def test_forward_windows_console_input_drops_a_release_read_in_several_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A release longer than the 128-character bound, read in parts in time."""
+    clock = _use_fake_clock(monkeypatch)
+    sock = _TimedSock(clock)
+    report = "\x1b[97;1:3;" + "97:" * 60 + "97u"
+    steps = [(0.0, _typed(report[:100])), (0.0, _typed(report[100:])), (0.0, _typed("x"))]
+    _scripted_console(monkeypatch, clock, steps)
 
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
     assert [data for _, data in sock.sends] == [b"x"]
 
 
-def test_forward_windows_console_input_lets_a_release_trickle_in(
+def test_forward_windows_console_input_bounds_how_long_input_is_held(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Gaps shorter than the grace period, but longer than it in total, are fine.
-
-    Every record that extends the held report restarts its grace period, so
-    the idle reads in each 30 ms gap never give it up.
-    """
-    clock = _use_fake_clock(monkeypatch)
-    sock = _TimedSock(clock)
-    report = "\x1b[97;1:3;" + "97:" * 60 + "97u"
-    chunks = [report[i : i + 20] for i in range(0, len(report), 20)]
-    schedule = [(0.03 * n, _typed(chunk)) for n, chunk in enumerate(chunks)]
-    _timeline_console(monkeypatch, clock, [*schedule, (0.03 * len(chunks), _typed("x"))])
-
-    docker_mod._forward_windows_console_input(sock, None, threading.Event())
-
-    assert clock.now > docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS * 2
-    assert [data for _, data in sock.sends] == [b"x"]
-
-
-def test_forward_windows_console_input_reads_the_queue_before_giving_up(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A late batch that does not extend the sequence (a key-up) is not the end.
-
-    Records may still be queued behind it; they are read before the held
-    sequence is given up.
-    """
+    """Records that extend a hold do not prolong it: a held digit after ESC[
+    goes out at the deadline of the ESC, not seconds later."""
     clock = _use_fake_clock(monkeypatch)
     sock = _TimedSock(clock)
     grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
-    _scripted_console(
-        monkeypatch,
-        clock,
-        [
-            (0, _typed("\x1b[97;1")),
-            (grace + 0.016, [_key(":", vk=0xBA, down=False)]),  # only a key-up
-            (0, _typed(":3u")),
-        ],
-    )
+    repeats = [(0.01 + 0.033 * n, [_key("1", vk=0x31)]) for n in range(30)]  # ~1 s
+    _timeline_console(monkeypatch, clock, [(0.0, _typed("\x1b")), (0.005, _typed("[")), *repeats])
 
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
-    assert sock.sends == []
+    first_at, first = sock.sends[0]
+    assert first.startswith(b"\x1b[")
+    assert first_at <= grace + 0.034  # at most one auto-repeat after the deadline
+    assert b"".join(data for _, data in sock.sends) == b"\x1b[" + b"1" * 30
+
+
+def test_forward_windows_console_input_does_not_eat_typing_after_an_unfinished_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An over-long release whose end never comes stops being discarded at the
+    deadline; what the user types afterwards reaches the agent."""
+    clock = _use_fake_clock(monkeypatch)
+    sock = _TimedSock(clock)
+    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
+    prefix = "\x1b[97;1:3;" + "97:" * 45
+    schedule = [(0.0, _typed(prefix)), (grace + 0.005, _typed("12")), (grace + 0.025, _typed("3a"))]
+    _timeline_console(monkeypatch, clock, schedule, tick=_TIMER_TICK)
+
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
+
+    assert [data for _, data in sock.sends] == [b"12", b"3a"]
 
 
 def test_forward_windows_console_input_gives_up_a_sequence_after_silence(
