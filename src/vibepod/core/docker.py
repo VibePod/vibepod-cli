@@ -406,11 +406,16 @@ _MAX_CSI_PARAMETER_SEQUENCE_CHARS = 128
 #: and matches this is a release still on its way, and is dropped, not sent.
 _KITTY_RELEASE_PREFIX = re.compile(r"\x1b\[\d+(?::\d*){0,2};\d*:3(?:;[\d:]*)?")
 
-#: How long a bare ``ESC`` waits for the rest of its sequence before it is
-#: forwarded as the Escape key itself. Bytes of one sequence normally arrive as a
-#: single burst; the grace period only covers a pseudo-console that delivers that
-#: burst trickling, and stays far below anything a user would notice.
+#: How long the console decoder may hold input back, counted from the start of
+#: the hold: a bare ``ESC`` waiting for the rest of its sequence (then forwarded
+#: as the Escape key), a partial CSI/SS3 sequence, half an emoji, an over-long
+#: release being swallowed. Bytes of one sequence normally arrive as a single
+#: burst; the grace period only covers a pseudo-console that delivers that burst
+#: trickling, and stays far below anything a user would notice.
 _ESCAPE_SEQUENCE_GRACE_SECONDS = 0.05
+#: Extra 0 ms reads, per batch, that take what is queued behind held input
+#: before anything is written; each read already drains the whole queue.
+_HELD_DRAIN_READS = 4
 #: How long the console input thread waits for input before it checks for the
 #: session end again. A key ends the wait at once, so this bounds only how long
 #: the thread outlives the session (and could still take a key from the prompt).
@@ -522,37 +527,50 @@ _INPUT_RECORD_BATCH = 128
 _MAX_INPUT_RECORD_BATCHES = 8
 
 
-def _read_console_key_events(kernel32: Any, handle: Any, timeout_ms: int) -> list[_KeyEvent] | None:
+def _read_console_key_events(
+    kernel32: Any,
+    handle: Any,
+    timeout_ms: int,
+    stop_event: threading.Event | None = None,
+) -> tuple[list[_KeyEvent], bool] | None:
     """Key events queued on the console input *handle*, without ever blocking.
 
     Waits up to *timeout_ms* for the first record, then reads what is queued
-    (up to ``_MAX_INPUT_RECORD_BATCHES`` batches), so the caller can check for
-    the session end between calls and no read is left waiting to steal the next
-    keystroke once the session is over.
+    (up to ``_MAX_INPUT_RECORD_BATCHES`` batches, none more once *stop_event*
+    is set), so the caller can check for the session end between calls and no
+    read is left waiting to steal the next keystroke once the session is over.
     Unlike ``msvcrt.getwch()``, ``ReadConsoleInputW`` leaves the console mode
     alone and hands over the whole record: virtual-key code, modifiers and the
     UTF-16 text unit, so no ``\\xe0`` prefix byte has to be told apart from an
-    ``à``. Non-key records (focus, menu) are skipped. Returns ``[]`` when
-    nothing (or no key) arrived and ``None`` once the console cannot be read.
+    ``à``. Non-key records (focus, menu) are skipped.
+
+    Returns ``(events, broken)``: the events read (``[]`` when nothing, or no
+    key, arrived) and whether a read after the first batch failed, in which
+    case the records already taken off the console are still returned and the
+    caller should stop after forwarding them. ``None`` when the console cannot
+    be read at all.
     """
     if ctypes is None or _INPUT_RECORD is None:
         return None
     status = kernel32.WaitForSingleObject(handle, timeout_ms)
     if status == _WAIT_TIMEOUT:
-        return []
+        return [], False
     if status != _WAIT_OBJECT_0:
         return None
     events: list[_KeyEvent] = []
-    for _ in range(_MAX_INPUT_RECORD_BATCHES):
+    for batch in range(_MAX_INPUT_RECORD_BATCHES):
+        if batch and stop_event is not None and stop_event.is_set():
+            break  # what is still queued is the next prompt's
         queued = ctypes.c_uint32()
         if not kernel32.GetNumberOfConsoleInputEvents(handle, ctypes.byref(queued)):
-            return None
+            return (events, True) if batch else None
         if not queued.value:
             break
         records = (_INPUT_RECORD * min(queued.value, _INPUT_RECORD_BATCH))()
         read = ctypes.c_uint32()
         if not kernel32.ReadConsoleInputW(handle, records, len(records), ctypes.byref(read)):
-            return None
+            # Records read before stay taken off the console: hand them over.
+            return (events, True) if batch else None
         for record in records[: read.value]:
             if record.EventType != _KEY_EVENT:
                 continue
@@ -567,7 +585,7 @@ def _read_console_key_events(kernel32: Any, handle: Any, timeout_ms: int) -> lis
                     state=int(key.dwControlKeyState),
                 ),
             )
-    return events
+    return events, False
 
 
 def _vt_key_bytes(sequence: tuple[str, str, str], modifier: int) -> bytes:
@@ -622,8 +640,16 @@ class _ConsoleKeyDecoder:
         return held.startswith("\x1b[") and _CSI_PARAMETER_CHARS.issuperset(held[2:])
 
     def flush(self) -> bytes:
-        """Forward whatever is held back as it is."""
+        """Forward whatever is held back as it is (the grace period is over)."""
         self._discarding = False  # the rest of that release never came
+        return self._release_held()
+
+    def _release_held(self) -> bytes:
+        """Forward a held ``ESC`` sequence or emoji half, ahead of another key.
+
+        Unlike :meth:`flush` it leaves the swallowing of an over-long release
+        alone: a key pressed while one arrives does not end it.
+        """
         out = b""
         if self._high_surrogate is not None:
             # The low half never came: forward a replacement, not a lone half.
@@ -658,9 +684,9 @@ class _ConsoleKeyDecoder:
         sequence = _VK_SEQUENCES.get(event.vk)
         if sequence is not None:
             modifier = 1 + shift + 2 * alt + 4 * ctrl
-            return self.flush() + _vt_key_bytes(sequence, modifier) * count
+            return self._release_held() + _vt_key_bytes(sequence, modifier) * count
         if event.vk == _VK_TAB and shift:
-            return self.flush() + b"\x1b[Z" * count
+            return self._release_held() + b"\x1b[Z" * count
         char = event.char
         if event.vk == _VK_BACK:
             # A Linux terminal sends DEL for Backspace (``\x08`` shows up as
@@ -680,7 +706,7 @@ class _ConsoleKeyDecoder:
     def _character(self, code: int, meta: bool) -> bytes:
         out = b""
         if 0xD800 <= code <= 0xDBFF:
-            out += self.flush()
+            out += self._release_held()
             self._high_surrogate = code
             self.holds += 1
             return out
@@ -689,10 +715,10 @@ class _ConsoleKeyDecoder:
             text = chr(0x10000 + ((high - 0xD800) << 10) + (code - 0xDC00))
         else:
             if self._high_surrogate is not None:
-                out += self.flush()
+                out += self._release_held()
             text = chr(code)
         if meta:
-            return out + self.flush() + b"\x1b" + _encode_console_character(text)
+            return out + self._release_held() + b"\x1b" + _encode_console_character(text)
         return out + self._text(text)
 
     def _text(self, text: str) -> bytes:
@@ -775,6 +801,10 @@ def _declare_kernel32_prototypes(kernel32: Any) -> Any:
         "WaitForSingleObject": (dword, [handle, dword]),
         "GetNumberOfConsoleInputEvents": (bool_, [handle, ctypes.POINTER(dword)]),
         "ReadConsoleInputW": (
+            bool_,
+            [handle, ctypes.POINTER(_INPUT_RECORD), dword, ctypes.POINTER(dword)],
+        ),
+        "WriteConsoleInputW": (
             bool_,
             [handle, ctypes.POINTER(_INPUT_RECORD), dword, ctypes.POINTER(dword)],
         ),
@@ -869,13 +899,61 @@ def _leave_console_raw_input(old_mode: int) -> None:
         pass
 
 
-def _console_key_reader() -> Callable[[int], list[_KeyEvent] | None] | None:
-    """``read(timeout_ms)`` over our console input handle, ``None`` off Windows."""
+def _console_key_reader(
+    stop_event: threading.Event | None = None,
+) -> Callable[[int], list[_KeyEvent] | None] | None:
+    """``read(timeout_ms)`` over our console input handle, ``None`` off Windows.
+
+    ``read`` returns the key events, or ``None`` once the console cannot be
+    read; after a read that failed part way, it hands over what it had read and
+    returns ``None`` from the next call on, without trying the console again.
+    """
     kernel32 = _kernel32()
     if kernel32 is None:
         return None
     handle = _console_input_handle(kernel32)
-    return lambda timeout_ms: _read_console_key_events(kernel32, handle, timeout_ms)
+    broken = False
+
+    def read(timeout_ms: int) -> list[_KeyEvent] | None:
+        nonlocal broken
+        if broken:
+            return None
+        result = _read_console_key_events(kernel32, handle, timeout_ms, stop_event)
+        if result is None:
+            return None
+        events, broken = result
+        return events
+
+    return read
+
+
+#: ``INPUT_RECORD`` event type of a focus record: a console app ignores one it
+#: did not ask for, which makes it a harmless way to end a pending read.
+_FOCUS_EVENT = 0x0010
+
+
+def _wake_console_reader() -> None:
+    """Put a focus record into the console input, ending a read waiting there.
+
+    ``ReadConsoleInputW`` waits when another reader of the same console took
+    the record it was about to read; the input thread could then outlive the
+    session and take the next keystroke from the restored prompt.
+    """
+    kernel32 = _kernel32()
+    if kernel32 is None or ctypes is None or _INPUT_RECORD is None:
+        return
+    record = _INPUT_RECORD()
+    record.EventType = _FOCUS_EVENT
+    written = ctypes.c_uint32()
+    try:
+        kernel32.WriteConsoleInputW(
+            _console_input_handle(kernel32),
+            ctypes.byref(record),
+            1,
+            ctypes.byref(written),
+        )
+    except Exception:  # pragma: no cover - console API failure
+        pass
 
 
 def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading.Event) -> None:
@@ -885,12 +963,14 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
     :func:`_read_console_key_events`) and translated by
     :class:`_ConsoleKeyDecoder`. What the decoder holds is given up (forwarded
     as is) once ``_ESCAPE_SEQUENCE_GRACE_SECONDS`` have passed since the hold
-    started, not counting time spent writing to the container, however many
-    records arrive meanwhile (a held Shift or digit auto-repeating), so input
-    is never held back for longer. What is still held when the session ends is
+    started, however many records arrive meanwhile (a held Shift or digit
+    auto-repeating), so input is never held back for longer. While something
+    is held, what is already queued behind it is read before anything is
+    written, so a slow write cannot make records that arrived in time look
+    late, nor records that arrived late look timely. What is still held when the session ends is
     dropped, since the socket is closing.
     """
-    read = _console_key_reader()
+    read = _console_key_reader(stop_event)
     if read is None:
         return
     decoder = _ConsoleKeyDecoder()
@@ -899,31 +979,22 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
     flush_at: float | None = None
 
     def send(data: bytes) -> bool:
-        """Forward *data*; False once the session is over or the socket broke.
-
-        A slow write (a busy named pipe, a slow session log) does not eat into
-        the grace period of what is held: the deadline moves by the time the
-        write took. Otherwise records that were queued in time would be read
-        after the deadline and look late.
-        """
-        nonlocal flush_at
+        """Forward *data*; False once the session is over or the socket broke."""
         if not data:
             return True
         if stop_event.is_set():
             # The session ended while we waited; the socket is closed.
             return False
-        started = time.monotonic()
+        if logger is not None:
+            # Outside the socket error handling: a failing session log is not a
+            # closed socket, and must not silently stop input forwarding.
+            logger.log_input(data)
         try:
-            if logger is not None:
-                logger.log_input(data)
             sock.sendall(data)
         except Exception:
             # A closed NpipeSocket raises RuntimeError, a broken pipe
             # pywintypes.error; neither is an OSError.
             return False
-        finally:
-            if flush_at is not None:
-                flush_at += time.monotonic() - started
         return True
 
     while not stop_event.is_set():
@@ -941,16 +1012,28 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
             return
         if flush_at is not None and time.monotonic() >= flush_at:
             # The grace period ran out before these records were read. A read
-            # returns as soon as input arrives and takes the whole queued burst,
-            # and write time is not counted, so they arrived after it: forward
-            # what is held on its own first (Escape, O, then a late A must not
-            # become Arrow Up). The attach stream may still merge the two writes
-            # on the way to the agent.
+            # returns as soon as input arrives, takes the whole queued burst,
+            # and nothing is written while records may still be queued behind
+            # a hold (see below), so they arrived after it: forward what is
+            # held on its own first (Escape, O, then a late A must not become
+            # Arrow Up). The attach stream may still merge the two writes on
+            # the way to the agent.
             flush_at = None
             if not send(decoder.flush()):
                 return
         holds = decoder.holds
         data = b"".join(decoder.feed(event) for event in events)
+        drains = 0
+        while decoder.pending and events and drains < _HELD_DRAIN_READS:
+            # Before writing (a write can take long on a busy pipe), take what
+            # is queued behind the held input now: it arrived in time, and must
+            # not be judged by when a slow write let us read it.
+            drains += 1
+            events = read(0)
+            if events is None:
+                send(data)
+                return
+            data += b"".join(decoder.feed(event) for event in events)
         if not decoder.pending:
             flush_at = None
         elif flush_at is None or decoder.holds != holds:
@@ -2118,7 +2201,12 @@ class DockerManager:
             if input_stop_event is not None:
                 input_stop_event.set()
             if input_thread is not None:
-                input_thread.join(timeout=0.2)
+                input_thread.join(timeout=0.05)
+                if input_thread.is_alive():
+                    # Still inside a console read: end it before the prompt
+                    # gets the console back, or it takes the next keystroke.
+                    _wake_console_reader()
+                    input_thread.join(timeout=0.2)
             if old_console_mode is not None:
                 _leave_console_raw_input(old_console_mode)
             if sigwinch is not None and old_winch_handler is not None:

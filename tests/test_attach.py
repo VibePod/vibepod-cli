@@ -330,7 +330,7 @@ def _attach_windows_npipe(
     monkeypatch.setattr(docker_mod, "termios", None)
     monkeypatch.setattr(docker_mod, "tty", None)
     monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace())
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda *_: read)
     monkeypatch.setattr(docker_mod.select, "select", _no_select)
     monkeypatch.setattr(docker_mod.sys, "stdin", _FakeStdin())
     monkeypatch.setattr(docker_mod.sys, "stdout", fake_stdout)
@@ -390,6 +390,24 @@ def test_attach_interactive_windows_broken_pipe_ends_session(
     tail, written = _attach_windows_npipe(monkeypatch, sock)
     assert written == b"bye\r\n"
     assert tail == b"bye\r\n"
+
+
+def test_attach_interactive_windows_wakes_an_input_thread_stuck_in_a_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A console read still pending at the session end is ended before the
+    prompt gets the console back."""
+    woken = threading.Event()
+
+    def stuck_forwarder(sock: Any, logger: Any, stop: threading.Event) -> None:
+        woken.wait(5)  # a ReadConsoleInputW that only a new record ends
+
+    monkeypatch.setattr(docker_mod, "_forward_windows_console_input", stuck_forwarder)
+    monkeypatch.setattr(docker_mod, "_wake_console_reader", woken.set)
+
+    _attach_windows_npipe(monkeypatch, _NpipeLikeSocket([b"bye\r\n"]))
+
+    assert woken.is_set()
 
 
 def test_attach_interactive_windows_enters_and_restores_console_input(
@@ -588,7 +606,7 @@ def _fake_console_keys(
             return on_idle(timeout_ms)
         return None
 
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda *_: read)
     return timeouts
 
 
@@ -715,6 +733,8 @@ def test_forward_windows_console_input_sends_an_expired_escape_on_its_own(
     def overshooting_wait(timeout_ms: int) -> list[Any] | None:
         if late_served:
             return None
+        if not timeout_ms:
+            return []  # nothing queued behind the ESC yet
         time.sleep(grace + 0.02)  # the wait ends well after the deadline ...
         late_served.append(True)
         return late  # ... with records that arrived meanwhile
@@ -795,7 +815,7 @@ def test_forward_windows_console_input_restarts_grace_for_a_new_escape(
             return [esc]
         return []
 
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda *_: read)
     docker_mod._forward_windows_console_input(sock, None, stop)
 
     assert [data for _, data in sock.sends] == [b"\x1b", b"\x1b"]
@@ -816,21 +836,24 @@ def test_forward_windows_console_input_rounds_the_last_wait_up(
 
     def read(timeout_ms: int) -> list[Any] | None:
         timeouts.append(timeout_ms)
-        if len(timeouts) == 1:
+        if not timeout_ms:
+            return []  # the check for records queued behind the ESC: none
+        waits = len([t for t in timeouts if t])
+        if waits == 1:
             return [_key("\x1b", vk=0x1B)]  # t = 0: deadline at `grace`
-        if len(timeouts) == 2:
+        if waits == 2:
             clock.now = grace - 0.0005
             return []
-        if len(timeouts) == 3:
+        if waits == 3:
             clock.now = grace  # the deadline: the ESC goes out
             return []
         return None
 
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda *_: read)
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
-    assert timeouts[2] == 1
-    assert 0 not in timeouts
+    assert [t for t in timeouts if t][2] == 1  # 0.5 ms before the deadline
+    assert timeouts.count(0) == 1  # only the queue check right after the ESC
     assert sock.sends == [(grace, b"\x1b")]
 
 
@@ -859,18 +882,23 @@ def _scripted_console(
     """Each read lets *wait* seconds pass on *clock*, then returns its records.
 
     A wait longer than the forwarder asked for is a wait that overshot (Windows
-    timers tick in ~15.6 ms steps); after the last step the console ends.
+    timers tick in ~15.6 ms steps). A 0 ms read only checks what is queued, so
+    it gets a step without a wait and leaves a later one alone. After the last
+    step the console ends.
     """
     queue = list(steps)
 
     def read(timeout_ms: int) -> list[Any] | None:
         if not queue:
             return None
+        if not timeout_ms and queue[0][0]:
+            clock.now += 0.0001
+            return []
         wait, events = queue.pop(0)
         clock.now += wait
         return events
 
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda *_: read)
 
 
 #: The Windows timer tick: a ``WaitForSingleObject`` timeout ends on a tick, so
@@ -908,7 +936,7 @@ def _timeline_console(
         clock.now += wait
         return []
 
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda *_: read)
 
 
 @pytest.mark.parametrize(
@@ -985,10 +1013,11 @@ def test_forward_windows_console_input_joins_an_emoji_after_a_slow_send(
 
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
-    assert [data for _, data in sock.sends] == [b"x", "😀".encode()]
+    # The low half was queued behind the high one: read before writing ``x``.
+    assert [data for _, data in sock.sends] == ["x😀".encode()]
 
 
-def test_forward_windows_console_input_counts_a_slow_log_write_like_a_send(
+def test_forward_windows_console_input_slow_log_write_does_not_split_a_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clock = _use_fake_clock(monkeypatch)
@@ -1035,7 +1064,9 @@ def test_forward_windows_console_input_bounds_how_long_input_is_held(
 
     first_at, first = sock.sends[0]
     assert first.startswith(b"\x1b[")
-    assert first_at <= grace + 0.034  # at most one auto-repeat after the deadline
+    # At the deadline of the ESC itself (the fake reads round to 1 ms), not at
+    # one restarted by the first digit at 10 ms.
+    assert first_at == pytest.approx(grace, abs=0.001)
     assert b"".join(data for _, data in sock.sends) == b"\x1b[" + b"1" * 30
 
 
@@ -1054,6 +1085,68 @@ def test_forward_windows_console_input_does_not_eat_typing_after_an_unfinished_r
     docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
     assert [data for _, data in sock.sends] == [b"12", b"3a"]
+
+
+def test_forward_windows_console_input_slow_write_does_not_make_late_keys_timely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Escape, O at t=0, then A at 55 ms, while writing ``x`` takes 60 ms.
+
+    The A arrived after the deadline, during the write; it must not complete
+    the held ``ESC O`` into Arrow Up.
+    """
+    clock = _use_fake_clock(monkeypatch)
+    sock = _TimedSock(clock, delay=0.06)
+    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
+    _timeline_console(monkeypatch, clock, [(0.0, _typed("x\x1bO")), (grace + 0.005, _typed("A"))])
+
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
+
+    assert [data for _, data in sock.sends] == [b"x", b"\x1bO", b"A"]
+
+
+def test_forward_windows_console_input_reads_queued_records_before_a_slow_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What is queued behind held input is read before writing, not after."""
+    clock = _use_fake_clock(monkeypatch)
+    sock = _TimedSock(clock, delay=0.2)
+    schedule = [(0.0, _typed("x\x1b")), (0.0, _typed("[97;1:3u")), (0.3, _typed("y"))]
+    _timeline_console(monkeypatch, clock, schedule)
+
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
+
+    assert [data for _, data in sock.sends] == [b"x", b"y"]
+
+
+def test_forward_windows_console_input_lets_a_session_log_failure_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing log write is not a closed socket: it must not end input quietly."""
+
+    def broken_log(data: bytes) -> None:
+        raise OSError("disk full")
+
+    _fake_console_keys(monkeypatch, [_typed("a")])
+
+    with pytest.raises(OSError, match="disk full"):
+        docker_mod._forward_windows_console_input(
+            _RecordingSock(),
+            types.SimpleNamespace(log_input=broken_log),
+            threading.Event(),
+        )
+
+
+def test_forward_windows_console_input_forwards_records_read_before_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reader that fails part way hands over what it read; it is forwarded."""
+    _fake_console_keys(monkeypatch, [_typed("ab")])  # then the reader returns None
+    sock = _RecordingSock()
+
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
+
+    assert bytes(sock.sent) == b"ab"
 
 
 def test_forward_windows_console_input_gives_up_a_sequence_after_silence(
@@ -1107,7 +1200,7 @@ def test_forward_windows_console_input_drops_key_after_session_end(
             _ClosedSock.attempts += 1
             raise RuntimeError("sent to a closed socket")
 
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda *_: read)
     docker_mod._forward_windows_console_input(_ClosedSock(), None, stop)
 
     assert _ClosedSock.attempts == 0
@@ -1164,7 +1257,7 @@ def test_forward_windows_console_input_ends_soon_after_stop(
 def test_forward_windows_console_input_is_a_noop_without_a_console(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: None)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda *_: None)
     docker_mod._forward_windows_console_input(object(), None, threading.Event())
 
 

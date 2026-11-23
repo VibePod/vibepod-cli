@@ -7,6 +7,7 @@ driven through a fake ``kernel32`` that fills real ``INPUT_RECORD`` arrays.
 from __future__ import annotations
 
 import ctypes
+import threading
 import types
 from typing import Any
 
@@ -170,6 +171,7 @@ def test_kernel32_prototypes_keep_handles_pointer_sized() -> None:
         "WaitForSingleObject",
         "GetNumberOfConsoleInputEvents",
         "ReadConsoleInputW",
+        "WriteConsoleInputW",
     ]
     fake = types.SimpleNamespace(**{name: types.SimpleNamespace() for name in names})
 
@@ -325,10 +327,28 @@ def test_alt_key_after_held_escape_flushes_it_first() -> None:
 class _RecordConsole:
     """kernel32 stand-in that serves queued INPUT_RECORDs."""
 
-    def __init__(self, records: list[tuple[int, docker_mod._KeyEvent | None]], wait: int = 0):
+    def __init__(
+        self,
+        records: list[tuple[int, docker_mod._KeyEvent | None]],
+        wait: int = 0,
+        fail_from_read: int | None = None,
+        on_read: Any = None,
+    ):
         self.records = list(records)
         self.wait = wait
         self.read_sizes: list[int] = []
+        #: The ReadConsoleInputW call (1-based) from which on reads fail.
+        self.fail_from_read = fail_from_read
+        self.on_read = on_read
+        self.written: list[int] = []
+
+    def GetStdHandle(self, which: int) -> int:
+        return 7
+
+    def WriteConsoleInputW(self, handle: Any, record: Any, count: int, written: Any) -> int:
+        del handle, count, written
+        self.written.append(record._obj.EventType)
+        return 1
 
     def WaitForSingleObject(self, handle: Any, timeout_ms: int) -> int:
         del handle, timeout_ms
@@ -342,6 +362,10 @@ class _RecordConsole:
     def ReadConsoleInputW(self, handle: Any, buf: Any, size: int, read: Any) -> int:
         del handle
         self.read_sizes.append(size)
+        if self.fail_from_read is not None and len(self.read_sizes) >= self.fail_from_read:
+            return 0
+        if self.on_read is not None:
+            self.on_read()
         taken, self.records = self.records[:size], self.records[size:]
         for slot, (event_type, event) in zip(buf, taken, strict=False):
             slot.EventType = event_type
@@ -367,8 +391,8 @@ def test_read_console_key_events_returns_key_records_only() -> None:
     focus = (0x0010, None)
     console = _RecordConsole([(docker_mod._KEY_EVENT, a), focus])
 
-    assert docker_mod._read_console_key_events(console, 7, 10) == [a]
-    assert docker_mod._read_console_key_events(console, 7, 10) == []  # timed out
+    assert docker_mod._read_console_key_events(console, 7, 10) == ([a], False)
+    assert docker_mod._read_console_key_events(console, 7, 10) == ([], False)  # timed out
 
 
 def test_read_console_key_events_takes_the_whole_queued_burst() -> None:
@@ -378,9 +402,9 @@ def test_read_console_key_events_takes_the_whole_queued_burst() -> None:
     batch = docker_mod._INPUT_RECORD_BATCH
     console = _RecordConsole([(docker_mod._KEY_EVENT, a)] * 300)
 
-    events = docker_mod._read_console_key_events(console, 7, 10)
+    result = docker_mod._read_console_key_events(console, 7, 10)
 
-    assert events is not None and len(events) == 300
+    assert result is not None and len(result[0]) == 300 and not result[1]
     assert console.read_sizes == [batch, batch, 300 - 2 * batch]
 
 
@@ -389,12 +413,73 @@ def test_read_console_key_events_bounds_one_read() -> None:
     batches = docker_mod._MAX_INPUT_RECORD_BATCHES
     console = _RecordConsole([(docker_mod._KEY_EVENT, a)] * 5000)
 
-    events = docker_mod._read_console_key_events(console, 7, 10)
+    result = docker_mod._read_console_key_events(console, 7, 10)
 
-    assert events is not None and len(events) == batches * docker_mod._INPUT_RECORD_BATCH
+    assert result is not None and len(result[0]) == batches * docker_mod._INPUT_RECORD_BATCH
     assert len(console.read_sizes) == batches
 
 
 def test_read_console_key_events_reports_a_failed_wait() -> None:
     console = _RecordConsole([(docker_mod._KEY_EVENT, key("a"))], wait=0xFFFFFFFF)
     assert docker_mod._read_console_key_events(console, 7, 10) is None
+
+
+def test_read_console_key_events_stops_draining_once_the_session_ends() -> None:
+    """Records queued after the first batch belong to the next prompt then."""
+    a = key("a", vk=0x41)
+    stop = threading.Event()
+    console = _RecordConsole([(docker_mod._KEY_EVENT, a)] * 300, on_read=stop.set)
+
+    result = docker_mod._read_console_key_events(console, 7, 10, stop)
+
+    assert result is not None and len(result[0]) == docker_mod._INPUT_RECORD_BATCH
+    assert len(console.records) == 300 - docker_mod._INPUT_RECORD_BATCH  # left for the prompt
+
+
+def test_read_console_key_events_keeps_what_it_read_before_a_later_failure() -> None:
+    a = key("a", vk=0x41)
+    console = _RecordConsole([(docker_mod._KEY_EVENT, a)] * 300, fail_from_read=2)
+
+    result = docker_mod._read_console_key_events(console, 7, 10)
+
+    assert result is not None
+    events, broken = result
+    assert len(events) == docker_mod._INPUT_RECORD_BATCH and broken
+
+
+def test_read_console_key_events_reports_a_failed_first_read() -> None:
+    console = _RecordConsole([(docker_mod._KEY_EVENT, key("a"))], fail_from_read=1)
+    assert docker_mod._read_console_key_events(console, 7, 10) is None
+
+
+def test_console_key_reader_hands_over_the_prefix_then_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    a = key("a", vk=0x41)
+    console = _RecordConsole([(docker_mod._KEY_EVENT, a)] * 300, fail_from_read=2)
+    monkeypatch.setattr(docker_mod, "_kernel32", lambda: console)
+
+    read = docker_mod._console_key_reader()
+    assert read is not None
+    first = read(10)
+
+    assert first is not None and len(first) == docker_mod._INPUT_RECORD_BATCH
+    sizes = list(console.read_sizes)
+    assert read(10) is None  # without trying the console again
+    assert console.read_sizes == sizes
+
+
+def test_wake_console_reader_writes_a_focus_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    console = _RecordConsole([])
+    monkeypatch.setattr(docker_mod, "_kernel32", lambda: console)
+
+    docker_mod._wake_console_reader()
+
+    assert console.written == [docker_mod._FOCUS_EVENT]
+
+
+def test_a_key_pressed_while_a_release_is_swallowed_does_not_end_it() -> None:
+    report = "\x1b[97;1:3;" + "97:" * 45
+    tail = "97:97u"
+    out = decode(typed(report), key(vk=0x26, state=ENHANCED), typed(tail), typed("x"))
+    assert out == b"\x1b[Ax"
