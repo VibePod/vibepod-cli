@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 import os
 import queue
 import re
@@ -15,8 +16,9 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 from vibepod.constants import CONTAINER_LABEL_MANAGED, agent_ids
@@ -39,6 +41,8 @@ else:
     termios = _termios
     tty = _tty
 
+# Only imported as the "this is a Windows console runtime" signal for
+# attach_interactive (and its tests); console keys are read via kernel32.
 try:
     import msvcrt as _msvcrt
 except ImportError:  # pragma: no cover - exercised off Windows
@@ -352,12 +356,11 @@ _ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
 #: from interfering with the agent's own line editing.
 #:
 #: ``ENABLE_VIRTUAL_TERMINAL_INPUT`` is cleared rather than set, although it would
-#: hand us ready-made VT sequences: it switches the pseudo-console to generating
-#: bytes per key *event*, and because the CRT flips the console mode around every
-#: single ``msvcrt.getwch()`` read, press and release then get encoded
-#: inconsistently -- one ``a`` arrives as ``a`` plus a kitty ``ESC[97;1:3u``
-#: key-release report that the agent inserts as text. Key encoding therefore
-#: stays legacy and ``_EXTENDED_KEY_SEQUENCES`` does the translating.
+#: hand us ready-made VT sequences: in VT mode the pseudo-console delivers keys as
+#: runs of escape text, which loses the virtual-key code, modifier state and the
+#: press/release distinction that :class:`_ConsoleKeyDecoder` works from (with
+#: the old ``msvcrt.getwch()`` reader it also leaked kitty ``ESC[97;1:3u``
+#: key-release reports into the prompt). Key reporting therefore stays legacy.
 _RAW_CONSOLE_INPUT_CLEAR = (
     _ENABLE_ECHO_INPUT
     | _ENABLE_LINE_INPUT
@@ -368,44 +371,6 @@ _RAW_CONSOLE_INPUT_CLEAR = (
     | _ENABLE_QUICK_EDIT_MODE
     | _ENABLE_VIRTUAL_TERMINAL_INPUT
 )
-
-#: Scan codes reported after the ``\x00``/``\xe0`` console prefix, mapped to the VT
-#: sequences a Linux TTY expects. This is how navigation keys reach the agent:
-#: the console is kept in its legacy key reporting (see
-#: :func:`_raw_console_input_mode` for why), so every arrow/Home/End/Delete/F key
-#: arrives as a scan code pair.
-_EXTENDED_KEY_SEQUENCES: dict[int, bytes] = {
-    59: b"\x1bOP",  # F1
-    60: b"\x1bOQ",  # F2
-    61: b"\x1bOR",  # F3
-    62: b"\x1bOS",  # F4
-    63: b"\x1b[15~",  # F5
-    64: b"\x1b[17~",  # F6
-    65: b"\x1b[18~",  # F7
-    66: b"\x1b[19~",  # F8
-    67: b"\x1b[20~",  # F9
-    68: b"\x1b[21~",  # F10
-    71: b"\x1b[H",  # Home
-    72: b"\x1b[A",  # Arrow Up
-    73: b"\x1b[5~",  # Page Up
-    75: b"\x1b[D",  # Arrow Left
-    77: b"\x1b[C",  # Arrow Right
-    79: b"\x1b[F",  # End
-    80: b"\x1b[B",  # Arrow Down
-    81: b"\x1b[6~",  # Page Down
-    82: b"\x1b[2~",  # Insert
-    83: b"\x1b[3~",  # Delete
-    133: b"\x1b[23~",  # F11
-    134: b"\x1b[24~",  # F12
-    15: b"\x1b[Z",  # Shift+Tab
-    115: b"\x1b[1;5D",  # Ctrl+Left
-    116: b"\x1b[1;5C",  # Ctrl+Right
-    141: b"\x1b[1;5A",  # Ctrl+Up
-    145: b"\x1b[1;5B",  # Ctrl+Down
-    119: b"\x1b[1;5H",  # Ctrl+Home
-    117: b"\x1b[1;5F",  # Ctrl+End
-    147: b"\x1b[3;5~",  # Ctrl+Delete
-}
 
 
 def _encode_console_character(ch: str) -> bytes:
@@ -418,111 +383,391 @@ def _encode_console_character(ch: str) -> bytes:
     return ch.encode("utf-8", errors="replace")
 
 
-#: A kitty keyboard protocol key report (CSI u): a codepoint, then optional
-#: shifted/base alternates and a modifier field, any of which may carry a
-#: ``:value`` sub-field. Group 1 is the event type of the modifier field, where
-#: ``2`` is auto-repeat and ``3`` is a key *release*.
-_KITTY_KEY_REPORT = re.compile(rb"\x1b\[\d+(?::\d+)?(?:;\d+(?::(\d+))?)?u")
+#: A kitty keyboard protocol key report (CSI u): a codepoint with optional
+#: ``:shifted:base`` alternates (either may be empty), then an optional
+#: ``modifiers:event-type`` field and an optional ``;text`` field of
+#: ``:``-separated codepoints (``ESC[97:65:97;2:3u``, ``ESC[97;1:3;97u``).
+#: Group 1 is the event type, where ``2`` is auto-repeat and ``3`` a key *release*.
+_KITTY_KEY_REPORT = re.compile(rb"\x1b\[\d+(?::\d*){0,2}(?:;\d*(?::(\d+))?(?:;[\d:]*)?)?u")
 
 #: CSI/SS3 final bytes (0x40-0x7E per ECMA-48); ``[`` opens a CSI and ``O`` opens
 #: SS3, so both fall in that range but act as intermediates here.
 _CSI_FINAL_FIRST, _CSI_FINAL_LAST = 0x40, 0x7E
 _CSI_INTERMEDIATES = "[O"
 _MAX_ESCAPE_SEQUENCE_CHARS = 32
+#: A CSI that so far holds only parameter bytes may grow longer: a kitty key
+#: report's ``;text`` field can carry several codepoints, and a release report
+#: cut at 32 characters would reach the agent as stray text.
+_CSI_PARAMETER_CHARS = frozenset("0123456789:;")
+_MAX_CSI_PARAMETER_SEQUENCE_CHARS = 128
+#: The start of a kitty key *release* report: the codepoint (with optional
+#: alternates), then a modifier field whose event type is ``3``, then possibly
+#: the start of the text field. A held sequence that reaches the bound above
+#: and matches this is a release still on its way, and is dropped, not sent.
+_KITTY_RELEASE_PREFIX = re.compile(r"\x1b\[\d+(?::\d*){0,2};\d*:3(?:;[\d:]*)?")
 
-#: How long a bare ``ESC`` waits for the rest of its sequence before it is
-#: forwarded as the Escape key itself. Bytes of one sequence normally arrive as a
-#: single burst; the grace period only covers a pseudo-console that delivers that
-#: burst trickling, and stays far below anything a user would notice.
+#: How long the console decoder may hold input back, counted from the start of
+#: the hold: a bare ``ESC`` waiting for the rest of its sequence (then forwarded
+#: as the Escape key), a partial CSI/SS3 sequence, half an emoji, an over-long
+#: release being swallowed. Bytes of one sequence normally arrive as a single
+#: burst; the grace period only covers a pseudo-console that delivers that burst
+#: trickling, and stays far below anything a user would notice.
 _ESCAPE_SEQUENCE_GRACE_SECONDS = 0.05
-_KEY_POLL_INTERVAL = 0.002
-#: How often the console input thread checks for a key while idle. It bounds
-#: both the typing latency and how long the thread outlives the session.
+#: Extra 0 ms reads, per batch, that take what is queued behind held input
+#: before anything is written; each read already drains the whole queue.
+_HELD_DRAIN_READS = 4
+#: How long the console input thread waits for input before it checks for the
+#: session end again. A key ends the wait at once, so this bounds only how long
+#: the thread outlives the session (and could still take a key from the prompt).
 _KEY_WAIT_POLL_SECONDS = 0.01
 
 
-def _console_key_available(deadline: float | None = None) -> bool:
-    """True once the console has further key events queued.
+#: ``INPUT_RECORD`` event type of a key record, ``KEY_EVENT_RECORD`` control key
+#: state flags (wincon.h) and the virtual-key codes (winuser.h) handled by name.
+_KEY_EVENT = 0x0001
+_RIGHT_ALT_PRESSED = 0x0001
+_LEFT_ALT_PRESSED = 0x0002
+_RIGHT_CTRL_PRESSED = 0x0004
+_LEFT_CTRL_PRESSED = 0x0008
+_SHIFT_PRESSED = 0x0010
+_ENHANCED_KEY = 0x0100
+_ALT_PRESSED = _RIGHT_ALT_PRESSED | _LEFT_ALT_PRESSED
+_CTRL_PRESSED = _RIGHT_CTRL_PRESSED | _LEFT_CTRL_PRESSED
+_VK_BACK = 0x08
+_VK_TAB = 0x09
+_VK_MENU = 0x12
+_VK_SPACE = 0x20
+#: Navigation keys the numpad digits turn into with NumLock off (0-9 as Insert,
+#: End, Down, Page Down, Left, Clear, Right, Home, Up, Page Up). Only these
+#: numpad copies lack ``ENHANCED_KEY``; the dedicated arrow/Home/... keys have it.
+_VK_NUMPAD_NAVIGATION = frozenset({0x2D, 0x23, 0x28, 0x22, 0x25, 0x0C, 0x27, 0x24, 0x26, 0x21})
 
-    With a *deadline* the answer is waited for (polled, not blocked) until then,
-    so a sequence split across several reads is still recognized.
+#: Keys that send a VT sequence instead of text, by virtual-key code, as
+#: ``(introducer, number, final)``: ``ESC`` + introducer + number + final when
+#: no modifier is held (``ESC[A``, ``ESC[5~``, ``ESC OP``), and the xterm
+#: ``ESC[<number or 1>;<modifier><final>`` form otherwise (``ESC[1;5D``,
+#: ``ESC[3;5~``, ``ESC[1;2P``).
+_VK_SEQUENCES: dict[int, tuple[str, str, str]] = {
+    0x21: ("[", "5", "~"),  # Page Up
+    0x22: ("[", "6", "~"),  # Page Down
+    0x23: ("[", "", "F"),  # End
+    0x24: ("[", "", "H"),  # Home
+    0x25: ("[", "", "D"),  # Arrow Left
+    0x26: ("[", "", "A"),  # Arrow Up
+    0x27: ("[", "", "C"),  # Arrow Right
+    0x28: ("[", "", "B"),  # Arrow Down
+    0x2D: ("[", "2", "~"),  # Insert
+    0x2E: ("[", "3", "~"),  # Delete
+    0x70: ("O", "", "P"),  # F1
+    0x71: ("O", "", "Q"),  # F2
+    0x72: ("O", "", "R"),  # F3
+    0x73: ("O", "", "S"),  # F4
+    0x74: ("[", "15", "~"),  # F5
+    0x75: ("[", "17", "~"),  # F6
+    0x76: ("[", "18", "~"),  # F7
+    0x77: ("[", "19", "~"),  # F8
+    0x78: ("[", "20", "~"),  # F9
+    0x79: ("[", "21", "~"),  # F10
+    0x7A: ("[", "23", "~"),  # F11
+    0x7B: ("[", "24", "~"),  # F12
+}
+
+
+def _input_record_type() -> Any:
+    """The ctypes ``INPUT_RECORD`` (20 bytes) with its ``KEY_EVENT_RECORD`` member.
+
+    ``uChar`` is spelled as a plain UTF-16 code unit (``c_uint16``): ``c_wchar``
+    is 4 bytes off Windows, which would give the layout tests a different struct.
     """
-    kbhit = getattr(msvcrt, "kbhit", None) if msvcrt is not None else None
-    if kbhit is None:
-        return False
-    while True:
-        try:
-            if kbhit():
-                return True
-        except OSError:
-            return False
-        if deadline is None or time.monotonic() >= deadline:
-            return False
-        time.sleep(_KEY_POLL_INTERVAL)
+    import ctypes as c
+
+    class KeyEventRecord(c.Structure):
+        _fields_ = [
+            ("bKeyDown", c.c_int),
+            ("wRepeatCount", c.c_uint16),
+            ("wVirtualKeyCode", c.c_uint16),
+            ("wVirtualScanCode", c.c_uint16),
+            ("uChar", c.c_uint16),
+            ("dwControlKeyState", c.c_uint32),
+        ]
+
+    class InputRecordEvent(c.Union):
+        # The mouse record is the largest member (16 bytes); only keys are read.
+        _fields_ = [("KeyEvent", KeyEventRecord), ("_size", c.c_ubyte * 16)]
+
+    class InputRecord(c.Structure):
+        _fields_ = [("EventType", c.c_uint16), ("Event", InputRecordEvent)]
+
+    return InputRecord
 
 
-def _console_escape_bytes() -> bytes:
-    """Forward the escape sequence queued behind a bare ``ESC`` key read.
+_INPUT_RECORD: Any = _input_record_type() if ctypes is not None else None
 
-    A terminal (or the pseudo-console replaying its output as key events for a
-    legacy console app) reports one key as a burst of events, so what follows
-    belongs to this sequence -- even when the pseudo-console hands the burst out
-    a few bytes at a time, which the grace period in ``_console_key_available``
-    covers. Kitty key *release* reports -- one ``a`` arriving as ``a`` plus an
-    ``ESC[97;1:3u`` -- are dropped, since a Linux PTY has no such thing and a
-    prompt that never enabled the protocol inserts them as stray text. Press and
-    auto-repeat reports, Alt-as-Meta (``ESC`` plus a char), bracketed paste
-    markers and SS3 keys are forwarded verbatim.
+
+class _KeyEvent(NamedTuple):
+    """The fields of one console ``KEY_EVENT_RECORD`` this module looks at."""
+
+    key_down: bool
+    repeat: int
+    vk: int
+    scan: int
+    #: UTF-16 code unit of the text the key produces; 0 for keys without text.
+    char: int
+    #: ``dwControlKeyState``: modifier, lock key and ``ENHANCED_KEY`` flags.
+    state: int
+
+
+_WAIT_OBJECT_0 = 0x0000
+_WAIT_TIMEOUT = 0x0102
+#: Records read per ``ReadConsoleInputW`` call, and how many such batches one
+#: read takes while records stay queued. A burst (a long report, a paste) is
+#: then read in one go: records already queued must not look late to the
+#: caller's deadline just because they did not fit into the first batch.
+_INPUT_RECORD_BATCH = 128
+_MAX_INPUT_RECORD_BATCHES = 8
+
+
+def _read_console_key_events(
+    kernel32: Any,
+    handle: Any,
+    timeout_ms: int,
+    stop_event: threading.Event | None = None,
+) -> tuple[list[_KeyEvent], bool] | None:
+    """Key events queued on the console input *handle*, without ever blocking.
+
+    Waits up to *timeout_ms* for the first record, then reads what is queued
+    (up to ``_MAX_INPUT_RECORD_BATCHES`` batches, none more once *stop_event*
+    is set), so the caller can check for the session end between calls and no
+    read is left waiting to steal the next keystroke once the session is over.
+    Unlike ``msvcrt.getwch()``, ``ReadConsoleInputW`` leaves the console mode
+    alone and hands over the whole record: virtual-key code, modifiers and the
+    UTF-16 text unit, so no ``\\xe0`` prefix byte has to be told apart from an
+    ``à``. Non-key records (focus, menu) are skipped.
+
+    Returns ``(events, broken)``: the events read (``[]`` when nothing, or no
+    key, arrived) and whether a read after the first batch failed, in which
+    case the records already taken off the console are still returned and the
+    caller should stop after forwarding them. ``None`` when the console cannot
+    be read at all.
     """
-    if msvcrt is None or getattr(msvcrt, "kbhit", None) is None:
-        # No way to look ahead: keep the one-key-read-per-byte behaviour.
-        return b"\x1b"
-    deadline = time.monotonic() + _ESCAPE_SEQUENCE_GRACE_SECONDS
-    chars: list[str] = []
-    while len(chars) < _MAX_ESCAPE_SEQUENCE_CHARS and _console_key_available(deadline):
-        try:
-            ch = msvcrt.getwch()
-        except (EOFError, KeyboardInterrupt, OSError):
+    if ctypes is None or _INPUT_RECORD is None:
+        return None
+    status = kernel32.WaitForSingleObject(handle, timeout_ms)
+    if status == _WAIT_TIMEOUT:
+        return [], False
+    if status != _WAIT_OBJECT_0:
+        return None
+    events: list[_KeyEvent] = []
+    for batch in range(_MAX_INPUT_RECORD_BATCHES):
+        if batch and stop_event is not None and stop_event.is_set():
+            break  # what is still queued is the next prompt's
+        queued = ctypes.c_uint32()
+        if not kernel32.GetNumberOfConsoleInputEvents(handle, ctypes.byref(queued)):
+            return (events, True) if batch else None
+        if not queued.value:
             break
-        chars.append(ch)
-        if ch not in _CSI_INTERMEDIATES and _CSI_FINAL_FIRST <= ord(ch) <= _CSI_FINAL_LAST:
-            break
-    if not chars:
-        # Nothing arrived: it really was the Escape key (vim escape, TUI
-        # interrupt), so hand it over instead of holding it back.
-        return b"\x1b"
-    sequence = b"\x1b" + _encode_console_character("".join(chars))
-    report = _KITTY_KEY_REPORT.fullmatch(sequence)
-    if report is not None and (report.group(1) or b"1") == b"3":
-        return b""
-    return sequence
+        records = (_INPUT_RECORD * min(queued.value, _INPUT_RECORD_BATCH))()
+        read = ctypes.c_uint32()
+        if not kernel32.ReadConsoleInputW(handle, records, len(records), ctypes.byref(read)):
+            # Records read before stay taken off the console: hand them over.
+            return (events, True) if batch else None
+        for record in records[: read.value]:
+            if record.EventType != _KEY_EVENT:
+                continue
+            key = record.Event.KeyEvent
+            events.append(
+                _KeyEvent(
+                    key_down=bool(key.bKeyDown),
+                    repeat=int(key.wRepeatCount),
+                    vk=int(key.wVirtualKeyCode),
+                    scan=int(key.wVirtualScanCode),
+                    char=int(key.uChar),
+                    state=int(key.dwControlKeyState),
+                ),
+            )
+    return events, False
 
 
-def _console_key_bytes(ch: str) -> bytes:
-    """Bytes to forward for one console key read, ``b""`` to forward nothing.
+def _vt_key_bytes(sequence: tuple[str, str, str], modifier: int) -> bytes:
+    introducer, number, final = sequence
+    if modifier == 1:
+        return f"\x1b{introducer}{number}{final}".encode("ascii")
+    return f"\x1b[{number or '1'};{modifier}{final}".encode("ascii")
 
-    Navigation and function keys arrive from the Windows console as a
-    ``\\x00``/``\\xe0`` prefix plus a scan code, which a Linux TTY cannot make
-    sense of (once UTF-8 encoded it turns into mojibake such as ``\\xc3\\xa0H``
-    for Arrow Up, i.e. stray characters in the agent prompt), so they are mapped
-    to the VT sequences a terminal would send. Unmapped codes are dropped rather
-    than sent as garbage. Backspace is normalized to ``\\x7f``, which is what a
-    Linux terminal sends for that key (``\\x08`` shows up as ``^H`` in prompts
-    that only bind DEL). A bare ``ESC`` hands over to
-    :func:`_console_escape_bytes`, which assembles and screens the rest of the
-    sequence.
+
+class _ConsoleKeyDecoder:
+    """Turn console key records into the bytes a Linux TTY would receive.
+
+    Mapped navigation and function keys become VT sequences with the xterm
+    modifier parameter (``1`` + Shift 1 + Alt 2 + Ctrl 4). Text keys send their
+    character as UTF-8, a surrogate pair (emoji) joined into one character
+    first, and ``ESC``-prefixed while Alt is held (Alt-as-Meta, e.g. Alt+Enter).
+    AltGr reaches the console as Right Alt plus Left Ctrl, and some layouts
+    accept Ctrl+Alt for it too, so Ctrl+Alt with a printable character is the
+    character itself.
+
+    Every ``ESC`` -- the Escape key as well as the start of a sequence the
+    terminal answers a query with (``ESC[?1;2c``) or a kitty key report, which
+    reach a console app as plain text records -- is held until its sequence is
+    complete, so kitty key *releases*, which a Linux PTY has no notion of, can
+    be dropped. The two cannot be told apart reliably, so Escape followed by a
+    key within the grace period reaches the agent as one chunk. A release
+    longer than ``_MAX_CSI_PARAMETER_SEQUENCE_CHARS`` is swallowed up to its
+    final byte while it is held (:attr:`pending`). The caller gives up whatever
+    is held (:meth:`flush`) once the grace period since the hold started (see
+    ``holds``) has passed, and a mapped key flushes it too: Escape then Arrow
+    Up is two keys, never one garbled sequence.
     """
-    if ch in ("\x00", "\xe0") and msvcrt is not None:
-        try:
-            code = msvcrt.getwch()
-        except (EOFError, KeyboardInterrupt, OSError):
+
+    def __init__(self) -> None:
+        self._escape: str | None = None
+        self._high_surrogate: int | None = None
+        #: True while the rest of an over-long release report is swallowed.
+        self._discarding = False
+        #: Counts every start of a hold (an ``ESC`` or a high surrogate), so the
+        #: caller can start a new grace period for a new hold in the same batch.
+        #: Records that only extend a hold do not count: the grace period runs
+        #: from the start of the hold, which bounds how long input is held.
+        self.holds = 0
+
+    @property
+    def pending(self) -> bool:
+        """True while a partial escape sequence or half an emoji is held back."""
+        return self._escape is not None or self._high_surrogate is not None or self._discarding
+
+    @staticmethod
+    def _is_parameter_run(held: str) -> bool:
+        return held.startswith("\x1b[") and _CSI_PARAMETER_CHARS.issuperset(held[2:])
+
+    def flush(self) -> bytes:
+        """Forward whatever is held back as it is (the grace period is over)."""
+        self._discarding = False  # the rest of that release never came
+        return self._release_held()
+
+    def _release_held(self) -> bytes:
+        """Forward a held ``ESC`` sequence or emoji half, ahead of another key.
+
+        Unlike :meth:`flush` it leaves the swallowing of an over-long release
+        alone: a key pressed while one arrives does not end it.
+        """
+        out = b""
+        if self._high_surrogate is not None:
+            # The low half never came: forward a replacement, not a lone half.
+            out += _encode_console_character(chr(self._high_surrogate))
+            self._high_surrogate = None
+        if self._escape is not None:
+            out += self._finish_escape()
+        return out
+
+    def feed(self, event: _KeyEvent) -> bytes:
+        """Bytes to forward for one key record, ``b""`` for none (yet)."""
+        if not event.key_down:
+            # Alt+numpad input (Alt held while digits are typed on the numpad)
+            # delivers its character with the release of Alt; that is the one
+            # key-up record that carries text.
+            if event.vk == _VK_MENU and event.char:
+                return self._character(event.char, meta=False)
             return b""
-        return _EXTENDED_KEY_SEQUENCES.get(ord(code), b"")
-    if ch == "\x1b":
-        return _console_escape_bytes()
-    if ch == "\x08":
-        return b"\x7f"
-    return _encode_console_character(ch)
+        count = max(event.repeat, 1)
+        shift = bool(event.state & _SHIFT_PRESSED)
+        alt = bool(event.state & _ALT_PRESSED)
+        ctrl = bool(event.state & _CTRL_PRESSED)
+        if (
+            alt
+            and not ctrl
+            and event.vk in _VK_NUMPAD_NAVIGATION
+            and not event.state & _ENHANCED_KEY
+        ):
+            # A digit of Alt+numpad input with NumLock off; the character it
+            # spells arrives with the release of Alt.
+            return b""
+        sequence = _VK_SEQUENCES.get(event.vk)
+        if sequence is not None:
+            modifier = 1 + shift + 2 * alt + 4 * ctrl
+            return self._release_held() + _vt_key_bytes(sequence, modifier) * count
+        if event.vk == _VK_TAB and shift:
+            return self._release_held() + b"\x1b[Z" * count
+        char = event.char
+        if event.vk == _VK_BACK:
+            # A Linux terminal sends DEL for Backspace (``\x08`` shows up as
+            # ``^H`` in prompts that only bind DEL) and ``^H`` for Ctrl+Backspace.
+            char = 0x08 if ctrl else 0x7F
+        elif event.vk == _VK_SPACE and ctrl and not alt:
+            char = 0x00  # Ctrl+Space is NUL on a terminal
+        elif not char:
+            return b""  # modifier keys, dead keys, keys without text
+        meta = alt and not (ctrl and char >= 0x20)
+        if 0xD800 <= char <= 0xDFFF:
+            # Repeating half of a surrogate pair would pair the halves wrongly
+            # (``?😀?``); an emoji is not typed by holding a key anyway.
+            count = 1
+        return b"".join(self._character(char, meta) for _ in range(count))
+
+    def _character(self, code: int, meta: bool) -> bytes:
+        out = b""
+        if 0xD800 <= code <= 0xDBFF:
+            out += self._release_held()
+            self._high_surrogate = code
+            self.holds += 1
+            return out
+        if 0xDC00 <= code <= 0xDFFF and self._high_surrogate is not None:
+            high, self._high_surrogate = self._high_surrogate, None
+            text = chr(0x10000 + ((high - 0xD800) << 10) + (code - 0xDC00))
+        else:
+            if self._high_surrogate is not None:
+                out += self._release_held()
+            text = chr(code)
+        if meta:
+            return out + self._release_held() + b"\x1b" + _encode_console_character(text)
+        return out + self._text(text)
+
+    def _text(self, text: str) -> bytes:
+        if self._discarding:
+            if text in _CSI_PARAMETER_CHARS:
+                return b""
+            self._discarding = False
+            if _CSI_FINAL_FIRST <= ord(text) <= _CSI_FINAL_LAST:
+                return b""  # the final byte of the dropped release
+        if self._escape is None:
+            if text == "\x1b":
+                self._escape = text
+                self.holds += 1
+                return b""
+            return _encode_console_character(text)
+        if text == "\x1b":
+            out = self._finish_escape()
+            self._escape = text
+            self.holds += 1
+            return out
+        self._escape += text
+        if len(self._escape) == 2:
+            if text in _CSI_INTERMEDIATES:
+                return b""
+            return self._finish_escape()  # ESC + char: Alt-as-Meta, OSC start, ...
+        final = _CSI_FINAL_FIRST <= ord(text) <= _CSI_FINAL_LAST
+        if final:
+            return self._finish_escape()
+        if self._is_parameter_run(self._escape):
+            if len(self._escape) < _MAX_CSI_PARAMETER_SEQUENCE_CHARS:
+                return b""
+            if _KITTY_RELEASE_PREFIX.fullmatch(self._escape):
+                # A release whose text field outgrew the bound: swallow it up to
+                # its final byte instead of sending it as text.
+                self._escape = None
+                self._discarding = True
+                return b""
+            return self._finish_escape()
+        if len(self._escape) >= _MAX_ESCAPE_SEQUENCE_CHARS:
+            return self._finish_escape()
+        return b""
+
+    def _finish_escape(self) -> bytes:
+        sequence = _encode_console_character(self._escape or "")
+        self._escape = None
+        report = _KITTY_KEY_REPORT.fullmatch(sequence)
+        if report is not None and (report.group(1) or b"1") == b"3":
+            return b""
+        return sequence
 
 
 def _raw_console_input_mode(old_mode: int) -> int:
@@ -537,14 +782,59 @@ def _raw_console_input_mode(old_mode: int) -> int:
     return (old_mode & ~_RAW_CONSOLE_INPUT_CLEAR) | _ENABLE_EXTENDED_FLAGS
 
 
+def _declare_kernel32_prototypes(kernel32: Any) -> Any:
+    """Give the console functions we call their real C signatures.
+
+    Without ``restype`` ctypes reads every result as a C ``int``, which cuts a
+    64-bit ``HANDLE`` from ``GetStdHandle`` down to 32 bits, and without
+    ``argtypes`` a Python int is passed as an ``int`` too. Console handles are
+    small in practice, so this has not bitten yet, but it is undefined behaviour.
+    """
+    assert ctypes is not None
+    handle = ctypes.c_void_p
+    dword = ctypes.c_uint32
+    bool_ = ctypes.c_int
+    prototypes: dict[str, tuple[Any, list[Any]]] = {
+        "GetStdHandle": (handle, [dword]),
+        "GetConsoleMode": (bool_, [handle, ctypes.POINTER(dword)]),
+        "SetConsoleMode": (bool_, [handle, dword]),
+        "WaitForSingleObject": (dword, [handle, dword]),
+        "GetNumberOfConsoleInputEvents": (bool_, [handle, ctypes.POINTER(dword)]),
+        "ReadConsoleInputW": (
+            bool_,
+            [handle, ctypes.POINTER(_INPUT_RECORD), dword, ctypes.POINTER(dword)],
+        ),
+        "WriteConsoleInputW": (
+            bool_,
+            [handle, ctypes.POINTER(_INPUT_RECORD), dword, ctypes.POINTER(dword)],
+        ),
+    }
+    for name, (restype, argtypes) in prototypes.items():
+        function = getattr(kernel32, name)
+        function.restype = restype
+        function.argtypes = argtypes
+    return kernel32
+
+
+_KERNEL32: Any | None = None
+
+
 def _kernel32() -> Any | None:
-    """``ctypes.windll.kernel32`` on Windows, ``None`` everywhere else."""
+    """A private, prototyped ``kernel32`` on Windows, ``None`` everywhere else.
+
+    Its own ``WinDLL`` instance rather than the shared ``ctypes.windll.kernel32``,
+    so the prototypes set here cannot clash with what other code in the process
+    expects of that shared object.
+    """
+    global _KERNEL32
     if ctypes is None or sys.platform != "win32":
         return None
-    try:
-        return ctypes.windll.kernel32
-    except Exception:  # pragma: no cover - exotic CPython builds
-        return None
+    if _KERNEL32 is None:
+        try:
+            _KERNEL32 = _declare_kernel32_prototypes(ctypes.WinDLL("kernel32"))
+        except Exception:  # pragma: no cover - exotic CPython builds
+            return None
+    return _KERNEL32
 
 
 def _get_console_input_mode(kernel32: Any) -> int | None:
@@ -552,15 +842,20 @@ def _get_console_input_mode(kernel32: Any) -> int | None:
     if ctypes is None:
         return None
     mode = ctypes.c_uint32()
-    if not kernel32.GetConsoleMode(kernel32.GetStdHandle(_STD_INPUT_HANDLE), ctypes.pointer(mode)):
+    if not kernel32.GetConsoleMode(_console_input_handle(kernel32), ctypes.pointer(mode)):
         return None
     return int(mode.value)
+
+
+def _console_input_handle(kernel32: Any) -> Any:
+    """``GetStdHandle(STD_INPUT_HANDLE)``; the constant is a DWORD, i.e. unsigned."""
+    return kernel32.GetStdHandle(_STD_INPUT_HANDLE & 0xFFFFFFFF)
 
 
 def _set_console_input_mode(kernel32: Any, mode: int) -> bool:
     if ctypes is None:
         return False
-    handle = kernel32.GetStdHandle(_STD_INPUT_HANDLE)
+    handle = _console_input_handle(kernel32)
     # SetConsoleMode takes the mode by value (DWORD), unlike GetConsoleMode's
     # LPDWORD; a pointer here is read as mode bits and the call fails.
     return bool(kernel32.SetConsoleMode(handle, ctypes.c_uint32(mode)))
@@ -572,10 +867,10 @@ def _enter_console_raw_input() -> int | None:
     The POSIX attach path gets this from ``tty.setraw()`` for free. Without the
     equivalent console request the console host keeps handling input itself:
     keystrokes are echoed locally on top of the container TTY echo (typed text
-    shows up doubled — ``msvcrt.getwch()`` clears echo only inside its own read),
-    input is line-buffered, and Ctrl+C becomes a local ``KeyboardInterrupt``
-    instead of byte ``0x03`` for the agent. Returns the previous mode to restore,
-    or ``None`` when stdin is not a console window or the mode cannot be changed.
+    shows up doubled), input is line-buffered, and Ctrl+C becomes a local
+    ``KeyboardInterrupt`` instead of byte ``0x03`` for the agent. Returns the
+    previous mode to restore, or ``None`` when stdin is not a console window or
+    the mode cannot be changed.
     """
     kernel32 = _kernel32()
     if kernel32 is None:
@@ -604,37 +899,147 @@ def _leave_console_raw_input(old_mode: int) -> None:
         pass
 
 
-def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading.Event) -> None:
-    if msvcrt is None:
+def _console_key_reader(
+    stop_event: threading.Event | None = None,
+) -> Callable[[int], list[_KeyEvent] | None] | None:
+    """``read(timeout_ms)`` over our console input handle, ``None`` off Windows.
+
+    ``read`` returns the key events, or ``None`` once the console cannot be
+    read; after a read that failed part way, it hands over what it had read and
+    returns ``None`` from the next call on, without trying the console again.
+    """
+    kernel32 = _kernel32()
+    if kernel32 is None:
+        return None
+    handle = _console_input_handle(kernel32)
+    broken = False
+
+    def read(timeout_ms: int) -> list[_KeyEvent] | None:
+        nonlocal broken
+        if broken:
+            return None
+        result = _read_console_key_events(kernel32, handle, timeout_ms, stop_event)
+        if result is None:
+            return None
+        events, broken = result
+        return events
+
+    return read
+
+
+#: ``INPUT_RECORD`` event type of a focus record: a console app ignores one it
+#: did not ask for, which makes it a harmless way to end a pending read.
+_FOCUS_EVENT = 0x0010
+
+
+def _wake_console_reader() -> None:
+    """Put a focus record into the console input, ending a read waiting there.
+
+    ``ReadConsoleInputW`` waits when another reader of the same console took
+    the record it was about to read; the input thread could then outlive the
+    session and take the next keystroke from the restored prompt.
+    """
+    kernel32 = _kernel32()
+    if kernel32 is None or ctypes is None or _INPUT_RECORD is None:
         return
-    kbhit = getattr(msvcrt, "kbhit", None)
-    while not stop_event.is_set():
-        if kbhit is not None:
-            # Only read once a key is queued: a getwch() left blocked after the
-            # session ended would steal the next keystroke, and on return the
-            # CRT puts back the raw console mode we have already restored.
-            try:
-                if not kbhit():
-                    time.sleep(_KEY_WAIT_POLL_SECONDS)
-                    continue
-            except OSError:
-                return
-        try:
-            data = _console_key_bytes(msvcrt.getwch())
-        except (EOFError, KeyboardInterrupt, OSError):
-            return
+    record = _INPUT_RECORD()
+    record.EventType = _FOCUS_EVENT
+    written = ctypes.c_uint32()
+    try:
+        kernel32.WriteConsoleInputW(
+            _console_input_handle(kernel32),
+            ctypes.byref(record),
+            1,
+            ctypes.byref(written),
+        )
+    except Exception:  # pragma: no cover - console API failure
+        pass
+
+
+def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading.Event) -> None:
+    """Forward console keys to the container until *stop_event* is set.
+
+    Key records are read with ``ReadConsoleInputW`` (see
+    :func:`_read_console_key_events`) and translated by
+    :class:`_ConsoleKeyDecoder`. What the decoder holds is given up (forwarded
+    as is) once ``_ESCAPE_SEQUENCE_GRACE_SECONDS`` have passed since the hold
+    started, however many records arrive meanwhile (a held Shift or digit
+    auto-repeating), so input is never held back for longer. While something
+    is held, what is already queued behind it is read before anything is
+    written, so a slow write cannot make records that arrived in time look
+    late, nor records that arrived late look timely. What is still held when the session ends is
+    dropped, since the socket is closing.
+    """
+    read = _console_key_reader(stop_event)
+    if read is None:
+        return
+    decoder = _ConsoleKeyDecoder()
+    idle_ms = int(_KEY_WAIT_POLL_SECONDS * 1000)
+    grace = _ESCAPE_SEQUENCE_GRACE_SECONDS
+    flush_at: float | None = None
+
+    def send(data: bytes) -> bool:
+        """Forward *data*; False once the session is over or the socket broke."""
         if not data:
-            continue
+            return True
         if stop_event.is_set():
-            # The session ended while getwch() waited; the socket is closed.
-            return
+            # The session ended while we waited; the socket is closed.
+            return False
         if logger is not None:
+            # Outside the socket error handling: a failing session log is not a
+            # closed socket, and must not silently stop input forwarding.
             logger.log_input(data)
         try:
             sock.sendall(data)
         except Exception:
             # A closed NpipeSocket raises RuntimeError, a broken pipe
             # pywintypes.error; neither is an OSError.
+            return False
+        return True
+
+    while not stop_event.is_set():
+        if flush_at is None:
+            timeout_ms = idle_ms
+        else:
+            # Rounded up, so the wait neither ends early nor spins at 0 ms.
+            remaining_ms = math.ceil((flush_at - time.monotonic()) * 1000)
+            timeout_ms = max(0, min(idle_ms, remaining_ms))
+        try:
+            events = read(timeout_ms)
+        except Exception:  # pragma: no cover - console API failure
+            return
+        if events is None:
+            return
+        if flush_at is not None and time.monotonic() >= flush_at:
+            # The grace period ran out before these records were read. A read
+            # returns as soon as input arrives, takes the whole queued burst,
+            # and nothing is written while records may still be queued behind
+            # a hold (see below), so they arrived after it: forward what is
+            # held on its own first (Escape, O, then a late A must not become
+            # Arrow Up). The attach stream may still merge the two writes on
+            # the way to the agent.
+            flush_at = None
+            if not send(decoder.flush()):
+                return
+        holds = decoder.holds
+        data = b"".join(decoder.feed(event) for event in events)
+        drains = 0
+        while decoder.pending and events and drains < _HELD_DRAIN_READS:
+            # Before writing (a write can take long on a busy pipe), take what
+            # is queued behind the held input now: it arrived in time, and must
+            # not be judged by when a slow write let us read it.
+            drains += 1
+            events = read(0)
+            if events is None:
+                send(data)
+                return
+            data += b"".join(decoder.feed(event) for event in events)
+        if not decoder.pending:
+            flush_at = None
+        elif flush_at is None or decoder.holds != holds:
+            # A new hold began in this batch: its grace period starts now.
+            flush_at = time.monotonic() + grace
+        if not send(data):
             return
 
 
@@ -1796,7 +2201,12 @@ class DockerManager:
             if input_stop_event is not None:
                 input_stop_event.set()
             if input_thread is not None:
-                input_thread.join(timeout=0.2)
+                input_thread.join(timeout=0.05)
+                if input_thread.is_alive():
+                    # Still inside a console read: end it before the prompt
+                    # gets the console back, or it takes the next keystroke.
+                    _wake_console_reader()
+                    input_thread.join(timeout=0.2)
             if old_console_mode is not None:
                 _leave_console_raw_input(old_console_mode)
             if sigwinch is not None and old_winch_handler is not None:
