@@ -694,49 +694,6 @@ def test_forward_windows_console_input_flushes_escape_despite_other_records(
     assert bytes(sock.sent) == b"\x1b"
 
 
-def test_forward_windows_console_input_restarts_grace_for_a_new_escape(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An ESC arriving while another is held gets its own full grace period.
-
-    The new ESC forwards the held one at once and is held itself; it must not
-    inherit the first one's deadline and go out only a few ms after it came.
-    """
-    stop = threading.Event()
-    sock = _RecordingSock()
-    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
-    esc = _key("\x1b", vk=0x1B)
-    first_at: list[float] = []
-    second_at: list[float] = []
-    flushed_at: list[float] = []
-
-    polls: list[int] = []
-
-    def read(timeout_ms: int) -> list[Any] | None:
-        polls.append(timeout_ms)
-        if len(polls) > _POLL_BUDGET:
-            return None  # fail the assertions below instead of hanging
-        now = time.monotonic()
-        if not first_at:
-            first_at.append(now)
-            return [esc]
-        if not second_at and now - first_at[0] >= grace * 0.8:
-            second_at.append(now)
-            return [esc]
-        if len(sock.sent) == 2:
-            flushed_at.append(now)
-            stop.set()
-            return []
-        time.sleep(min(timeout_ms, 2) / 1000)
-        return []
-
-    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
-    docker_mod._forward_windows_console_input(sock, None, stop)
-
-    assert bytes(sock.sent) == b"\x1b\x1b"
-    assert flushed_at[0] - second_at[0] >= grace * 0.9
-
-
 @pytest.mark.parametrize(
     ("late", "expected"),
     [
@@ -771,43 +728,127 @@ def test_forward_windows_console_input_sends_an_expired_escape_on_its_own(
     assert sock.chunks == expected
 
 
-def test_forward_windows_console_input_never_waits_0_ms_before_the_deadline(
+class _FakeClock:
+    """Stands in for the ``time`` module in docker.py, so deadlines are exact."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _use_fake_clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
+    clock = _FakeClock()
+    monkeypatch.setattr(
+        docker_mod,
+        "time",
+        types.SimpleNamespace(monotonic=clock.monotonic, sleep=clock.sleep),
+    )
+    return clock
+
+
+class _TimedSock:
+    """Records each write with the fake clock; *delay* models a slow pipe."""
+
+    def __init__(self, clock: _FakeClock, delay: float = 0.0) -> None:
+        self.clock = clock
+        self.delay = delay
+        self.sends: list[tuple[float, bytes]] = []
+
+    def sendall(self, data: bytes) -> None:
+        self.sends.append((self.clock.now, bytes(data)))
+        self.clock.now += self.delay
+
+
+def test_forward_windows_console_input_restarts_grace_for_a_new_escape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The wait is rounded up: a 0 ms timeout only once the deadline has passed."""
+    """An ESC arriving while another is held gets its own full grace period.
+
+    The new ESC forwards the held one at once and is held itself; it must not
+    inherit the first one's deadline.
+    """
+    clock = _use_fake_clock(monkeypatch)
+    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
+    esc = _key("\x1b", vk=0x1B)
+    sock = _TimedSock(clock)
     stop = threading.Event()
-    sock = _RecordingSock()
-    seen: list[tuple[int, float]] = []
-    flush_at: list[float] = []
-
-    def idle(timeout_ms: int) -> list[Any]:
-        seen.append((timeout_ms, time.monotonic()))
-        if sock.sent:
-            stop.set()
-        time.sleep(timeout_ms / 1000)
-        return []
-
-    def first(timeout_ms: int) -> list[Any]:
-        flush_at.append(time.monotonic() + docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS)
-        return [_key("\x1b", vk=0x1B)]
-
-    batches_served: list[bool] = []
+    polls: list[int] = []
+    second_at: list[float] = []
 
     def read(timeout_ms: int) -> list[Any] | None:
-        if len(seen) > _POLL_BUDGET:
+        polls.append(timeout_ms)
+        if len(polls) > _POLL_BUDGET:
             return None
-        if not batches_served:
-            batches_served.append(True)
-            return first(timeout_ms)
-        return idle(timeout_ms)
+        if len(polls) == 1:
+            return [esc]  # t = 0: the first deadline is at `grace`
+        if len(sock.sends) == 2:
+            stop.set()
+            return []
+        clock.now += timeout_ms / 1000  # an idle wait
+        if not second_at and clock.now >= 0.8 * grace - 1e-9:
+            second_at.append(clock.now)
+            return [esc]
+        return []
 
     monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
     docker_mod._forward_windows_console_input(sock, None, stop)
 
-    assert bytes(sock.sent) == b"\x1b"
-    # flush_at here is taken just before the forwarder's own, so it is earlier.
-    early_zero = [at for timeout, at in seen if timeout == 0 and at < flush_at[0]]
-    assert early_zero == []
+    assert [data for _, data in sock.sends] == [b"\x1b", b"\x1b"]
+    first_sent, second_sent = (at for at, _ in sock.sends)
+    assert second_at[0] < grace  # it arrived while the first one was held
+    assert first_sent == second_at[0]
+    assert second_sent >= second_at[0] + grace - 1e-9  # not at the first deadline
+
+
+def test_forward_windows_console_input_rounds_the_last_wait_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Half a millisecond before the deadline the wait is 1 ms, never a 0 ms spin."""
+    clock = _use_fake_clock(monkeypatch)
+    grace = docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
+    sock = _TimedSock(clock)
+    timeouts: list[int] = []
+
+    def read(timeout_ms: int) -> list[Any] | None:
+        timeouts.append(timeout_ms)
+        if len(timeouts) == 1:
+            return [_key("\x1b", vk=0x1B)]  # t = 0: deadline at `grace`
+        if len(timeouts) == 2:
+            clock.now = grace - 0.0005
+            return []
+        if len(timeouts) == 3:
+            clock.now = grace  # the deadline: the ESC goes out
+            return []
+        return None
+
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
+
+    assert timeouts[2] == 1
+    assert 0 not in timeouts
+    assert sock.sends == [(grace, b"\x1b")]
+
+
+def test_forward_windows_console_input_completes_a_report_read_late(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow send between two batches of one release report must not leak it.
+
+    The rest of the report was queued in time; the worker only read it after
+    the deadline because ``sendall`` of the text before it took 60 ms.
+    """
+    clock = _use_fake_clock(monkeypatch)
+    sock = _TimedSock(clock, delay=0.06)
+    _fake_console_keys(monkeypatch, [_typed("x\x1b[97;1"), _typed(":3u")])
+
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
+
+    assert [data for _, data in sock.sends] == [b"x"]
 
 
 def test_forward_windows_console_input_logs_what_it_sends(

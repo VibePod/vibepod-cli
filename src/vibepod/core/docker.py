@@ -400,6 +400,11 @@ _MAX_ESCAPE_SEQUENCE_CHARS = 32
 #: cut at 32 characters would reach the agent as stray text.
 _CSI_PARAMETER_CHARS = frozenset("0123456789:;")
 _MAX_CSI_PARAMETER_SEQUENCE_CHARS = 128
+#: The start of a kitty key *release* report: the codepoint (with optional
+#: alternates), then a modifier field whose event type is ``3``, then possibly
+#: the start of the text field. A held sequence that reaches the bound above
+#: and matches this is a release still on its way, and is dropped, not sent.
+_KITTY_RELEASE_PREFIX = re.compile(r"\x1b\[\d+(?::\d*){0,2};\d*:3(?:;[\d:]*)?")
 
 #: How long a bare ``ESC`` waits for the rest of its sequence before it is
 #: forwarded as the Escape key itself. Bytes of one sequence normally arrive as a
@@ -591,6 +596,8 @@ class _ConsoleKeyDecoder:
     def __init__(self) -> None:
         self._escape: str | None = None
         self._high_surrogate: int | None = None
+        #: True while the rest of an over-long release report is swallowed.
+        self._discarding = False
         #: Counts every start of a hold (an ``ESC`` or a high surrogate), so the
         #: caller can restart its grace period for a new hold in the same batch.
         self.holds = 0
@@ -598,10 +605,28 @@ class _ConsoleKeyDecoder:
     @property
     def pending(self) -> bool:
         """True while a partial escape sequence or half an emoji is held back."""
-        return self._escape is not None or self._high_surrogate is not None
+        return self._escape is not None or self._high_surrogate is not None or self._discarding
+
+    @property
+    def assembling_report(self) -> bool:
+        """True while the held input is a CSI parameter run, i.e. a report on its way.
+
+        The caller then feeds records it has already read before applying the
+        grace deadline, so a report it read late is still recognized; a bare
+        ``ESC`` keeps the strict deadline.
+        """
+        if self._discarding:
+            return True
+        held = self._escape or ""
+        return len(held) > 2 and self._is_parameter_run(held)
+
+    @staticmethod
+    def _is_parameter_run(held: str) -> bool:
+        return held.startswith("\x1b[") and _CSI_PARAMETER_CHARS.issuperset(held[2:])
 
     def flush(self) -> bytes:
         """Forward whatever is held back as it is."""
+        self._discarding = False  # the rest of that release never came
         out = b""
         if self._high_surrogate is not None:
             # The low half never came: forward a replacement, not a lone half.
@@ -674,6 +699,12 @@ class _ConsoleKeyDecoder:
         return out + self._text(text)
 
     def _text(self, text: str) -> bytes:
+        if self._discarding:
+            if text in _CSI_PARAMETER_CHARS:
+                return b""
+            self._discarding = False
+            if _CSI_FINAL_FIRST <= ord(text) <= _CSI_FINAL_LAST:
+                return b""  # the final byte of the dropped release
         if self._escape is None:
             if text == "\x1b":
                 self._escape = text
@@ -691,16 +722,21 @@ class _ConsoleKeyDecoder:
                 return b""
             return self._finish_escape()  # ESC + char: Alt-as-Meta, OSC start, ...
         final = _CSI_FINAL_FIRST <= ord(text) <= _CSI_FINAL_LAST
-        if final or len(self._escape) >= self._escape_limit():
+        if final:
+            return self._finish_escape()
+        if self._is_parameter_run(self._escape):
+            if len(self._escape) < _MAX_CSI_PARAMETER_SEQUENCE_CHARS:
+                return b""
+            if _KITTY_RELEASE_PREFIX.fullmatch(self._escape):
+                # A release whose text field outgrew the bound: swallow it up to
+                # its final byte instead of sending it as text.
+                self._escape = None
+                self._discarding = True
+                return b""
+            return self._finish_escape()
+        if len(self._escape) >= _MAX_ESCAPE_SEQUENCE_CHARS:
             return self._finish_escape()
         return b""
-
-    def _escape_limit(self) -> int:
-        """How long the held sequence may grow before it is forwarded as is."""
-        held = self._escape or ""
-        if held.startswith("\x1b[") and _CSI_PARAMETER_CHARS.issuperset(held[2:]):
-            return _MAX_CSI_PARAMETER_SEQUENCE_CHARS
-        return _MAX_ESCAPE_SEQUENCE_CHARS
 
     def _finish_escape(self) -> bytes:
         sequence = _encode_console_character(self._escape or "")
@@ -894,11 +930,13 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
             return
         if events is None:
             return
-        if flush_at is not None and time.monotonic() >= flush_at:
-            # The grace period ran out before these records were read (the wait
-            # can overshoot it), so they do not belong to the held ESC: forward
-            # it on its own first, as a terminal would, rather than let them
-            # complete a sequence or turn Escape + key into Meta+key.
+        if flush_at is not None and time.monotonic() >= flush_at and not decoder.assembling_report:
+            # The grace period of a bare ESC ran out before these records were
+            # read (the wait can overshoot it), so they do not belong to it:
+            # forward it in its own write first, as a terminal would, rather
+            # than let them complete a sequence. (The attach stream may still
+            # merge the two writes on the way to the agent.) A report already
+            # under way is instead given the records read so far, see below.
             flush_at = None
             if not send(decoder.flush()):
                 return
@@ -909,6 +947,10 @@ def _forward_windows_console_input(sock: Any, logger: Any, stop_event: threading
         elif flush_at is None or decoder.holds != holds:
             # A new hold began in this batch: its grace period starts now.
             flush_at = time.monotonic() + grace
+        elif time.monotonic() >= flush_at:
+            # Still incomplete after the records that were already queued.
+            data += decoder.flush()
+            flush_at = None
         if not send(data):
             return
 

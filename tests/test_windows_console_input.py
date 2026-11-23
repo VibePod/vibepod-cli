@@ -110,18 +110,60 @@ def test_long_kitty_press_is_forwarded_whole() -> None:
     assert decode(typed(report)) == report.encode()
 
 
-def test_overlong_parameter_sequence_is_forwarded_not_held_forever() -> None:
+def _feed_until_output(sequence: str) -> tuple[int, bytes, bool]:
+    """Feed *sequence* one record at a time; where output first appears."""
     decoder = docker_mod._ConsoleKeyDecoder()
-    sequence = "\x1b[" + "1;" * 100  # no final byte ever comes
-    out = b"".join(decoder.feed(event) for event in typed(sequence)) + decoder.flush()
-    assert out == sequence.encode()
+    for count, event in enumerate(typed(sequence)[::2], start=1):  # key-downs
+        out = decoder.feed(event)
+        if out:
+            return count, out, decoder.pending
+    return 0, b"", decoder.pending
 
 
-def test_non_parameter_sequences_keep_the_short_bound() -> None:
+@pytest.mark.parametrize(
+    ("sequence", "limit"),
+    [
+        # A parameter-only CSI that is not a release (no ``:3`` event type).
+        ("\x1b[" + "1;" * 100, docker_mod._MAX_CSI_PARAMETER_SEQUENCE_CHARS),
+        # Anything else keeps the short bound.
+        ("\x1b[?" + "1" * 60, docker_mod._MAX_ESCAPE_SEQUENCE_CHARS),
+    ],
+)
+def test_held_sequence_is_forwarded_exactly_at_its_bound(sequence: str, limit: int) -> None:
+    count, out, pending = _feed_until_output(sequence)
+    assert count == limit  # nothing before, the whole prefix at the bound
+    assert out == sequence[:limit].encode()
+    assert not pending
+
+
+def test_release_longer_than_the_parameter_bound_is_dropped() -> None:
+    report = "\x1b[97;1:3;" + "97:" * 40 + "97u"
+    assert len(report) > docker_mod._MAX_CSI_PARAMETER_SEQUENCE_CHARS
+    assert docker_mod._KITTY_KEY_REPORT.fullmatch(report.encode())
+    assert decode(typed(report), typed("x")) == b"x"
+
+
+def test_press_longer_than_the_parameter_bound_is_forwarded_unchanged() -> None:
+    report = "\x1b[97;1:1;" + "97:" * 40 + "97u"
+    assert decode(typed(report)) == report.encode()
+
+
+def test_dropped_release_whose_end_never_comes_stops_at_the_flush() -> None:
     decoder = docker_mod._ConsoleKeyDecoder()
-    sequence = "\x1b[?" + "1" * 40
-    out = b"".join(decoder.feed(event) for event in typed(sequence))
-    assert out.startswith(sequence[: docker_mod._MAX_ESCAPE_SEQUENCE_CHARS].encode())
+    prefix = "\x1b[97;1:3;" + "97:" * 45
+    assert b"".join(decoder.feed(event) for event in typed(prefix)) == b""
+    assert decoder.pending and decoder.assembling_report
+    assert decoder.flush() == b""  # the grace period ended it
+    assert b"".join(decoder.feed(event) for event in typed("12")) == b"12"
+
+
+def test_only_parameter_runs_count_as_a_report_under_way() -> None:
+    decoder = docker_mod._ConsoleKeyDecoder()
+    decoder.feed(key("\x1b", vk=0x1B))
+    assert not decoder.assembling_report  # a bare ESC keeps the strict deadline
+    for event in typed("[97;1"):
+        decoder.feed(event)
+    assert decoder.assembling_report
 
 
 @pytest.mark.parametrize("report", ["\x1b[97:65:97;2:2u", "\x1b[97;1;97u", "\x1b[97u"])

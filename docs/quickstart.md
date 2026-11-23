@@ -169,12 +169,13 @@ if (-not $pipe) { throw "No pipe for Podman machine '$machine'; check podman mac
 $env:DOCKER_HOST = "npipe://" + ($pipe -replace '\\', '/')
 ```
 
-!!! note "Alt+Enter in Windows Terminal"
-    Keys reach the agent as a Linux terminal would send them, Alt+key
-    included. Windows Terminal, however, uses Alt+Enter itself to toggle full
-    screen, so that key never reaches the agent. To use it (for example for a
-    newline in the agent prompt), remove the Alt+Enter binding of "Toggle
-    fullscreen" in Windows Terminal under Settings → Actions.
+!!! note "Keys Windows Terminal keeps for itself"
+    VibePod forwards the keys the terminal passes on as a Linux terminal would
+    send them, Alt combinations included. Windows Terminal handles some
+    shortcuts itself, though, and those never reach the agent: Alt+Enter
+    toggles full screen and Alt+Space opens the window menu, for example. To
+    use Alt+Enter (say, for a newline in the agent prompt), remove its
+    "Toggle fullscreen" binding in Windows Terminal under Settings → Actions.
 
 ## Install
 
