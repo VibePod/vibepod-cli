@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from uuid import uuid4
 
 from vibepod.constants import CONTAINER_LABEL_MANAGED, agent_ids
@@ -418,11 +418,12 @@ def _encode_console_character(ch: str) -> bytes:
     return ch.encode("utf-8", errors="replace")
 
 
-#: A kitty keyboard protocol key report (CSI u): a codepoint, then optional
-#: shifted/base alternates and a modifier field, any of which may carry a
-#: ``:value`` sub-field. Group 1 is the event type of the modifier field, where
-#: ``2`` is auto-repeat and ``3`` is a key *release*.
-_KITTY_KEY_REPORT = re.compile(rb"\x1b\[\d+(?::\d+)?(?:;\d+(?::(\d+))?)?u")
+#: A kitty keyboard protocol key report (CSI u): a codepoint with optional
+#: ``:shifted:base`` alternates (either may be empty), then an optional
+#: ``modifiers:event-type`` field and an optional ``;text`` field of
+#: ``:``-separated codepoints (``ESC[97:65:97;2:3u``, ``ESC[97;1:3;97u``).
+#: Group 1 is the event type, where ``2`` is auto-repeat and ``3`` a key *release*.
+_KITTY_KEY_REPORT = re.compile(rb"\x1b\[\d+(?::\d*){0,2}(?:;\d*(?::(\d+))?(?:;[\d:]*)?)?u")
 
 #: CSI/SS3 final bytes (0x40-0x7E per ECMA-48); ``[`` opens a CSI and ``O`` opens
 #: SS3, so both fall in that range but act as intermediates here.
@@ -525,6 +526,272 @@ def _console_key_bytes(ch: str) -> bytes:
     return _encode_console_character(ch)
 
 
+#: ``INPUT_RECORD`` event type of a key record, ``KEY_EVENT_RECORD`` control key
+#: state flags (wincon.h) and the virtual-key codes (winuser.h) handled by name.
+_KEY_EVENT = 0x0001
+_RIGHT_ALT_PRESSED = 0x0001
+_LEFT_ALT_PRESSED = 0x0002
+_RIGHT_CTRL_PRESSED = 0x0004
+_LEFT_CTRL_PRESSED = 0x0008
+_SHIFT_PRESSED = 0x0010
+_ALT_PRESSED = _RIGHT_ALT_PRESSED | _LEFT_ALT_PRESSED
+_CTRL_PRESSED = _RIGHT_CTRL_PRESSED | _LEFT_CTRL_PRESSED
+_VK_BACK = 0x08
+_VK_TAB = 0x09
+_VK_MENU = 0x12
+_VK_SPACE = 0x20
+
+#: Keys that send a VT sequence instead of text, by virtual-key code, as
+#: ``(introducer, number, final)``: ``ESC`` + introducer + number + final when
+#: no modifier is held (``ESC[A``, ``ESC[5~``, ``ESC OP``), and the xterm
+#: ``ESC[<number or 1>;<modifier><final>`` form otherwise (``ESC[1;5D``,
+#: ``ESC[3;5~``, ``ESC[1;2P``).
+_VK_SEQUENCES: dict[int, tuple[str, str, str]] = {
+    0x21: ("[", "5", "~"),  # Page Up
+    0x22: ("[", "6", "~"),  # Page Down
+    0x23: ("[", "", "F"),  # End
+    0x24: ("[", "", "H"),  # Home
+    0x25: ("[", "", "D"),  # Arrow Left
+    0x26: ("[", "", "A"),  # Arrow Up
+    0x27: ("[", "", "C"),  # Arrow Right
+    0x28: ("[", "", "B"),  # Arrow Down
+    0x2D: ("[", "2", "~"),  # Insert
+    0x2E: ("[", "3", "~"),  # Delete
+    0x70: ("O", "", "P"),  # F1
+    0x71: ("O", "", "Q"),  # F2
+    0x72: ("O", "", "R"),  # F3
+    0x73: ("O", "", "S"),  # F4
+    0x74: ("[", "15", "~"),  # F5
+    0x75: ("[", "17", "~"),  # F6
+    0x76: ("[", "18", "~"),  # F7
+    0x77: ("[", "19", "~"),  # F8
+    0x78: ("[", "20", "~"),  # F9
+    0x79: ("[", "21", "~"),  # F10
+    0x7A: ("[", "23", "~"),  # F11
+    0x7B: ("[", "24", "~"),  # F12
+}
+
+
+def _input_record_type() -> Any:
+    """The ctypes ``INPUT_RECORD`` (20 bytes) with its ``KEY_EVENT_RECORD`` member.
+
+    ``uChar`` is spelled as a plain UTF-16 code unit (``c_uint16``): ``c_wchar``
+    is 4 bytes off Windows, which would give the layout tests a different struct.
+    """
+    import ctypes as c
+
+    class KeyEventRecord(c.Structure):
+        _fields_ = [
+            ("bKeyDown", c.c_int),
+            ("wRepeatCount", c.c_uint16),
+            ("wVirtualKeyCode", c.c_uint16),
+            ("wVirtualScanCode", c.c_uint16),
+            ("uChar", c.c_uint16),
+            ("dwControlKeyState", c.c_uint32),
+        ]
+
+    class InputRecordEvent(c.Union):
+        # The mouse record is the largest member (16 bytes); only keys are read.
+        _fields_ = [("KeyEvent", KeyEventRecord), ("_size", c.c_ubyte * 16)]
+
+    class InputRecord(c.Structure):
+        _fields_ = [("EventType", c.c_uint16), ("Event", InputRecordEvent)]
+
+    return InputRecord
+
+
+_INPUT_RECORD: Any = _input_record_type() if ctypes is not None else None
+
+
+class _KeyEvent(NamedTuple):
+    """The fields of one console ``KEY_EVENT_RECORD`` this module looks at."""
+
+    key_down: bool
+    repeat: int
+    vk: int
+    scan: int
+    #: UTF-16 code unit of the text the key produces; 0 for keys without text.
+    char: int
+    #: ``dwControlKeyState``: modifier, lock key and ``ENHANCED_KEY`` flags.
+    state: int
+
+
+_WAIT_OBJECT_0 = 0x0000
+_WAIT_TIMEOUT = 0x0102
+#: Records read per ``ReadConsoleInputW`` call; a paste is just more batches.
+_INPUT_RECORD_BATCH = 128
+
+
+def _read_console_key_events(kernel32: Any, handle: Any, timeout_ms: int) -> list[_KeyEvent] | None:
+    """Key events queued on the console input *handle*, without ever blocking.
+
+    Waits up to *timeout_ms* for the first record, then reads only what is
+    queued, so the caller can check for the session end between calls and no
+    read is left waiting to steal the next keystroke once the session is over.
+    Unlike ``msvcrt.getwch()``, ``ReadConsoleInputW`` leaves the console mode
+    alone and hands over the whole record: virtual-key code, modifiers and the
+    UTF-16 text unit, so no ``\\xe0`` prefix byte has to be told apart from an
+    ``à``. Non-key records (focus, menu) are skipped. Returns ``[]`` when
+    nothing (or no key) arrived and ``None`` once the console cannot be read.
+    """
+    if ctypes is None or _INPUT_RECORD is None:
+        return None
+    status = kernel32.WaitForSingleObject(handle, timeout_ms)
+    if status == _WAIT_TIMEOUT:
+        return []
+    if status != _WAIT_OBJECT_0:
+        return None
+    queued = ctypes.c_uint32()
+    if not kernel32.GetNumberOfConsoleInputEvents(handle, ctypes.byref(queued)):
+        return None
+    if not queued.value:
+        return []
+    records = (_INPUT_RECORD * min(queued.value, _INPUT_RECORD_BATCH))()
+    read = ctypes.c_uint32()
+    if not kernel32.ReadConsoleInputW(handle, records, len(records), ctypes.byref(read)):
+        return None
+    events: list[_KeyEvent] = []
+    for record in records[: read.value]:
+        if record.EventType != _KEY_EVENT:
+            continue
+        key = record.Event.KeyEvent
+        events.append(
+            _KeyEvent(
+                key_down=bool(key.bKeyDown),
+                repeat=int(key.wRepeatCount),
+                vk=int(key.wVirtualKeyCode),
+                scan=int(key.wVirtualScanCode),
+                char=int(key.uChar),
+                state=int(key.dwControlKeyState),
+            ),
+        )
+    return events
+
+
+def _vt_key_bytes(sequence: tuple[str, str, str], modifier: int) -> bytes:
+    introducer, number, final = sequence
+    if modifier == 1:
+        return f"\x1b{introducer}{number}{final}".encode("ascii")
+    return f"\x1b[{number or '1'};{modifier}{final}".encode("ascii")
+
+
+class _ConsoleKeyDecoder:
+    """Turn console key records into the bytes a Linux TTY would receive.
+
+    Mapped navigation and function keys become VT sequences with the xterm
+    modifier parameter (``1`` + Shift 1 + Alt 2 + Ctrl 4). Text keys send their
+    character as UTF-8, a surrogate pair (emoji) joined into one character
+    first, and ``ESC``-prefixed while Alt is held (Alt-as-Meta, e.g. Alt+Enter).
+    AltGr reaches the console as Right Alt plus Left Ctrl, and some layouts
+    accept Ctrl+Alt for it too, so Ctrl+Alt with a printable character is the
+    character itself.
+
+    A text ``ESC`` that is not the Escape key -- the start of a sequence the
+    terminal answers a query with (``ESC[?1;2c``) or a kitty key report -- is
+    held until its sequence is complete, so kitty key *releases*, which a Linux
+    PTY has no notion of, can be dropped. The caller flushes a held ``ESC``
+    (:meth:`flush`) once :attr:`pending` has waited the grace period without
+    another key, and a mapped key flushes it too: Escape then Arrow Up is two
+    keys, never one garbled sequence.
+    """
+
+    def __init__(self) -> None:
+        self._escape: str | None = None
+        self._high_surrogate: int | None = None
+
+    @property
+    def pending(self) -> bool:
+        """True while a partial escape sequence or half an emoji is held back."""
+        return self._escape is not None or self._high_surrogate is not None
+
+    def flush(self) -> bytes:
+        """Forward whatever is held back as it is."""
+        out = b""
+        if self._high_surrogate is not None:
+            # The low half never came: forward a replacement, not a lone half.
+            out += _encode_console_character(chr(self._high_surrogate))
+            self._high_surrogate = None
+        if self._escape is not None:
+            out += self._finish_escape()
+        return out
+
+    def feed(self, event: _KeyEvent) -> bytes:
+        """Bytes to forward for one key record, ``b""`` for none (yet)."""
+        if not event.key_down:
+            # Alt+numpad input (Alt held while digits are typed on the numpad)
+            # delivers its character with the release of Alt; that is the one
+            # key-up record that carries text.
+            if event.vk == _VK_MENU and event.char:
+                return self._character(event.char, meta=False)
+            return b""
+        count = max(event.repeat, 1)
+        shift = bool(event.state & _SHIFT_PRESSED)
+        alt = bool(event.state & _ALT_PRESSED)
+        ctrl = bool(event.state & _CTRL_PRESSED)
+        sequence = _VK_SEQUENCES.get(event.vk)
+        if sequence is not None:
+            modifier = 1 + shift + 2 * alt + 4 * ctrl
+            return self.flush() + _vt_key_bytes(sequence, modifier) * count
+        if event.vk == _VK_TAB and shift:
+            return self.flush() + b"\x1b[Z" * count
+        char = event.char
+        if event.vk == _VK_BACK:
+            # A Linux terminal sends DEL for Backspace (``\x08`` shows up as
+            # ``^H`` in prompts that only bind DEL) and ``^H`` for Ctrl+Backspace.
+            char = 0x08 if ctrl else 0x7F
+        elif event.vk == _VK_SPACE and ctrl and not alt:
+            char = 0x00  # Ctrl+Space is NUL on a terminal
+        elif not char:
+            return b""  # modifier keys, dead keys, keys without text
+        meta = alt and not (ctrl and char >= 0x20)
+        return b"".join(self._character(char, meta) for _ in range(count))
+
+    def _character(self, code: int, meta: bool) -> bytes:
+        out = b""
+        if 0xD800 <= code <= 0xDBFF:
+            out += self.flush()
+            self._high_surrogate = code
+            return out
+        if 0xDC00 <= code <= 0xDFFF and self._high_surrogate is not None:
+            high, self._high_surrogate = self._high_surrogate, None
+            text = chr(0x10000 + ((high - 0xD800) << 10) + (code - 0xDC00))
+        else:
+            if self._high_surrogate is not None:
+                out += self.flush()
+            text = chr(code)
+        if meta:
+            return out + self.flush() + b"\x1b" + _encode_console_character(text)
+        return out + self._text(text)
+
+    def _text(self, text: str) -> bytes:
+        if self._escape is None:
+            if text == "\x1b":
+                self._escape = text
+                return b""
+            return _encode_console_character(text)
+        if text == "\x1b":
+            out = self._finish_escape()
+            self._escape = text
+            return out
+        self._escape += text
+        if len(self._escape) == 2:
+            if text in _CSI_INTERMEDIATES:
+                return b""
+            return self._finish_escape()  # ESC + char: Alt-as-Meta, OSC start, ...
+        final = _CSI_FINAL_FIRST <= ord(text) <= _CSI_FINAL_LAST
+        if final or len(self._escape) >= _MAX_ESCAPE_SEQUENCE_CHARS:
+            return self._finish_escape()
+        return b""
+
+    def _finish_escape(self) -> bytes:
+        sequence = _encode_console_character(self._escape or "")
+        self._escape = None
+        report = _KITTY_KEY_REPORT.fullmatch(sequence)
+        if report is not None and (report.group(1) or b"1") == b"3":
+            return b""
+        return sequence
+
+
 def _raw_console_input_mode(old_mode: int) -> int:
     """Console input mode with local echo and line editing off.
 
@@ -553,6 +820,12 @@ def _declare_kernel32_prototypes(kernel32: Any) -> Any:
         "GetStdHandle": (handle, [dword]),
         "GetConsoleMode": (bool_, [handle, ctypes.POINTER(dword)]),
         "SetConsoleMode": (bool_, [handle, dword]),
+        "WaitForSingleObject": (dword, [handle, dword]),
+        "GetNumberOfConsoleInputEvents": (bool_, [handle, ctypes.POINTER(dword)]),
+        "ReadConsoleInputW": (
+            bool_,
+            [handle, ctypes.POINTER(_INPUT_RECORD), dword, ctypes.POINTER(dword)],
+        ),
     }
     for name, (restype, argtypes) in prototypes.items():
         function = getattr(kernel32, name)
