@@ -72,7 +72,8 @@ Windows attach is a separate code path that Linux CI only reaches through
 fakes, so read the docstrings in `src/vibepod/core/docker.py` before changing
 it. Two sharp edges: `select()` there accepts only Winsock sockets (not
 docker-py's `NpipeSocket`, not a stdin pipe), so those sessions read on threads
-(`_ThreadedReader`); and console input must stay in legacy key reporting
+(`_ThreadedReader`); and console keys are read as `ReadConsoleInputW` records
+and translated by `_ConsoleKeyDecoder`, which needs legacy key reporting
 (`_RAW_CONSOLE_INPUT_CLEAR` explains why `ENABLE_VIRTUAL_TERMINAL_INPUT` is
 cleared).
 

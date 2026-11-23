@@ -234,20 +234,13 @@ def test_attach_interactive_forwards_windows_console_input_without_termios(
         def encoding(self) -> str:
             return "utf-8"
 
-    pressed = iter(["h", KeyboardInterrupt])
-
-    def getwch() -> str:
-        value = next(pressed)
-        if value is KeyboardInterrupt:
-            raise KeyboardInterrupt
-        return value
-
     manager = object.__new__(DockerManager)
     manager.client = _FakeClient()  # type: ignore[assignment]
 
     monkeypatch.setattr(docker_mod, "termios", None)
     monkeypatch.setattr(docker_mod, "tty", None)
-    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch))
+    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace())
+    _fake_console_keys(monkeypatch, [[_key("h", vk=0x48)]])
     monkeypatch.setattr(docker_mod.sys, "stdin", _FakeStdin())
 
     try:
@@ -324,10 +317,9 @@ def _attach_windows_npipe(
 
     console_done = threading.Event()
 
-    def getwch() -> str:
-        # Block like a console waiting for a key until the session ends.
-        console_done.wait(5)
-        raise EOFError
+    def read(timeout_ms: int) -> list[docker_mod._KeyEvent] | None:
+        # An idle console until the session ends.
+        return None if console_done.wait(timeout_ms / 1000) else []
 
     def _no_select(*args: object, **kwargs: object) -> None:
         raise AssertionError("select() must not be used on the Windows attach path")
@@ -337,7 +329,8 @@ def _attach_windows_npipe(
     fake_stdout = types.SimpleNamespace(buffer=io.BytesIO())
     monkeypatch.setattr(docker_mod, "termios", None)
     monkeypatch.setattr(docker_mod, "tty", None)
-    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch))
+    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace())
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
     monkeypatch.setattr(docker_mod.select, "select", _no_select)
     monkeypatch.setattr(docker_mod.sys, "stdin", _FakeStdin())
     monkeypatch.setattr(docker_mod.sys, "stdout", fake_stdout)
@@ -493,12 +486,11 @@ def test_raw_console_input_mode_disables_local_echo_and_line_input() -> None:
 
 
 def test_raw_console_input_mode_keeps_console_key_reporting_legacy() -> None:
-    """Regression: VT input mode made one ``a`` arrive as ``a`` + ``ESC[97;1:3u``.
+    """VT input mode would turn keys into escape text without virtual-key codes.
 
-    With per-key-event byte generation the CRT's mode flip around each
-    ``msvcrt.getwch()`` split press and release into different encodings, and the
-    kitty key-release report ended up as stray text in the agent prompt. Navigation
-    keys must instead keep arriving as scan codes for ``_EXTENDED_KEY_SEQUENCES``.
+    ``_ConsoleKeyDecoder`` works from the virtual-key code and modifier state of
+    legacy key records; with the old ``getwch()`` reader VT mode also made one
+    ``a`` arrive as ``a`` + a kitty ``ESC[97;1:3u`` release report.
     """
     with_vt_input = _DEFAULT_CONSOLE_MODE | docker_mod._ENABLE_VIRTUAL_TERMINAL_INPUT
 
@@ -557,196 +549,151 @@ def test_enter_console_raw_input_is_noop_when_console_rejects_the_mode(
     assert kernel32.set_modes == []
 
 
-@pytest.mark.parametrize(
-    ("prefix", "scan_code", "expected"),
-    [
-        ("\xe0", "H", b"\x1b[A"),  # Arrow Up
-        ("\xe0", "P", b"\x1b[B"),  # Arrow Down
-        ("\xe0", "K", b"\x1b[D"),  # Arrow Left
-        ("\xe0", "M", b"\x1b[C"),  # Arrow Right
-        ("\xe0", "G", b"\x1b[H"),  # Home
-        ("\xe0", "O", b"\x1b[F"),  # End
-        ("\xe0", "I", b"\x1b[5~"),  # Page Up (not ESC[I, the focus-in report)
-        ("\xe0", "Q", b"\x1b[6~"),  # Page Down
-        ("\xe0", "R", b"\x1b[2~"),  # Insert
-        ("\xe0", "S", b"\x1b[3~"),  # Delete
-        ("\x00", ";", b"\x1bOP"),  # F1
-        ("\x00", "?", b"\x1b[15~"),  # F5
-        ("\x00", "D", b"\x1b[21~"),  # F10
-        ("\x00", chr(133), b"\x1b[23~"),  # F11
-        ("\x00", chr(134), b"\x1b[24~"),  # F12
-        ("\x00", chr(15), b"\x1b[Z"),  # Shift+Tab (Claude Code mode switch)
-        ("\xe0", chr(115), b"\x1b[1;5D"),  # Ctrl+Left
-        ("\xe0", chr(116), b"\x1b[1;5C"),  # Ctrl+Right
-        ("\xe0", chr(147), b"\x1b[3;5~"),  # Ctrl+Delete
-        ("\xe0", "\x13", b""),  # no terminal equivalent: dropped
-    ],
-)
-def test_console_key_bytes_translates_extended_keys(
+def _key(char: str | int = 0, vk: int = 0, state: int = 0, down: bool = True) -> Any:
+    code = ord(char) if isinstance(char, str) else char
+    return docker_mod._KeyEvent(down, 1, vk, 0, code, state)
+
+
+def _typed(text: str) -> list[Any]:
+    return [_key(ch) for ch in text]
+
+
+def _fake_console_keys(
     monkeypatch: pytest.MonkeyPatch,
-    prefix: str,
-    scan_code: str,
-    expected: bytes,
-) -> None:
-    """Scan codes must not reach the container as (mojibake) text."""
-    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=lambda: scan_code))
+    batches: list[list[Any]],
+    on_idle: Any = None,
+) -> list[int]:
+    """Serve *batches* as successive console reads, then end the console.
 
-    assert docker_mod._console_key_bytes(prefix) == expected
+    Returns the read timeouts the forwarder asked for. *on_idle*, if given, is
+    called once all batches are served and decides what the reads return then
+    (``[]`` keeps the console idle, ``None`` ends it).
+    """
+    queue = list(batches)
+    timeouts: list[int] = []
 
+    def read(timeout_ms: int) -> list[Any] | None:
+        timeouts.append(timeout_ms)
+        if queue:
+            return queue.pop(0)
+        if on_idle is not None:
+            return on_idle(timeout_ms)
+        return None
 
-def test_console_key_bytes_encodes_text_as_utf8_and_backspace_as_del(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(docker_mod.sys, "stdin", types.SimpleNamespace(encoding="cp1252"))
-
-    assert docker_mod._console_key_bytes("\u00e4") == b"\xc3\xa4"
-    assert docker_mod._console_key_bytes("\x08") == b"\x7f"
-    assert docker_mod._console_key_bytes("\r") == b"\r"
-
-
-class _FakeConsole:
-    """msvcrt stand-in: one queued burst of key reads plus ``kbhit``."""
-
-    def __init__(self, keys: list[str]) -> None:
-        self._keys = list(keys)
-
-    def getwch(self) -> str:
-        if not self._keys:
-            raise EOFError
-        return self._keys.pop(0)
-
-    def kbhit(self) -> bool:
-        return bool(self._keys)
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
+    return timeouts
 
 
-@pytest.mark.parametrize(
-    ("sequence", "expected"),
-    [
-        # Regression: a terminal in kitty keyboard mode reported the release of
-        # ``a`` next to the key itself, and the agent inserted the report.
-        ("\x1b[97;1:3u", b""),
-        ("\x1b[57427;3:3u", b""),
-        ("\x1b[97;1u", b"\x1b[97;1u"),  # key press stays
-        ("\x1b[97;1:2u", b"\x1b[97;1:2u"),  # auto-repeat stays
-        ("\x1b[97u", b"\x1b[97u"),
-        ("\x1b[201~", b"\x1b[201~"),  # bracketed paste end
-        ("\x1b[A", b"\x1b[A"),  # arrow key from a terminal in VT input mode
-        ("\x1bOP", b"\x1bOP"),  # SS3 (F1)
-        ("\x1bd", b"\x1bd"),  # Alt/Meta key
-    ],
-)
-def test_console_escape_bytes_screens_kitty_key_releases(
-    monkeypatch: pytest.MonkeyPatch,
-    sequence: str,
-    expected: bytes,
-) -> None:
-    console = _FakeConsole(list(sequence[1:]))
-    monkeypatch.setattr(docker_mod, "msvcrt", console)
+class _RecordingSock:
+    def __init__(self) -> None:
+        self.sent = bytearray()
+        self.calls = 0
 
-    assert docker_mod._console_escape_bytes() == expected
+    def sendall(self, data: bytes) -> None:
+        self.calls += 1
+        self.sent.extend(data)
 
 
-class _TricklingConsole(_FakeConsole):
-    """Console that only hands out its queued keys after a few polls."""
-
-    def __init__(self, keys: list[str], reveal_after_polls: int) -> None:
-        super().__init__(keys)
-        self._polls = 0
-        self._reveal_after = reveal_after_polls
-
-    def kbhit(self) -> bool:
-        self._polls += 1
-        return self._polls > self._reveal_after and bool(self._keys)
-
-
-def test_console_escape_bytes_catches_a_sequence_split_across_reads(
+def test_forward_windows_console_input_translates_key_records(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A pseudo-console may release the report bytes one by one, not as a burst."""
-    console = _TricklingConsole(list("[97;1:3u"), reveal_after_polls=3)
-    monkeypatch.setattr(docker_mod, "msvcrt", console)
+    alt = docker_mod._LEFT_ALT_PRESSED
+    _fake_console_keys(
+        monkeypatch,
+        [
+            [_key("\u00e0", vk=0x41), _key("x", vk=0x58)],  # à then x (#242)
+            [_key(vk=0x26)],  # Arrow Up
+            [_key(0xD83D), _key(0xDE00)],  # an emoji as a surrogate pair
+            [_key("\r", vk=0x0D, state=alt)],  # Alt+Enter
+            [_key("\x08", vk=docker_mod._VK_BACK)],
+        ],
+    )
+    sock = _RecordingSock()
 
-    assert docker_mod._console_escape_bytes() == b""
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
-
-def test_console_escape_bytes_gives_up_on_a_real_escape_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The grace period must end, or vim escapes and TUI interrupts would stall."""
-    console = _TricklingConsole([], reveal_after_polls=10**6)
-    monkeypatch.setattr(docker_mod, "msvcrt", console)
-
-    started = time.monotonic()
-    assert docker_mod._console_escape_bytes() == b"\x1b"
-    elapsed = time.monotonic() - started
-
-    assert docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS <= elapsed < 2.0
-
-
-def test_console_escape_bytes_forwards_lone_esc_without_queued_keys(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A lone ESC (vim escape, TUI interrupt) must never wait for a next key."""
-    monkeypatch.setattr(docker_mod, "msvcrt", _FakeConsole([]))
-
-    assert docker_mod._console_escape_bytes() == b"\x1b"
-
-
-def test_console_key_bytes_without_kbhit_forwards_esc_immediately(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Consoles without a usable ``kbhit`` keep the previous byte-per-read flow."""
-    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=lambda: ""))
-
-    assert docker_mod._console_key_bytes("\x1b") == b"\x1b"
+    assert bytes(sock.sent) == "àx\x1b[A😀\x1b\r\x7f".encode()
 
 
 def test_forward_windows_console_input_drops_key_release_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """One typed ``a`` arriving as ``a`` + ``ESC[97;1:3u`` forwards just ``a``."""
-    stop = threading.Event()
+    _fake_console_keys(monkeypatch, [_typed("a\x1b[97;1:3u"), [_key(vk=0x26)]])
+    sock = _RecordingSock()
 
-    class _Console(_FakeConsole):
-        def kbhit(self) -> bool:
-            if not self._keys:
-                stop.set()  # all keys typed: the session ends
-            return super().kbhit()
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
-    monkeypatch.setattr(docker_mod, "msvcrt", _Console(list("a\x1b[97;1:3u\x1b[A")))
-    sent = bytearray()
-
-    class _Sock:
-        def sendall(self, data: bytes) -> None:
-            sent.extend(data)
-
-    docker_mod._forward_windows_console_input(_Sock(), None, stop)
-
-    assert sent == b"a\x1b[A"
+    assert bytes(sock.sent) == b"a\x1b[A"
 
 
-def test_forward_windows_console_input_forwards_typed_escape_sequence(
+def test_forward_windows_console_input_assembles_a_sequence_across_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A console in VT input mode delivers arrow keys as plain escape bytes."""
-    keys = iter(["\x1b", "[", "A", "a", "\x08"])
+    _fake_console_keys(monkeypatch, [_typed("\x1b[97;1"), _typed(":3u"), _typed("b")])
+    sock = _RecordingSock()
 
-    def getwch() -> str:
-        try:
-            return next(keys)
-        except StopIteration:
-            raise EOFError from None
+    docker_mod._forward_windows_console_input(sock, None, threading.Event())
 
-    sent = bytearray()
+    assert bytes(sock.sent) == b"b"
 
-    class _Sock:
-        def sendall(self, data: bytes) -> None:
-            sent.extend(data)
 
-    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch))
-    docker_mod._forward_windows_console_input(_Sock(), None, threading.Event())
+def test_forward_windows_console_input_flushes_a_lone_escape_after_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = threading.Event()
+    sock = _RecordingSock()
 
-    assert sent == b"\x1b[Aa\x7f"
+    def idle(timeout_ms: int) -> list[Any]:
+        if sock.sent:
+            stop.set()
+        time.sleep(timeout_ms / 1000)
+        return []
+
+    timeouts = _fake_console_keys(monkeypatch, [[_key("\x1b", vk=0x1B)]], on_idle=idle)
+    started = time.monotonic()
+
+    docker_mod._forward_windows_console_input(sock, None, stop)
+
+    assert bytes(sock.sent) == b"\x1b"
+    assert time.monotonic() - started >= docker_mod._ESCAPE_SEQUENCE_GRACE_SECONDS
+    # While the ESC is held, reads never wait past its flush deadline.
+    assert max(timeouts) <= docker_mod._KEY_WAIT_POLL_SECONDS * 1000
+
+
+def test_forward_windows_console_input_flushes_escape_despite_other_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A held Shift auto-repeating must not keep a lone ESC from going out."""
+    stop = threading.Event()
+    sock = _RecordingSock()
+    shift = _key(vk=0x10, state=docker_mod._SHIFT_PRESSED)
+
+    def repeating_shift(timeout_ms: int) -> list[Any]:
+        if sock.sent:
+            stop.set()
+        time.sleep(0.005)
+        return [shift]
+
+    _fake_console_keys(monkeypatch, [[_key("\x1b", vk=0x1B)]], on_idle=repeating_shift)
+
+    docker_mod._forward_windows_console_input(sock, None, stop)
+
+    assert bytes(sock.sent) == b"\x1b"
+
+
+def test_forward_windows_console_input_logs_what_it_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_console_keys(monkeypatch, [[_key(vk=0x10)], _typed("hi")])
+    logged: list[bytes] = []
+    logger = types.SimpleNamespace(log_input=logged.append)
+    sock = _RecordingSock()
+
+    docker_mod._forward_windows_console_input(sock, logger, threading.Event())
+
+    assert logged == [b"hi"]
+    assert sock.calls == 1  # Shift alone sends nothing
 
 
 def test_forward_windows_console_input_drops_key_after_session_end(
@@ -755,15 +702,15 @@ def test_forward_windows_console_input_drops_key_after_session_end(
     """A key read after the session ended must not reach the closed socket."""
     stop = threading.Event()
 
-    def getwch() -> str:
-        stop.set()  # the session ends while getwch() waits for a key
-        return "a"
+    def read(timeout_ms: int) -> list[Any]:
+        stop.set()  # the session ends while the read waits for a key
+        return [_key("a", vk=0x41)]
 
     class _ClosedSock:
         def sendall(self, data: bytes) -> None:
             raise AssertionError("sent to a closed socket")
 
-    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch))
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: read)
     docker_mod._forward_windows_console_input(_ClosedSock(), None, stop)
 
 
@@ -779,10 +726,7 @@ def test_forward_windows_console_input_stops_quietly_on_send_failure(
     error: BaseException,
 ) -> None:
     """A closed NpipeSocket raises non-OSError errors; no thread traceback."""
-    keys = iter(["a", "b"])
-
-    def getwch() -> str:
-        return next(keys)
+    _fake_console_keys(monkeypatch, [_typed("a"), _typed("b")])
 
     class _Sock:
         calls = 0
@@ -791,30 +735,23 @@ def test_forward_windows_console_input_stops_quietly_on_send_failure(
             _Sock.calls += 1
             raise error
 
-    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch))
     docker_mod._forward_windows_console_input(_Sock(), None, threading.Event())
     assert _Sock.calls == 1
 
 
-def test_forward_windows_console_input_never_blocks_after_stop(
+def test_forward_windows_console_input_ends_soon_after_stop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without a queued key the thread must not sit in getwch(): it would steal
-    the next keystroke and re-apply raw mode after the session restored it."""
+    """An idle reader thread must notice the session end within one short wait,
+    or it would take the next keystroke away from the restored prompt."""
     stop = threading.Event()
-    # Recorded here and asserted on the test thread: an exception raised in the
-    # worker would only end it, and pytest reports that as a warning.
-    blocking_read = threading.Event()
 
-    def getwch() -> str:
-        blocking_read.set()
-        raise EOFError  # end the worker if the guard is missing
-
-    def kbhit() -> bool:
+    def idle(timeout_ms: int) -> list[Any]:
         stop.set()  # the session ends while the thread is idle
-        return False
+        time.sleep(timeout_ms / 1000)
+        return []
 
-    monkeypatch.setattr(docker_mod, "msvcrt", types.SimpleNamespace(getwch=getwch, kbhit=kbhit))
+    timeouts = _fake_console_keys(monkeypatch, [], on_idle=idle)
     thread = threading.Thread(
         target=docker_mod._forward_windows_console_input,
         args=(object(), None, stop),
@@ -822,7 +759,14 @@ def test_forward_windows_console_input_never_blocks_after_stop(
     thread.start()
     thread.join(timeout=2)
     assert not thread.is_alive()
-    assert not blocking_read.is_set(), "getwch() called without a queued key"
+    assert timeouts == [int(docker_mod._KEY_WAIT_POLL_SECONDS * 1000)]
+
+
+def test_forward_windows_console_input_is_a_noop_without_a_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(docker_mod, "_console_key_reader", lambda: None)
+    docker_mod._forward_windows_console_input(object(), None, threading.Event())
 
 
 def test_threaded_reader_buffers_a_bounded_amount_and_closes(
