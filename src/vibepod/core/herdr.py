@@ -2,9 +2,11 @@
 
 When ``vp run`` executes inside a herdr pane (https://herdr.dev), VibePod
 wires the container so the agent shows up in herdr with live state:
-the herdr unix socket and binary are bind-mounted in, ``HERDR_*`` env is
-forwarded, and VibePod-authored hook scripts are injected into the agent's
-config dir. Everything soft-fails: a broken herdr setup never blocks a run.
+the herdr unix socket and binary are bind-mounted in (or, where the engine
+cannot mount sockets, an events file is relayed by the host — see
+``herdr_relay``), ``HERDR_*`` env is forwarded, and VibePod-authored hook
+scripts are injected into the agent's config dir. Everything soft-fails: a
+broken herdr setup never blocks a run.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import shutil
 import stat
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -24,6 +26,9 @@ else:  # pragma: no cover - exercised on Python 3.10 CI
     import tomli as tomllib
 
 from vibepod.utils.console import info, warning
+
+if TYPE_CHECKING:
+    from vibepod.core.herdr_relay import HerdrEventRelay
 
 DEFAULT_SOCKET = Path("~/.config/herdr/herdr.sock")
 CONTAINER_SOCKET = "/herdr/herdr.sock"
@@ -274,6 +279,36 @@ def agent_label(agent: str) -> str:
     return f"vp:{agent}"
 
 
+def socket_request(method: str, params: dict[str, Any], *, tag: str) -> tuple[bool, str | None]:
+    """Send one request to the host herdr socket. Never raises.
+
+    Returns (ok, error); error is None when herdr is simply unreachable
+    (no socket, no AF_UNIX on Windows) so callers can stay quiet then.
+    """
+    import socket as socket_module
+
+    sock_path = resolve_socket()
+    # Python on Windows exposes no AF_UNIX even though a socket path may resolve
+    if sock_path is None or not hasattr(socket_module, "AF_UNIX"):
+        return False, None
+    request = {"id": f"vibepod:{os.getpid()}:{tag}", "method": method, "params": params}
+    try:
+        with socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM) as sock:
+            sock.settimeout(3)
+            sock.connect(str(sock_path))
+            sock.sendall((json.dumps(request) + "\n").encode())
+            reply = sock.recv(4096).decode("utf-8", errors="replace")
+    except OSError as exc:
+        return False, str(exc)
+    try:
+        parsed = json.loads(reply.splitlines()[0]) if reply.strip() else {}
+    except json.JSONDecodeError:
+        return True, None
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return False, f"rejected: {parsed['error']}"
+    return True, None
+
+
 def release_agent(
     agent: str,
     pane: str | None = None,
@@ -286,35 +321,14 @@ def release_agent(
     from short-lived hook invocations inside the container, so the entry
     would otherwise outlive the agent. Sent over the socket directly.
     """
-    import socket as socket_module
-
     pane = pane or os.environ.get("HERDR_PANE_ID")
-    sock_path = resolve_socket()
-    # Python on Windows exposes no AF_UNIX even though a socket path may resolve
-    if not pane or sock_path is None or not hasattr(socket_module, "AF_UNIX"):
+    if not pane:
         return False
-    request = {
-        "id": f"vibepod:{os.getpid()}:release",
-        "method": "pane.release_agent",
-        "params": {"pane_id": pane, "source": source, "agent": label or agent},
-    }
-    try:
-        with socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM) as sock:
-            sock.settimeout(3)
-            sock.connect(str(sock_path))
-            sock.sendall((json.dumps(request) + "\n").encode())
-            reply = sock.recv(4096).decode("utf-8", errors="replace")
-    except OSError as exc:
-        warning(f"herdr: could not release agent state: {exc}")
-        return False
-    try:
-        parsed = json.loads(reply.splitlines()[0]) if reply.strip() else {}
-    except json.JSONDecodeError:
-        return True
-    if isinstance(parsed, dict) and parsed.get("error"):
-        warning(f"herdr: release rejected: {parsed['error']}")
-        return False
-    return True
+    params = {"pane_id": pane, "source": source, "agent": label or agent}
+    ok, err = socket_request("pane.release_agent", params, tag="release")
+    if err:
+        warning(f"herdr: could not release agent state: {err}")
+    return ok
 
 
 def reexec_with_agent_hint(agent: str, config: dict[str, Any], *, no_herdr: bool) -> None:
@@ -354,39 +368,42 @@ def _run_binary(args: list[str]) -> tuple[int, str]:
 
 def _report_agent_via_socket(agent: str, pane: str) -> bool:
     """Report an idle agent with its display label over the host socket."""
-    import socket as socket_module
-
-    sock_path = resolve_socket()
-    # Python on Windows exposes no AF_UNIX even though a socket path may resolve
-    if sock_path is None or not hasattr(socket_module, "AF_UNIX"):
-        return False
-    request = {
-        "id": f"vibepod:{os.getpid()}:metadata",
-        "method": "pane.report_agent",
-        "params": {
-            "pane_id": pane,
-            "source": "vibepod",
-            "agent": agent,
-            "display_agent": agent_label(agent),
-            "state": "idle",
-        },
+    params = {
+        "pane_id": pane,
+        "source": "vibepod",
+        "agent": agent,
+        "display_agent": agent_label(agent),
+        "state": "idle",
     }
-    try:
-        with socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM) as sock:
-            sock.settimeout(3)
-            sock.connect(str(sock_path))
-            sock.sendall((json.dumps(request) + "\n").encode())
-            reply = sock.recv(4096).decode("utf-8", errors="replace")
-    except OSError:
-        return False
-    try:
-        parsed = json.loads(reply.splitlines()[0]) if reply.strip() else {}
-    except json.JSONDecodeError:
-        return True
-    if isinstance(parsed, dict) and parsed.get("error"):
-        warning(f"herdr: metadata report rejected: {parsed['error']}")
-        return False
-    return True
+    ok, err = socket_request("pane.report_agent", params, tag="metadata")
+    if err and err.startswith("rejected"):
+        warning(f"herdr: metadata report {err}")
+    return ok
+
+
+def forward_event(params: dict[str, Any]) -> bool:
+    """Forward one relayed ``pane.report_agent`` event to the host socket."""
+    ok, _ = socket_request("pane.report_agent", params, tag="relay")
+    return ok
+
+
+def create_event_relay(
+    agent: str,
+    config: dict[str, Any],
+    *,
+    no_herdr: bool,
+) -> HerdrEventRelay | None:
+    """Relay for an attached run whose engine cannot mount the herdr socket.
+
+    None when this run does not report to a herdr pane. Nothing touches the
+    disk until ``prepare()``.
+    """
+    from vibepod.core.herdr_relay import HerdrEventRelay
+
+    pane = os.environ.get("HERDR_PANE_ID")
+    if not pane or not pane_reporting_enabled(config, no_herdr=no_herdr):
+        return None
+    return HerdrEventRelay(pane, forward_event, agent=agent)
 
 
 def report_pane_metadata(agent: str) -> bool:
@@ -445,37 +462,8 @@ def pane_reporting_enabled(config: dict[str, Any], *, no_herdr: bool) -> bool:
     return not no_herdr and herdr_enabled(config) and herdr_active()
 
 
-def apply_herdr_if_enabled(
-    agent: str,
-    config_dir: Path,
-    config: dict[str, Any],
-    *,
-    no_herdr: bool,
-    mount_socket: bool = True,
-) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
-    """Wire herdr for this run when inside a herdr pane. Never raises.
-
-    Returns (extra_volumes, env). Empty when disabled, not in a pane, or when
-    *mount_socket* is False because the container engine cannot bind-mount a
-    host unix socket — the caller still reports pane identity from the host.
-    """
-    if not pane_reporting_enabled(config, no_herdr=no_herdr):
-        return [], {}
-    if not mount_socket:
-        warning(
-            "herdr: this container engine cannot bind-mount the herdr socket "
-            "(off Linux the engine runs in a VM that cannot share host sockets); "
-            "reporting pane identity from the host only, without live agent state",
-        )
-        return [], {}
-    volumes, env = herdr_volumes_and_env()
-    if not volumes:
-        return [], {}
-    if "HERDR_BIN_PATH" not in env:
-        warning(
-            "no herdr binary found on the host; hooks will report via the "
-            "socket directly (needs node in the agent image)",
-        )
+def _sync_integration(agent: str, config_dir: Path, config: dict[str, Any]) -> int | None:
+    """Inject the integration files and register the hooks; None on failure."""
     try:
         synced = sync_herdr_files(agent, config_dir, config)
         if agent == "claude":
@@ -484,6 +472,59 @@ def apply_herdr_if_enabled(
             register_codex_notify(config_dir)
     except Exception as exc:  # noqa: BLE001 - herdr problems must never block a run
         warning(f"herdr: could not prepare integration files: {exc}")
+        return None
+    return synced
+
+
+def apply_herdr_if_enabled(
+    agent: str,
+    config_dir: Path,
+    config: dict[str, Any],
+    *,
+    no_herdr: bool,
+    mount_socket: bool = True,
+    event_relay: HerdrEventRelay | None = None,
+) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
+    """Wire herdr for this run when inside a herdr pane. Never raises.
+
+    Returns (extra_volumes, env). Empty when disabled or not in a pane. When
+    *mount_socket* is False the container engine cannot bind-mount a host unix
+    socket: with an *event_relay* (attached ``vp run``) the container gets the
+    relay's events dir and ``HERDR_EVENTS_FILE`` instead of the socket;
+    without one only the host reports pane identity.
+    """
+    if not pane_reporting_enabled(config, no_herdr=no_herdr):
+        return [], {}
+    if not mount_socket:
+        if event_relay is None:
+            warning(
+                "herdr: this container engine cannot bind-mount the herdr socket "
+                "(off Linux the engine runs in a VM that cannot share host sockets) "
+                "and detached runs have no host-side relay; reporting pane identity "
+                "from the host only, without live agent state",
+            )
+            return [], {}
+        volumes = [event_relay.volume()]
+        env = event_relay.container_env()
+        for key in FORWARDED_ENV:
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+        synced = _sync_integration(agent, config_dir, config)
+        if synced is not None:
+            detail = f"{synced} integration file(s)" if synced else "events file and env only"
+            info(f"herdr pane detected: relaying {agent} state through a file ({detail})")
+        return volumes, env
+    volumes, env = herdr_volumes_and_env()
+    if not volumes:
+        return [], {}
+    if "HERDR_BIN_PATH" not in env:
+        warning(
+            "no herdr binary found on the host; hooks will report via the "
+            "socket directly (needs node in the agent image)",
+        )
+    synced = _sync_integration(agent, config_dir, config)
+    if synced is None:
         return volumes, env
     detail = f"{synced} integration file(s)" if synced else "socket and env only"
     info(f"herdr pane detected: wiring {agent} state reporting ({detail})")

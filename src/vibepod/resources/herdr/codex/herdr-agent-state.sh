@@ -1,8 +1,9 @@
 #!/bin/sh
 # Managed by VibePod — reports Codex notify events to herdr.
 # Codex passes a single JSON argument, e.g. {"type":"agent-turn-complete",...}.
-# Transport: node + socket API (primary), herdr binary (fallback). Traced to
-# $HOME/.codex/herdr-hook.log (host-visible via the config mount).
+# Transport: node + socket API or events file (primary), herdr binary
+# (fallback). Traced to $HOME/.codex/herdr-hook.log (host-visible via the
+# config mount).
 set -u
 
 log_file="${HOME:-/tmp}/.codex/herdr-hook.log"
@@ -26,10 +27,11 @@ fi
 
 send_state() {
     if command -v node >/dev/null 2>&1 && [ -f "$reporter" ] \
-        && [ -n "${HERDR_SOCKET_PATH:-}" ]; then
+        && [ -n "${HERDR_SOCKET_PATH:-}${HERDR_EVENTS_FILE:-}" ]; then
         out=$(node "$reporter" pane.report_agent codex "$1" 2>&1)
         rc=$?
-        via=socket
+        via=${HERDR_SOCKET_PATH:+socket}
+        via=${via:-file}
     elif [ -n "${HERDR_BIN_PATH:-}" ] && [ -x "$HERDR_BIN_PATH" ]; then
         out=$("$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
             --source vibepod --agent codex --state "$1" 2>&1)

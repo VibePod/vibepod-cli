@@ -2,7 +2,7 @@
 # Managed by VibePod — reports Claude Code hook events to herdr.
 # Receives the hook payload as JSON on stdin; always exits 0 so a broken
 # herdr setup never disturbs the agent. Transport: node + socket API
-# (primary), herdr binary (fallback). Traced to
+# or events file (primary), herdr binary (fallback). Traced to
 # $CLAUDE_CONFIG_DIR/herdr-hook.log (host-visible via the config mount).
 set -u
 
@@ -35,10 +35,11 @@ fi
 # send <method> <state-or-empty> <session-id-or-empty> <session-path-or-empty>
 send() {
     if command -v node >/dev/null 2>&1 && [ -f "$reporter" ] \
-        && [ -n "${HERDR_SOCKET_PATH:-}" ]; then
+        && [ -n "${HERDR_SOCKET_PATH:-}${HERDR_EVENTS_FILE:-}" ]; then
         out=$(node "$reporter" "$1" claude "$2" "$3" "$4" 2>&1)
         rc=$?
-        via=socket
+        via=${HERDR_SOCKET_PATH:+socket}
+        via=${via:-file}
     elif [ -n "${HERDR_BIN_PATH:-}" ] && [ -x "$HERDR_BIN_PATH" ]; then
         if [ "$1" = "pane.report_agent" ]; then
             out=$("$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
